@@ -486,10 +486,8 @@ async def _pick_bdc_agent(db: AsyncSession, store_id: UUID) -> Optional[UUID]:
         ).all()
     )
     open_agents = []
-    for assignment, user in assignments:
+    for _assignment, user in assignments:
         open_count = int(counts.get(user.id, 0))
-        if open_count >= assignment.max_open_leads:
-            continue
         open_agents.append((open_count, user.id))
     if not open_agents:
         return None
@@ -522,22 +520,6 @@ async def assign_waiting_bdc_leads(db: AsyncSession, user_id: UUID) -> int:
     )
     assigned = 0
     for assignment in assignments:
-        open_count = int(
-            (
-                await db.execute(
-                    select(func.count())
-                    .select_from(LeadDelivery)
-                    .where(
-                        LeadDelivery.bdc_agent_id == user_id,
-                        LeadDelivery.partner_store_id == assignment.partner_store_id,
-                        LeadDelivery.status.in_(AGENT_OPEN_STATUSES),
-                    )
-                )
-            ).scalar_one()
-        )
-        slots = assignment.max_open_leads - open_count
-        if slots <= 0:
-            continue
         waiting = list(
             (
                 await db.execute(
@@ -549,7 +531,6 @@ async def assign_waiting_bdc_leads(db: AsyncSession, user_id: UUID) -> int:
                         LeadDelivery.status == DELIVERY_DELIVERED,
                     )
                     .order_by(LeadDelivery.delivered_at.asc())
-                    .limit(slots)
                 )
             ).scalars().all()
         )

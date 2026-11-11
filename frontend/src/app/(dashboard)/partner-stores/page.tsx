@@ -309,7 +309,6 @@ interface StoreFormValues extends PartnerStoreCreate {
     closes: string
     openDays: string[]
     agentIds: string[]
-    maxOpen: string
     portalEmail: string
     portalPassword: string
     hasPortalLogin: boolean
@@ -338,7 +337,6 @@ const emptyForm = (): StoreFormValues => ({
     closes: "",
     openDays: DAYS.slice(0, 6),
     agentIds: [],
-    maxOpen: "15",
     portalEmail: "",
     portalPassword: "",
     hasPortalLogin: false,
@@ -414,7 +412,7 @@ async function saveStoreOptIn(storeId: string, data: StoreFormValues) {
             storeId,
             data.agentIds.map((userId) => ({
                 user_id: userId,
-                max_open_leads: numberOrNull(data.maxOpen) || 15,
+                max_open_leads: 15,
             }))
         )
     }
@@ -494,7 +492,6 @@ function PartnerStoreModal({
                     if (days.length) next.openDays = days
                 }
                 next.agentIds = assigned.map((row) => row.user_id)
-                if (assigned[0]) next.maxOpen = String(assigned[0].max_open_leads)
             } else {
                 const [bdcUsers, campaignList] = await Promise.all([
                     apiClient.get<{ id: string; first_name: string; last_name: string }[]>("/users/", { params: { role: "bdc", is_active: true } }).then((res) => res.data).catch(() => []),
@@ -526,7 +523,7 @@ function PartnerStoreModal({
                 <DialogHeader className="border-b px-6 py-4">
                     <DialogTitle>{store ? "Edit Partner Store" : "Add Partner Store"}</DialogTitle>
                     <DialogDescription>
-                        Store details, which campaigns send them leads, and how BDC coverage is capped.
+                        Store details, which campaigns send them leads, and who works the store.
                     </DialogDescription>
                 </DialogHeader>
 
@@ -724,18 +721,11 @@ function PartnerStoreModal({
                                 {form.optIn === "full_bdc" && (
                                     <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
                                         <div>
-                                            <Label>BDC max open cap</Label>
+                                            <Label>BDC agents who work this store</Label>
                                             <p className="mt-1 text-xs text-muted-foreground">
-                                                How many open leads one BDC agent can hold for this store at once. Once an agent hits this number, the next lead goes to another checked agent. Default is 15.
+                                                Checked agents receive this store&apos;s full BDC leads and can keep working them as they come in.
                                             </p>
                                         </div>
-                                        <Input
-                                            className="max-w-[160px]"
-                                            inputMode="numeric"
-                                            value={form.maxOpen}
-                                            onChange={(e) => update("maxOpen", e.target.value)}
-                                        />
-                                        <Label>BDC agents who work this store</Label>
                                         <div className="max-h-32 space-y-1 overflow-y-auto text-sm">
                                             {agents.length === 0 && <p className="text-muted-foreground">No BDC users yet.</p>}
                                             {agents.map((agent) => (

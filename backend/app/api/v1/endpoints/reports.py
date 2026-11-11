@@ -972,9 +972,11 @@ async def get_dealership_analysis(
     # If lead-specific filters were applied but no leads match, all activity counts should be 0
     no_matching_leads = has_lead_specific_filters and not lead_ids
 
-    # Converted/sold in the selected period (NOT "created in period and currently converted").
-    # Union of: (1) leads with sold/converted date in range, (2) check-ins with outcome=sold
-    # in range (same date field as the Check-ins table). Matches what JB compares.
+    # One sold set for the Converted card and Sold by partner store.
+    # A lead counts when it was marked converted in the period, or a check-in
+    # in the period was marked sold. The store table is that same set, grouped
+    # by the store the lead was sold to.
+    sold_leads_subq = None
     if no_matching_leads:
         converted_leads = 0
     else:
@@ -984,7 +986,7 @@ async def get_dealership_analysis(
             _append_sold_date_filters_to_lead_query(
                 converted_lead_filters, activity_date_from, activity_date_to
             )
-        converted_from_leads_q = select(Lead.id).where(and_(*converted_lead_filters))
+        converted_from_leads_q = select(Lead.id.label("lead_id")).where(and_(*converted_lead_filters))
 
         sold_visit_filters = [
             ShowroomVisit.dealership_id == resolved_dealership_id,
@@ -996,10 +998,10 @@ async def get_dealership_analysis(
             sold_visit_filters.append(ShowroomVisit.checked_in_at >= activity_date_from)
         if activity_date_to is not None:
             sold_visit_filters.append(ShowroomVisit.checked_in_at <= activity_date_to)
-        converted_from_visits_q = select(ShowroomVisit.lead_id).where(and_(*sold_visit_filters))
+        converted_from_visits_q = select(ShowroomVisit.lead_id.label("lead_id")).where(and_(*sold_visit_filters))
 
-        converted_union = converted_from_leads_q.union(converted_from_visits_q).subquery()
-        converted_result = await db.execute(select(func.count()).select_from(converted_union))
+        sold_leads_subq = converted_from_leads_q.union(converted_from_visits_q).subquery("sold_leads")
+        converted_result = await db.execute(select(func.count()).select_from(sold_leads_subq))
         converted_leads = converted_result.scalar() or 0
 
     activity_filters = [Activity.dealership_id == resolved_dealership_id]
@@ -1464,32 +1466,22 @@ async def get_dealership_analysis(
         for sp in salespersons
     ]
 
-    # Check-ins table: list of showroom visits in period (for dedicated table on frontend)
-    check_ins_list: List[CheckInRow] = []
+    # Sold by partner store uses the same leads as the Converted card.
     sold_by_store: List[PartnerStoreSoldRow] = []
-    if activity_date_from is not None and activity_date_to is not None and not no_matching_leads:
-        period_visit_filters = [
-            ShowroomVisit.dealership_id == resolved_dealership_id,
-            ShowroomVisit.checked_in_at >= activity_date_from,
-            ShowroomVisit.checked_in_at <= activity_date_to,
-        ]
-        if lead_ids:
-            period_visit_filters.append(ShowroomVisit.lead_id.in_(lead_ids))
-
+    if sold_leads_subq is not None:
         store_key = func.coalesce(Lead.sold_partner_store_id, Lead.partner_store_id)
         sold_by_store_q = (
             select(
                 store_key.label("store_id"),
                 PartnerStore.name,
                 PartnerStore.brand,
-                func.count(ShowroomVisit.id).label("sold_count"),
+                func.count(Lead.id).label("sold_count"),
             )
-            .select_from(ShowroomVisit)
-            .join(Lead, Lead.id == ShowroomVisit.lead_id)
+            .select_from(Lead)
+            .join(sold_leads_subq, sold_leads_subq.c.lead_id == Lead.id)
             .outerjoin(PartnerStore, PartnerStore.id == store_key)
-            .where(and_(*period_visit_filters, ShowroomVisit.outcome == ShowroomOutcome.SOLD))
             .group_by(store_key, PartnerStore.name, PartnerStore.brand)
-            .order_by(func.count(ShowroomVisit.id).desc(), PartnerStore.name.asc().nulls_last())
+            .order_by(func.count(Lead.id).desc(), PartnerStore.name.asc().nulls_last())
         )
         sold_by_store_result = await db.execute(sold_by_store_q)
         for row in sold_by_store_result.all():
@@ -1501,6 +1493,43 @@ async def get_dealership_analysis(
                     sold_count=row.sold_count or 0,
                 )
             )
+
+    assigned_check_ins = sum(row.check_ins_in_period for row in salespeople_rows)
+    unassigned_check_ins = total_check_ins_in_period - assigned_check_ins
+    if unassigned_check_ins > 0:
+        salespeople_rows.append(
+            SalespersonAnalysisRow(
+                user_id="unassigned",
+                user_name="Unassigned",
+                leads_assigned=0,
+                notes_added=0,
+                follow_ups_total=0,
+                follow_ups_pending=0,
+                follow_ups_overdue=0,
+                appointments_total=0,
+                appointments_scheduled=0,
+                appointments_confirmed=0,
+                follow_ups_scheduled_in_period=0,
+                follow_ups_completed_in_period=0,
+                appointments_scheduled_in_period=0,
+                appointments_confirmed_in_period=0,
+                notes_friday=0,
+                outbound_calls_friday=0,
+                appointments_contacted_saturday=0,
+                check_ins_in_period=unassigned_check_ins,
+            )
+        )
+
+    # Check-ins table: list of showroom visits in period (for dedicated table on frontend)
+    check_ins_list: List[CheckInRow] = []
+    if activity_date_from is not None and activity_date_to is not None and not no_matching_leads:
+        period_visit_filters = [
+            ShowroomVisit.dealership_id == resolved_dealership_id,
+            ShowroomVisit.checked_in_at >= activity_date_from,
+            ShowroomVisit.checked_in_at <= activity_date_to,
+        ]
+        if lead_ids:
+            period_visit_filters.append(ShowroomVisit.lead_id.in_(lead_ids))
 
         check_in_list_filters = list(period_visit_filters)
         if partner_store_id:

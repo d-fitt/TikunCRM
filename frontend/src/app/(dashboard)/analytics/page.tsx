@@ -978,9 +978,13 @@ export default function AnalyticsPage() {
                                         analysis.salespeople.map((row: SalespersonAnalysisRow) => (
                                             <TableRow key={row.user_id}>
                                                 <TableCell className="font-medium">
-                                                    <Link href={`/analytics/salesperson/${row.user_id}`} className="hover:underline">
-                                                        {row.user_name}
-                                                    </Link>
+                                                    {row.user_id === "unassigned" ? (
+                                                        row.user_name
+                                                    ) : (
+                                                        <Link href={`/analytics/salesperson/${row.user_id}`} className="hover:underline">
+                                                            {row.user_name}
+                                                        </Link>
+                                                    )}
                                                 </TableCell>
                                                 <TableCell className="text-right">{row.leads_assigned}</TableCell>
                                                 <TableCell className="max-w-[180px]">
@@ -1014,6 +1018,9 @@ export default function AnalyticsPage() {
                             <Store className="h-5 w-5" />
                             Sold by partner store
                         </h2>
+                        <p className="text-xs text-muted-foreground -mt-2 mb-3">
+                            These rows add up to Converted. A sale is a lead marked sold in the period, or a check-in marked sold.
+                        </p>
                         <Card className="overflow-hidden">
                             <Table>
                                 <TableHeader>
