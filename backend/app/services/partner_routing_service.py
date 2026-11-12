@@ -16,7 +16,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.timezone import utc_now
-from app.models.activity import ActivityType
 from app.models.customer import Customer
 from app.models.lead import Lead
 from app.models.lead_campaign import LeadCampaign
@@ -38,7 +37,6 @@ from app.models.partner_program import (
 from app.models.partner_store import PartnerStore
 from app.models.time_entry import TimeEntry
 from app.models.user import User
-from app.services.activity import ActivityService
 
 logger = logging.getLogger(__name__)
 
@@ -427,21 +425,6 @@ async def _create_delivery(
         )
         return None
 
-    label = "full BDC" if program.program_type == PROGRAM_FULL_BDC else "leads only"
-    await ActivityService.log_activity(
-        db,
-        activity_type=ActivityType.LEAD_UPDATED,
-        description=f"Lead delivered to {store.name} ({display}, {label})",
-        lead_id=lead.id,
-        dealership_id=lead.dealership_id,
-        meta_data={
-            "partner_store_id": str(store.id),
-            "partner_store_name": store.name,
-            "brand": display,
-            "program_type": program.program_type,
-            "delivery_id": str(delivery.id),
-        },
-    )
     return delivery
 
 

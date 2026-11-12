@@ -595,8 +595,9 @@ export default function LeadDetailsPage() {
     // Timeline lens: filter the unified timeline by channel
     const [timelineLens, setTimelineLens] = React.useState<"all" | "calls" | "emails" | "messages" | "notes" | "stages">("all")
     const lensedActivities = React.useMemo(() => {
-        if (timelineLens === "all") return activities
-        return activities.filter((a) => {
+        const visible = activities.filter((a) => !/^Lead delivered to /i.test(a.description || ""))
+        if (timelineLens === "all") return visible
+        return visible.filter((a) => {
             if (timelineLens === "calls") return a.type === "call_logged"
             if (timelineLens === "emails") return a.type === "email_sent" || a.type === "email_received"
             if (timelineLens === "messages")
@@ -1165,7 +1166,7 @@ export default function LeadDetailsPage() {
             }
 
             readme += `## Activity Timeline\n\n`
-            allActivities.forEach((a) => {
+            allActivities.filter((a) => !/^Lead delivered to /i.test(a.description || "")).forEach((a) => {
                 const date = a.created_at ? format(new Date(a.created_at), "yyyy-MM-dd HH:mm") : ""
                 readme += `- **${getActivityLabel(a.type)}** — ${date} — ${getAuthor(a)}\n`
                 readme += `  ${a.description || ""}\n`
