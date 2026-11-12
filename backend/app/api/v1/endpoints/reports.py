@@ -880,6 +880,7 @@ async def _resolve_dealership_and_lead_filters(
     source: Optional[str],
     stage_id: Optional[UUID],
     bdc_agent_id: Optional[UUID] = None,
+    partner_store_id: Optional[UUID] = None,
 ):
     """Returns (resolved_dealership_id, list of Lead filter conditions)."""
     resolved = await _http_resolve_dealership(db, current_user, dealership_id, required=False)
@@ -901,6 +902,14 @@ async def _resolve_dealership_and_lead_filters(
     if stage_id is not None:
         lead_filters.append(Lead.stage_id == stage_id)
         has_lead_specific_filters = True
+    if partner_store_id is not None:
+        lead_filters.append(
+            or_(
+                Lead.partner_store_id == partner_store_id,
+                Lead.sold_partner_store_id == partner_store_id,
+            )
+        )
+        has_lead_specific_filters = True
     return resolved, lead_filters, has_lead_specific_filters
 
 
@@ -913,18 +922,18 @@ async def get_dealership_analysis(
     bdc_agent_id: Optional[UUID] = Query(None, description="Filter by BDC agent"),
     source: Optional[str] = Query(None, description="Filter by lead source"),
     stage_id: Optional[UUID] = Query(None, description="Filter by stage"),
-    partner_store_id: Optional[UUID] = Query(None, description="Filter check-ins by partner store"),
+    partner_store_id: Optional[UUID] = Query(None, description="Filter by partner store"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
     """
     Full dealership analysis: summary totals and per-salesperson metrics.
     Date range filters leads by created_at (Total/Active/Converted) and activities by their timestamps.
-    All counts respect assigned_to, source, stage_id filters.
+    All counts respect salesperson, BDC, source, stage, and partner store filters.
     """
     now = utc_now()
     resolved_dealership_id, lead_filters, has_lead_specific_filters = await _resolve_dealership_and_lead_filters(
-        db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
+        db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id, partner_store_id
     )
     if not resolved_dealership_id:
         raise HTTPException(
@@ -971,6 +980,14 @@ async def get_dealership_analysis(
 
     # If lead-specific filters were applied but no leads match, all activity counts should be 0
     no_matching_leads = has_lead_specific_filters and not lead_ids
+
+    def _matching_lead_scope(column):
+        """Keep rows for the filtered leads. Rows with no lead stay only in the unfiltered view."""
+        if not lead_ids:
+            return None
+        if has_lead_specific_filters:
+            return column.in_(lead_ids)
+        return or_(column.is_(None), column.in_(lead_ids))
 
     # One sold set for the Converted card and Sold by partner store.
     # A lead counts when it was marked converted in the period, or a check-in
@@ -1023,10 +1040,9 @@ async def get_dealership_analysis(
         total_notes = total_notes_result.scalar() or 0
 
     appt_filters = [Appointment.dealership_id == resolved_dealership_id]
-    if lead_ids:
-        appt_filters.append(
-            or_(Appointment.lead_id.is_(None), Appointment.lead_id.in_(lead_ids))
-        )
+    appt_lead_scope = _matching_lead_scope(Appointment.lead_id)
+    if appt_lead_scope is not None:
+        appt_filters.append(appt_lead_scope)
     if activity_date_from is not None:
         appt_filters.append(Appointment.created_at >= activity_date_from)
     if activity_date_to is not None:
@@ -1098,10 +1114,9 @@ async def get_dealership_analysis(
             CallLog.started_at <= activity_date_to,
             extract("dow", CallLog.started_at) == 5,
         ]
-        if lead_ids:
-            call_fri_filters.append(
-                or_(CallLog.lead_id.is_(None), CallLog.lead_id.in_(lead_ids))
-            )
+        call_lead_scope = _matching_lead_scope(CallLog.lead_id)
+        if call_lead_scope is not None:
+            call_fri_filters.append(call_lead_scope)
         outbound_calls_friday_result = await db.execute(
             select(func.count()).select_from(CallLog).where(and_(*call_fri_filters))
         )
@@ -1112,10 +1127,9 @@ async def get_dealership_analysis(
             Appointment.scheduled_at <= activity_date_to,
             extract("dow", Appointment.scheduled_at) == 6,
         ]
-        if lead_ids:
-            appt_sat_filters.append(
-                or_(Appointment.lead_id.is_(None), Appointment.lead_id.in_(lead_ids))
-            )
+        appt_sat_scope = _matching_lead_scope(Appointment.lead_id)
+        if appt_sat_scope is not None:
+            appt_sat_filters.append(appt_sat_scope)
         appointments_contacted_saturday_result = await db.execute(
             select(func.count()).select_from(Appointment).where(and_(*appt_sat_filters))
         )
@@ -1227,7 +1241,7 @@ async def get_dealership_analysis(
         "check_ins_in_period": 0,
     } for sp_id in sp_ids}
 
-    if sp_ids:
+    if sp_ids and not no_matching_leads:
         # Leads per assigned_to (same date window as Total Leads)
         lead_sp_base = and_(lead_filters_in_period, Lead.assigned_to.in_(sp_ids))
         lead_sp_result = await db.execute(
@@ -1239,6 +1253,8 @@ async def get_dealership_analysis(
 
         # Notes in period per user_id
         note_sp_filters = [Activity.user_id.in_(sp_ids), Activity.type == ActivityType.NOTE_ADDED]
+        if has_lead_specific_filters and lead_ids:
+            note_sp_filters.append(Activity.lead_id.in_(lead_ids))
         if activity_date_from is not None:
             note_sp_filters.append(Activity.created_at >= activity_date_from)
         if activity_date_to is not None:
@@ -1338,8 +1354,9 @@ async def get_dealership_analysis(
             Appointment.dealership_id == resolved_dealership_id,
             Appointment.status.in_(APPOINTMENT_SET_STATUSES),
         ]
-        if lead_ids:
-            appt_period_filters.append(or_(Appointment.lead_id.is_(None), Appointment.lead_id.in_(lead_ids)))
+        appt_period_scope = _matching_lead_scope(Appointment.lead_id)
+        if appt_period_scope is not None:
+            appt_period_filters.append(appt_period_scope)
         if activity_date_from is not None:
             appt_period_filters.append(Appointment.created_at >= activity_date_from)
         if activity_date_to is not None:
@@ -1358,8 +1375,9 @@ async def get_dealership_analysis(
             Appointment.dealership_id == resolved_dealership_id,
             Appointment.status == AppointmentStatus.CONFIRMED,
         ]
-        if lead_ids:
-            appt_conf_period_filters.append(or_(Appointment.lead_id.is_(None), Appointment.lead_id.in_(lead_ids)))
+        appt_conf_scope = _matching_lead_scope(Appointment.lead_id)
+        if appt_conf_scope is not None:
+            appt_conf_period_filters.append(appt_conf_scope)
         if activity_date_from is not None:
             appt_conf_period_filters.append(Appointment.created_at >= activity_date_from)
         if activity_date_to is not None:
@@ -1382,6 +1400,8 @@ async def get_dealership_analysis(
                 Activity.created_at <= activity_date_to,
                 extract("dow", Activity.created_at) == 5,
             ]
+            if has_lead_specific_filters and lead_ids:
+                nf_sp_filters.append(Activity.lead_id.in_(lead_ids))
             nf_sp_result = await db.execute(
                 select(Activity.user_id, func.count()).select_from(Activity).where(and_(*nf_sp_filters)).group_by(Activity.user_id)
             )
@@ -1395,8 +1415,9 @@ async def get_dealership_analysis(
                 CallLog.started_at <= activity_date_to,
                 extract("dow", CallLog.started_at) == 5,
             ]
-            if lead_ids:
-                oc_sp_filters.append(or_(CallLog.lead_id.is_(None), CallLog.lead_id.in_(lead_ids)))
+            oc_scope = _matching_lead_scope(CallLog.lead_id)
+            if oc_scope is not None:
+                oc_sp_filters.append(oc_scope)
             oc_sp_result = await db.execute(
                 select(CallLog.user_id, func.count()).select_from(CallLog).where(and_(*oc_sp_filters)).group_by(CallLog.user_id)
             )
@@ -1410,8 +1431,9 @@ async def get_dealership_analysis(
                 Appointment.scheduled_at <= activity_date_to,
                 extract("dow", Appointment.scheduled_at) == 6,
             ]
-            if lead_ids:
-                ap_sat_sp_filters.append(or_(Appointment.lead_id.is_(None), Appointment.lead_id.in_(lead_ids)))
+            ap_sat_scope = _matching_lead_scope(Appointment.lead_id)
+            if ap_sat_scope is not None:
+                ap_sat_sp_filters.append(ap_sat_scope)
             ap_sat_sp_result = await db.execute(
                 select(Appointment.assigned_to, func.count()).select_from(Appointment).where(and_(*ap_sat_sp_filters)).group_by(Appointment.assigned_to)
             )
@@ -1624,13 +1646,14 @@ async def get_leads_over_time(
     bdc_agent_id: Optional[UUID] = Query(None),
     source: Optional[str] = Query(None),
     stage_id: Optional[UUID] = Query(None),
+    partner_store_id: Optional[UUID] = Query(None),
     group_by: str = Query("day", description="day or week"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
     """Time-series of leads created and converted per day (or week)."""
     resolved, lead_filters, _ = await _resolve_dealership_and_lead_filters(
-        db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
+        db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id, partner_store_id
     )
     if not resolved:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dealership context required.")
@@ -1696,12 +1719,13 @@ async def get_leads_by_stage(
     bdc_agent_id: Optional[UUID] = Query(None),
     source: Optional[str] = Query(None),
     stage_id: Optional[UUID] = Query(None),
+    partner_store_id: Optional[UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
     """Lead counts grouped by stage (filtered by created_at when date range is set)."""
     resolved, lead_filters, _ = await _resolve_dealership_and_lead_filters(
-        db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
+        db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id, partner_store_id
     )
     if not resolved:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dealership context required.")
@@ -1742,12 +1766,13 @@ async def get_leads_by_source(
     bdc_agent_id: Optional[UUID] = Query(None),
     source: Optional[str] = Query(None),
     stage_id: Optional[UUID] = Query(None),
+    partner_store_id: Optional[UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
     """Lead counts grouped by source (filtered by created_at when date range is set)."""
     resolved, lead_filters, _ = await _resolve_dealership_and_lead_filters(
-        db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
+        db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id, partner_store_id
     )
     if not resolved:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dealership context required.")
@@ -1787,12 +1812,13 @@ async def get_activities_over_time(
     bdc_agent_id: Optional[UUID] = Query(None),
     source: Optional[str] = Query(None),
     stage_id: Optional[UUID] = Query(None),
+    partner_store_id: Optional[UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin_or_owner),
 ) -> Any:
     """Time-series of activities and notes per day (scoped to dealership and optional lead filters)."""
     resolved, lead_filters, has_lead_specific_filters = await _resolve_dealership_and_lead_filters(
-        db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id
+        db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id, partner_store_id
     )
     if not resolved:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dealership context required.")
