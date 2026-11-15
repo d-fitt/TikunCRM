@@ -53,6 +53,50 @@ async def _lead_campaign_association_exists(
     r = await session.execute(q.limit(1))
     return r.scalar_one_or_none() is not None
 
+
+async def _reopen_lost_duplicate(session: AsyncSession, lead: Lead) -> bool:
+    """A lead that submits again while Lost goes back to New.
+
+    Interested and every other stage are left alone.
+    """
+    stage = lead.stage
+    if stage is None or (stage.name or "").lower() != "lost":
+        return False
+
+    new_stage = await LeadStageService.get_stage_by_name(session, "new", lead.dealership_id)
+    if new_stage is None:
+        logger.warning("No New stage for lead %s; left as Lost", lead.id)
+        return False
+
+    old_label = stage.display_name or "Lost"
+    lead.stage_id = new_stage.id
+    lead.stage = new_stage
+    lead.is_active = True
+    lead.closed_at = None
+    if (lead.outcome or "").lower() == "lost":
+        lead.outcome = None
+    lead.last_activity_at = utc_now()
+    session.add(
+        Activity(
+            type=ActivityType.STATUS_CHANGED,
+            description=(
+                f"Status changed from {old_label} to {new_stage.display_name} "
+                f"because this lead submitted again"
+            ),
+            user_id=None,
+            lead_id=lead.id,
+            dealership_id=lead.dealership_id,
+            meta_data={
+                "old_status": old_label,
+                "new_status": new_stage.display_name,
+                "performer_name": "System",
+                "reason": "duplicate_inbound",
+            },
+        )
+    )
+    logger.info("Reopened lost lead %s to New after a new submission", lead.id)
+    return True
+
 # Legacy hardcoded configuration (for backward compatibility)
 LEGACY_GOOGLE_SHEET_ID = "1_7Qdzgjj9Ye5V7ZW0_gYblqU8V9pkbjDjkahTl8O4kI"
 LEGACY_GOOGLE_SHEET_GID = "0"
@@ -641,6 +685,7 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
 
                             existing_lead.is_starred = True
                             existing_lead.last_inbound_at = utc_now()
+                            await _reopen_lost_duplicate(session, existing_lead)
 
                             if matched_mapping:
                                 matched_mapping.leads_matched += 1
