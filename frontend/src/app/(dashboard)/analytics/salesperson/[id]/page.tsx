@@ -31,7 +31,7 @@ import {
 } from "lucide-react"
 import { useRole } from "@/hooks/use-role"
 import { TeamService, type UserBrief } from "@/services/team-service"
-import { LeadService, getLeadFullName, type Lead } from "@/services/lead-service"
+import { LeadService, getLeadFullName, leadVisibleSource, type Lead } from "@/services/lead-service"
 import { ActivityService, type Activity as ActivityItem, ACTIVITY_TYPE_INFO } from "@/services/activity-service"
 import { AppointmentService, type Appointment as AppointmentItem } from "@/services/appointment-service"
 import { FollowUpService, type FollowUp, FOLLOW_UP_STATUS_INFO } from "@/services/follow-up-service"
@@ -320,7 +320,7 @@ export default function SalespersonAnalyticsPage() {
                                                 <TableRow key={lead.id}>
                                                     <TableCell className="font-medium">{getLeadFullName(lead)}</TableCell>
                                                     <TableCell>{lead.stage?.display_name ?? lead.stage?.name ?? "—"}</TableCell>
-                                                    <TableCell>{(lead.source_display ?? lead.source)?.replace(/_/g, ' ') ?? "—"}</TableCell>
+                                                    <TableCell>{leadVisibleSource(lead) || "—"}</TableCell>
                                                     <TableCell className="text-muted-foreground text-sm">{lead.created_at ? formatDate(lead.created_at) : "—"}</TableCell>
                                                     <TableCell>
                                                         <Button variant="ghost" size="sm" asChild>

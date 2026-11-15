@@ -89,6 +89,7 @@ import {
     getLeadPhone,
     getLeadEmail,
     dedupeLeadCampaigns,
+    leadVisibleSource,
     isLeadReturnedToPool,
     type LeadCampaign,
 } from "@/services/lead-service"
@@ -1554,7 +1555,7 @@ export default function LeadDetailsPage() {
                 { label: "Email", value: getLeadEmail(lead) ?? "" },
                 { label: "Secondary", value: sec ? [sec.first_name, sec.last_name].filter(Boolean).join(" ") : "" },
                 { label: "Stage", value: (lead as Lead).stage?.name ?? "" },
-                { label: "Source", value: ((lead as Lead).source_display ?? (lead as Lead).source)?.replace(/_/g, ' ') ?? "" },
+                { label: "Source", value: leadVisibleSource(lead as Lead) },
                 { label: "Created", value: (lead as Lead).created_at ? format(new Date((lead as Lead).created_at), "yyyy-MM-dd HH:mm") : "" },
                 { label: "First contacted", value: firstContact ? format(new Date(firstContact), "yyyy-MM-dd HH:mm") : "" },
                 { label: "Last contacted", value: lastContact ? format(new Date(lastContact), "yyyy-MM-dd HH:mm") : "" },
@@ -2192,10 +2193,12 @@ export default function LeadDetailsPage() {
 
     const isMentionOnly = lead.access_level === "mention_only"
 
-    const sourceLabel = (lead.source_display ?? lead.source)?.replace(/_/g, " ") ?? ""
-    const campaignDisplay =
-        lead.campaign_mapping?.display_name?.trim() || sourceLabel
-    const primaryTargeting = lead.campaign_mapping?.targeting_message?.trim() || ""
+    const latestCampaign = dedupedCampaigns[0]
+    const sourceLabel = leadVisibleSource(lead)
+    const campaignDisplay = sourceLabel
+    const primaryTargeting =
+        latestCampaign?.targeting_message?.trim()
+        || (latestCampaign ? "" : lead.campaign_mapping?.targeting_message?.trim() || "")
     const extraTargeting = (lead.campaigns || [])
         .map((c) => ({
             label: c.display_name || c.campaign_name,

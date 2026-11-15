@@ -82,7 +82,7 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Calendar as CalendarPicker } from "@/components/ui/calendar"
-import { LeadService, Lead, type LeadListParams, type LeadExportFilters, type CampaignFilterOption, type LeadIntakeSummary, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead, isLeadReturnedToPool, getLeadArrival } from "@/services/lead-service"
+import { LeadService, Lead, type LeadListParams, type LeadExportFilters, type CampaignFilterOption, type LeadIntakeSummary, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead, isLeadReturnedToPool, getLeadArrival, leadVisibleSource } from "@/services/lead-service"
 import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { AssignToSalespersonModal, AssignToDealershipModal } from "@/components/leads/assignment-modal"
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
@@ -1872,7 +1872,7 @@ export default function LeadsPage() {
                                     {showCol("source") && (
                                     <TableCell>
                                         <Badge variant={getSourceVariant(lead.source)} size="sm">
-                                            {(lead.source_display ?? lead.source)?.replace(/_/g, ' ') ?? ''}
+                                            {leadVisibleSource(lead)}
                                         </Badge>
                                     </TableCell>
                                     )}

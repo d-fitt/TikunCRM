@@ -245,7 +245,9 @@ class LeadResponse(BaseModel):
     stage: Optional[LeadStageResponse] = None
     # Lead fields (source is str for API responses - enum value or source_display from meta_data)
     source: str
-    source_display: Optional[str] = None  # Custom display when present (e.g. from meta_data)
+    source_display: Optional[str] = None  # Original campaign label (first time this lead arrived)
+    # Newest later campaign, when this lead was submitted again. UI source badges use this.
+    latest_source_display: Optional[str] = None
     is_active: bool
     outcome: Optional[str] = None
     interest_score: int = 0

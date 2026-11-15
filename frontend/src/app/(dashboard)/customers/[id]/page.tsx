@@ -20,7 +20,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { UserAvatar } from "@/components/ui/avatar"
 import { CustomerService, Customer360, getCustomerFullName } from "@/services/customer-service"
-import { Lead, getLeadFullName } from "@/services/lead-service"
+import { Lead, getLeadFullName, leadVisibleSource } from "@/services/lead-service"
 import { getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
@@ -193,7 +193,7 @@ export default function Customer360Page() {
                                                     </Badge>
                                                 </div>
                                                 <p className="text-xs text-muted-foreground">
-                                                    Source: {(lead.source_display ?? lead.source)?.replace(/_/g, ' ')} | Created{" "}
+                                                    Source: {leadVisibleSource(lead)} | Created{" "}
                                                     {formatDateInTimezone(lead.created_at, timezone, {
                                                         dateStyle: "medium",
                                                     })}

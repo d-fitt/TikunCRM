@@ -31,7 +31,7 @@ import {
     TableLoading
 } from "@/components/ui/table"
 import { DashboardService, SalespersonStats } from "@/services/dashboard-service"
-import { LeadService, Lead, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
+import { LeadService, Lead, getLeadFullName, getLeadPhone, getLeadEmail, leadVisibleSource } from "@/services/lead-service"
 import { getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/services/appointment-service"
 import { ShowroomService, ShowroomStats } from "@/services/showroom-service"
@@ -536,7 +536,7 @@ export function SalespersonDashboard() {
                                                 </TableCell>
                                                 <TableCell>
                                                     <span className="text-xs text-muted-foreground line-clamp-2">
-                                                        {lead.source_display || lead.source || "—"}
+                                                        {leadVisibleSource(lead) || "—"}
                                                     </span>
                                                 </TableCell>
                                                 <TableCell className="max-w-[220px]">

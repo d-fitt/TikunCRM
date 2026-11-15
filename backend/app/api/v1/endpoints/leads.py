@@ -406,6 +406,39 @@ async def auto_assign_on_first_activity(
     return salesperson_assigned or bdc_assigned
 
 
+async def _latest_campaign_source_labels(db: AsyncSession, lead_ids: list) -> dict:
+    """Label of the newest later campaign for each duplicate lead.
+
+    The lead's own source_display stays the first campaign. Later form fills
+    live on lead_campaigns, and the source badge should use the most recent one.
+    """
+    if not lead_ids:
+        return {}
+    rows = await db.execute(
+        select(
+            LeadCampaign.lead_id,
+            LeadCampaign.campaign_name,
+            CampaignMapping.display_name.label("mapping_display"),
+            CampaignMappingVersion.display_name.label("version_display"),
+        )
+        .outerjoin(CampaignMapping, LeadCampaign.campaign_mapping_id == CampaignMapping.id)
+        .outerjoin(
+            CampaignMappingVersion,
+            LeadCampaign.campaign_version_id == CampaignMappingVersion.id,
+        )
+        .where(LeadCampaign.lead_id.in_(lead_ids))
+        .order_by(LeadCampaign.lead_id, desc(LeadCampaign.added_at))
+    )
+    labels: dict = {}
+    for row in rows.all():
+        if row.lead_id in labels:
+            continue
+        label = (row.version_display or row.mapping_display or row.campaign_name or "").strip()
+        if label:
+            labels[row.lead_id] = label
+    return labels
+
+
 async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
     """Add customer, stage, assigned_to_user, secondary_salesperson, dealership, and partner_store info to leads."""
     if not leads:
@@ -522,6 +555,9 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
                 "brand": store.brand,
             }
 
+    starred_ids = [lead.id for lead in leads if getattr(lead, "is_starred", False)]
+    latest_source_by_lead = await _latest_campaign_source_labels(db, starred_ids)
+
     # Activity count per lead (for "fresh" / untouched indicator: only creation activity = 1)
     lead_ids = [l.id for l in leads]
     activity_counts = {}
@@ -570,6 +606,7 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "stage": stages_map.get(lead.stage_id),
             "source": (lead.meta_data or {}).get("source_display") or (lead.source.value if isinstance(lead.source, LeadSource) else "google_sheets"),
             "source_display": (lead.meta_data or {}).get("source_display"),
+            "latest_source_display": latest_source_by_lead.get(lead.id),
             "is_active": lead.is_active,
             "outcome": lead.outcome,
             "interest_score": lead.interest_score,
@@ -2040,6 +2077,10 @@ async def get_lead(
             }
 
         response_data["campaigns"] = [_campaign_copy(campaign) for campaign in campaigns]
+        if response_data["campaigns"]:
+            newest = response_data["campaigns"][0]
+            latest_label = (newest.get("display_name") or newest.get("campaign_name") or "").strip()
+            response_data["latest_source_display"] = latest_label or None
 
     from app.services.eligibility_service import EligibilityService
 

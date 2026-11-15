@@ -37,7 +37,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
-import { LeadService, Lead, LeadListResponse, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
+import { LeadService, Lead, LeadListResponse, getLeadFullName, getLeadPhone, getLeadEmail, leadVisibleSource } from "@/services/lead-service"
 import { AssignToDealershipModal } from "@/components/leads/assignment-modal"
 import { useRole } from "@/hooks/use-role"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
@@ -303,7 +303,7 @@ export default function UnassignedLeadsPage() {
                                         </TableCell>
                                         <TableCell>
                                             <Badge variant={getSourceVariant(lead.source)} size="sm">
-                                                {(lead.source_display ?? lead.source)?.replace(/_/g, ' ') ?? ''}
+                                                {leadVisibleSource(lead)}
                                             </Badge>
                                         </TableCell>
                                         <TableCell>

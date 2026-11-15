@@ -57,6 +57,24 @@ export function dedupeLeadCampaigns(campaigns: LeadCampaign[] | undefined): Lead
     );
 }
 
+/** Source badge: latest campaign for a duplicate, otherwise the original source. */
+export function leadVisibleSource(lead: {
+    latest_source_display?: string | null;
+    source_display?: string | null;
+    source?: string | null;
+    campaigns?: LeadCampaign[] | null;
+}): string {
+    const latestCampaign = lead.campaigns?.length ? dedupeLeadCampaigns(lead.campaigns)[0] : undefined;
+    const raw =
+        lead.latest_source_display?.trim()
+        || latestCampaign?.display_name?.trim()
+        || latestCampaign?.campaign_name?.trim()
+        || lead.source_display?.trim()
+        || lead.source
+        || "";
+    return raw.replace(/_/g, " ");
+}
+
 export interface Lead {
     id: string;
     // Customer (embedded)
@@ -70,6 +88,8 @@ export interface Lead {
     // Lead fields
     source: string;
     source_display?: string | null;
+    /** Newest later campaign when this lead was submitted again. Source badges use this. */
+    latest_source_display?: string | null;
     is_active: boolean;
     outcome?: string;
     interest_score: number;
