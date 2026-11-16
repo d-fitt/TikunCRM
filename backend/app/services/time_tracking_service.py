@@ -596,15 +596,6 @@ async def clock_in(db: AsyncSession, user: User, note: Optional[str] = None) -> 
         await db.rollback()
         raise ValueError("already_clocked_in") from exc
     await db.refresh(entry)
-    role_value = user.role.value if hasattr(user.role, "value") else str(user.role)
-    if role_value == "bdc":
-        try:
-            from app.services.partner_routing_service import assign_waiting_bdc_leads
-            await assign_waiting_bdc_leads(db, user.id)
-            await db.commit()
-        except Exception:
-            logger.exception("Failed to assign waiting BDC leads on clock-in for %s", user.id)
-            await db.rollback()
     return entry
 
 

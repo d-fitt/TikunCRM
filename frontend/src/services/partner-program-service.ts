@@ -99,10 +99,6 @@ export const PartnerProgramService = {
         const response = await apiClient.get<LeadDeliveryRow[]>(`/leads/${leadId}/deliveries`);
         return response.data;
     },
-    async routeLead(leadId: string) {
-        const response = await apiClient.post<LeadDeliveryRow[]>(`/leads/${leadId}/route`);
-        return response.data;
-    },
     async returnDelivery(leadId: string, deliveryId: string, note?: string) {
         const response = await apiClient.post<LeadDeliveryRow[]>(
             `/leads/${leadId}/deliveries/${deliveryId}/return`,

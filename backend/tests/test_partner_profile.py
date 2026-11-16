@@ -1,6 +1,4 @@
 """Partner store profile rules. No database."""
-import asyncio
-
 import pytest
 
 from app.services.partner_dashboard_service import range_position
@@ -10,7 +8,7 @@ from app.services.partner_profile_service import (
     slug_platform,
     validate_monthly_range,
 )
-from app.services.partner_routing_service import route_lead_safely
+from app.services import partner_routing_service
 
 
 def test_monthly_range_accepts_a_band() -> None:
@@ -45,5 +43,7 @@ def test_range_position() -> None:
     assert range_position(10, None, None) is None
 
 
-def test_automatic_routing_does_not_assign() -> None:
-    assert asyncio.run(route_lead_safely(None, None)) == []
+def test_partner_store_router_is_gone() -> None:
+    assert not hasattr(partner_routing_service, "route_lead")
+    assert not hasattr(partner_routing_service, "route_lead_safely")
+    assert not hasattr(partner_routing_service, "assign_waiting_bdc_leads")

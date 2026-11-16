@@ -91,9 +91,6 @@ class IntegrationService:
             import logging
             logging.getLogger(__name__).error(f"Failed to enqueue AI outbound for Meta lead {new_lead.id}: {e}")
 
-        from app.services.partner_routing_service import route_lead_safely
-        await route_lead_safely(db, new_lead.id)
-
         return new_lead
 
     @staticmethod
@@ -148,7 +145,4 @@ class IntegrationService:
             created_count += 1
             
         await db.flush()
-        from app.services.partner_routing_service import route_lead_safely
-        for created in created_leads:
-            await route_lead_safely(db, created.id)
         return {"created": created_count, "updated": updated_count}

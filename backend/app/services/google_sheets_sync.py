@@ -778,10 +778,6 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
                 source.total_leads_synced += len(created_leads)
                 source.last_sync_error = None
 
-                from app.services.partner_routing_service import route_lead_safely
-                for lead in created_leads:
-                    await route_lead_safely(session, lead.id)
-
                 await session.commit()
                 
                 # Emit notifications for new leads
@@ -1184,10 +1180,6 @@ async def _legacy_sync_google_sheet_leads() -> Dict[str, Any]:
                     
                     new_leads_count = len(new_leads)
 
-                    from app.services.partner_routing_service import route_lead_safely
-                    for lead in created_leads:
-                        await route_lead_safely(session, lead.id)
-                
                 await session.commit()
                 
                 # Emit notifications
