@@ -133,7 +133,22 @@ def setup_scheduler():
         misfire_grace_time=3600,
     )
 
+    # AI call reviews - every 5 minutes: review new recorded calls, retry failures.
+    # The job itself is a no-op unless CALL_REVIEW_AUTO_ENABLED is on.
+    from app.services.call_review_service import run_call_review_sweep
+    scheduler.add_job(
+        run_call_review_sweep,
+        trigger=IntervalTrigger(minutes=5, start_date=datetime.now() + timedelta(seconds=90)),
+        id="call_review_sweep",
+        name="Transcribe and AI-review recorded calls",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+    )
+
     logger.info("Background scheduler configured (lead sync + appointments only):")
+    logger.info("  - AI call review sweep (every 5 minutes, only when CALL_REVIEW_AUTO_ENABLED)")
     logger.info("  - Google Sheets lead sync (every 2 minutes)")
     logger.info("  - Lead auto-assignment (every 2 minutes)")
     logger.info("  - Stale lead unassignment (every hour)")

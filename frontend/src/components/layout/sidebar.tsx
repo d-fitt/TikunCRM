@@ -36,6 +36,7 @@ import {
     Send,
     QrCode,
     Timer,
+    PhoneCall,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
@@ -155,6 +156,11 @@ const allSidebarItems: SidebarItem[] = [
         icon: Send,
         href: "/auto-whatsapp",
         roles: ["super_admin", "dealership_admin", "dealership_owner"],
+    },
+    {
+        name: "Call Reviews",
+        icon: PhoneCall,
+        href: "/call-reviews",
     },
     { 
         name: "Notifications", 

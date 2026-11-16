@@ -69,8 +69,14 @@ from app.models.lead_delivery import LeadDelivery
 from app.models.partner_bdc_agent import PartnerBdcAgent
 from app.models.partner_portal_user import PartnerPortalUser
 from app.models.time_entry import TimeEntry
+from app.models.call_review import CallRubric, CallReview, CallEvaluation, CallReviewStatus, RubricStatus
 
 __all__ = [
+    "CallRubric",
+    "CallReview",
+    "CallEvaluation",
+    "CallReviewStatus",
+    "RubricStatus",
     "Customer",
     "LeadStage",
     "Dealership",
