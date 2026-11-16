@@ -40,11 +40,13 @@ export function SendPartnerStoreButton({
     sentStoreIds = [],
     onSent,
     label = "Send",
+    quiet = false,
 }: {
     leadId: string
     sentStoreIds?: string[]
     onSent?: (results: StoreSendResult[]) => void
     label?: string
+    quiet?: boolean
 }) {
     const { toast } = useToast()
     const [open, setOpen] = React.useState(false)
@@ -106,10 +108,22 @@ export function SendPartnerStoreButton({
 
     return (
         <>
-            <Button size="sm" variant="outline" onClick={openPicker} disabled={busy}>
-                <Store className="mr-1 h-3.5 w-3.5" />
-                {label}
-            </Button>
+            {quiet ? (
+                <button
+                    type="button"
+                    onClick={openPicker}
+                    disabled={busy}
+                    className="inline-flex h-7 items-center gap-1.5 rounded-md border border-dashed border-slate-300 bg-white px-2 text-xs font-medium text-slate-600 hover:border-primary hover:bg-primary/5 hover:text-primary disabled:opacity-50"
+                >
+                    <Store className="h-3.5 w-3.5" />
+                    {label}
+                </button>
+            ) : (
+                <Button size="sm" variant="outline" onClick={openPicker} disabled={busy}>
+                    <Store className="mr-1 h-3.5 w-3.5" />
+                    {label}
+                </Button>
+            )}
             <Dialog open={open} onOpenChange={setOpen}>
                 <DialogContent className="flex max-h-[min(80vh,720px)] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
                     <DialogHeader className="border-b px-6 py-4">

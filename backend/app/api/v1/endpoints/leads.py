@@ -494,6 +494,7 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "full_name": c.full_name,
             "phone": c.phone,
             "email": c.email,
+            "postal_code": c.postal_code,
         }
 
     def _stage_brief(s: LeadStage) -> dict:

@@ -7,6 +7,7 @@ Supports dynamic sync sources configured via LeadSyncSource model.
 import logging
 import csv
 import io
+import re
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Set, Tuple, Union
 from uuid import UUID
@@ -144,6 +145,34 @@ def _truncate(value: Optional[str], max_len: int) -> Optional[str]:
     if len(text) <= max_len:
         return text
     return text[:max_len]
+
+
+def _sheet_postal_code(row: Dict[str, str]) -> Optional[str]:
+    """Zip from sheets that include one. Header names differ by form."""
+    direct = _get_first_non_empty(
+        row,
+        "zip_code",
+        "zipcode",
+        "zip",
+        "postal_code",
+        "postal",
+        "postcode",
+        "post_code",
+        "Zip Code",
+        "ZIP Code",
+        "Postal Code",
+        "Post Code",
+    )
+    if direct:
+        return _truncate(direct, 20)
+    for key, value in row.items():
+        normalized = re.sub(r"[^a-z]", "", (key or "").lower())
+        if normalized not in {"zip", "zipcode", "postalcode", "postal", "postcode"} and "zipcode" not in normalized:
+            continue
+        text = (value or "").strip()
+        if text:
+            return _truncate(text, 20)
+    return None
 
 
 def _get_first_non_empty(row: Dict[str, str], *keys: str) -> Optional[str]:
@@ -313,6 +342,10 @@ def parse_sheet_row(
             meta_data['loan_amount'] = loan_amount
         if vehicle_price:
             meta_data['vehicle_price'] = vehicle_price
+
+        postal_code = _sheet_postal_code(row)
+        if postal_code:
+            meta_data["postal_code"] = postal_code
         
         # Parse created_time for all leads (not just FB/IG) to preserve actual lead date
         created_at = None
@@ -333,6 +366,7 @@ def parse_sheet_row(
             "campaign_name_raw": campaign_name,
             "matched_mapping": matched_mapping,
             'target_dealership_id': target_dealership_id,
+            "postal_code": postal_code,
         }
         
     except Exception as e:
@@ -405,6 +439,23 @@ async def get_existing_external_ids(session: AsyncSession) -> Set[str]:
         select(Lead.external_id).where(Lead.external_id.isnot(None))
     )
     return {row[0] for row in result.fetchall()}
+
+
+async def _fill_missing_postal_codes(
+    session: AsyncSession,
+    pairs: List[Tuple[UUID, str]],
+) -> None:
+    """Write a sheet zip onto the customer only when that field is still empty."""
+    by_customer: Dict[UUID, str] = {}
+    for customer_id, postal in pairs:
+        if customer_id and postal and customer_id not in by_customer:
+            by_customer[customer_id] = postal
+    if not by_customer:
+        return
+    result = await session.execute(select(Customer).where(Customer.id.in_(list(by_customer))))
+    for customer in result.scalars().all():
+        if not customer.postal_code:
+            customer.postal_code = by_customer[customer.id]
 
 
 async def get_existing_leads_by_external_id(
@@ -606,6 +657,7 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
                 linked_this_run: Set[Tuple[UUID, Optional[UUID], str]] = set()
 
                 new_leads_data: List[Dict[str, Any]] = []
+                postal_fills: List[Tuple[UUID, str]] = []
                 updated_count = 0
                 duplicate_count = 0
                 multi_campaign_leads: List[Tuple[Lead, Dict[str, Any]]] = []  # Track leads for notification
@@ -648,6 +700,8 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
                             lead.campaign_mapping_id = matched_mapping.id
                             lead.campaign_version_id = await _version_id_for(matched_mapping)
                             matched_mapping.leads_matched += 1
+                        if lead_data.get("postal_code") and lead.customer_id:
+                            postal_fills.append((lead.customer_id, lead_data["postal_code"]))
                         updated_count += 1
                     elif ext_id in tracked_external_ids or (
                         phone and (phone, target_dealership_id) in tracked_phone_dealership
@@ -685,6 +739,8 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
 
                             existing_lead.is_starred = True
                             existing_lead.last_inbound_at = utc_now()
+                            if lead_data.get("postal_code") and existing_lead.customer_id:
+                                postal_fills.append((existing_lead.customer_id, lead_data["postal_code"]))
                             await _reopen_lost_duplicate(session, existing_lead)
 
                             if matched_mapping:
@@ -722,6 +778,7 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
                             first_name=lead_data['first_name'],
                             last_name=lead_data['last_name'],
                             source="google_sheets",
+                            postal_code=lead_data.get("postal_code"),
                         )
                         
                         matched_mapping = lead_data.get("matched_mapping")
@@ -772,6 +829,8 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
                         )
                         session.add(activity)
                 
+                await _fill_missing_postal_codes(session, postal_fills)
+
                 # Update sync source stats
                 source.last_synced_at = utc_now()
                 source.last_sync_lead_count = len(created_leads)
@@ -1103,6 +1162,7 @@ async def _legacy_sync_google_sheet_leads() -> Dict[str, Any]:
                 tracked_phone_dealership_legacy: Set[Tuple[str, Optional[UUID]]] = set()
 
                 new_leads: List[Dict[str, Any]] = []
+                postal_fills: List[Tuple[UUID, str]] = []
                 for lead_data in parsed_leads:
                     ext_id = lead_data["external_id"]
                     phone = lead_data.get("phone")
@@ -1116,6 +1176,8 @@ async def _legacy_sync_google_sheet_leads() -> Dict[str, Any]:
                         if existing_display:
                             merged_meta["source_display"] = existing_display
                         lead.meta_data = merged_meta
+                        if lead_data.get("postal_code") and lead.customer_id:
+                            postal_fills.append((lead.customer_id, lead_data["postal_code"]))
                         updated_count += 1
                     elif ext_id in tracked_external_ids or (
                         phone and (phone, target_dealership_id) in tracked_phone_dealership_legacy
@@ -1142,6 +1204,7 @@ async def _legacy_sync_google_sheet_leads() -> Dict[str, Any]:
                             first_name=lead_data['first_name'],
                             last_name=lead_data['last_name'],
                             source="google_sheets",
+                            postal_code=lead_data.get("postal_code"),
                         )
                         
                         lead_kwargs: Dict[str, Any] = {
@@ -1180,6 +1243,7 @@ async def _legacy_sync_google_sheet_leads() -> Dict[str, Any]:
                     
                     new_leads_count = len(new_leads)
 
+                await _fill_missing_postal_codes(session, postal_fills)
                 await session.commit()
                 
                 # Emit notifications

@@ -217,23 +217,24 @@ function PartnerStoreCell({
 }) {
     const names = storeNames(lead)
     return (
-        <div className="min-w-[148px] space-y-1.5">
-            {names.length > 0 ? (
-                <div className="flex items-start gap-1.5">
-                    <Store className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="text-sm font-medium leading-snug" title={names.join(", ")}>
-                        {names.join(", ")}
-                    </span>
-                </div>
-            ) : (
-                <span className="text-xs text-muted-foreground">Not sent</span>
-            )}
+        <div className="flex w-36 flex-col items-start gap-1.5">
+            {names.map((name) => (
+                <span
+                    key={name}
+                    title={name}
+                    className="inline-flex max-w-full items-center gap-1 rounded-md bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-700"
+                >
+                    <Store className="h-3 w-3 shrink-0 text-slate-500" />
+                    <span className="truncate">{name}</span>
+                </span>
+            ))}
             {canSend && (
                 <SendPartnerStoreButton
+                    quiet
                     leadId={lead.id}
                     sentStoreIds={sentStoreIds(lead)}
                     onSent={onSent}
-                    label={names.length ? "Send to another" : "Send"}
+                    label={names.length ? "Add store" : "Send to store"}
                 />
             )}
         </div>
@@ -1779,7 +1780,7 @@ export default function LeadsPage() {
                             {showCol("status") && <TableHead>Status</TableHead>}
                             {showCol("source") && <TableHead>Source</TableHead>}
                             {showCol("heat") && <TableHead>Heat</TableHead>}
-                            {showCol("partner_store") && <TableHead>Partner Store</TableHead>}
+                            {showCol("partner_store") && <TableHead className="min-w-[9.5rem]">Partner store</TableHead>}
                             {isBdc && <TableHead>Dealership</TableHead>}
                             {showCol("assigned_to") && <TableHead>Assigned To</TableHead>}
                             {showCol("notes") && <TableHead className="max-w-[140px]">Notes</TableHead>}
@@ -1930,6 +1931,11 @@ export default function LeadsPage() {
                                                         </span>
                                                     )}
                                                 </div>
+                                                {lead.customer?.postal_code && (
+                                                    <p className="mt-0.5 text-xs text-muted-foreground">
+                                                        ZIP {lead.customer.postal_code}
+                                                    </p>
+                                                )}
                                                 <p className="mt-0.5 text-xs text-muted-foreground">
                                                     {lead.last_inbound_at ? "Came back" : "Came in"} {formatDateInTimezone(
                                                         lead.last_inbound_at || lead.created_at,
@@ -1984,7 +1990,7 @@ export default function LeadsPage() {
                                     </TableCell>
                                     )}
                                     {showCol("partner_store") && (
-                                    <TableCell>
+                                    <TableCell className="align-top">
                                         <PartnerStoreCell
                                             lead={lead}
                                             canSend={canConnectToPartner}
