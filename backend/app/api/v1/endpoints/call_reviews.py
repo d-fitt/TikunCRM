@@ -25,6 +25,7 @@ from app.models.call_log import CallLog, CallStatus
 from app.models.call_review import (
     CallEvaluation,
     CallEvaluationFeedback,
+    CallInsightQuestion,
     CallReview,
     CallReviewStatus,
     CallRubric,
@@ -38,6 +39,8 @@ from app.models.lead import Lead
 from app.models.user import User
 from app.services import call_evaluation_service as evaluation
 from app.services import call_insights_service as insights
+from app.services import call_questions_service as questions
+from app.services import call_report_service as reports
 from app.services import call_review_service as reviews
 
 logger = logging.getLogger(__name__)
@@ -105,6 +108,13 @@ _RESULT_LISTS = {
     FeedbackItemType.OBJECTION: "customer_objections",
     FeedbackItemType.COACHING: "coaching_suggestions",
 }
+
+
+class AskRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    days: int = Field(30, ge=7, le=180)
+    rep_user_id: Optional[UUID] = None
+    dealership_id: Optional[UUID] = None
 
 
 class RubricTestRequest(BaseModel):
@@ -465,6 +475,83 @@ async def call_intelligence_dashboard(
     data = await insights.get_dashboard(db, end - timedelta(days=days), end, rep_user_id, dealership_id)
     data["period"]["days"] = days
     return data
+
+
+def _question_dict(q: CallInsightQuestion) -> Dict[str, Any]:
+    return {
+        "id": str(q.id),
+        "question": q.question,
+        "days": (q.filters or {}).get("days"),
+        "asked_at": q.created_at.isoformat() if q.created_at else None,
+        "calls_considered": q.calls_considered,
+        "llm_model": q.llm_model,
+        **(q.result or {}),
+    }
+
+
+@router.post("/ask")
+async def ask_about_calls(
+    body: AskRequest,
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Answer a plain-English question from the dashboard's own figures. The AI is
+    given calculated numbers and may not compute or invent any; see
+    call_questions_service. Every question and answer is kept for audit.
+    """
+    end = utc_now()
+    try:
+        result = await questions.answer_question(
+            db, body.question, end - timedelta(days=body.days), end, body.days, body.rep_user_id, body.dealership_id
+        )
+    except questions.QuestionError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    row = CallInsightQuestion(
+        asked_by=current_user.id,
+        question=questions.clean_question(body.question),
+        filters={
+            "days": body.days,
+            "rep_user_id": str(body.rep_user_id) if body.rep_user_id else None,
+            "dealership_id": str(body.dealership_id) if body.dealership_id else None,
+        },
+        result={k: result[k] for k in ("answerable", "answer", "caveats", "supporting_calls", "unverified_figures")},
+        calls_considered=result["calls_considered"],
+        llm_model=result["llm_model"],
+        prompt_version=result["prompt_version"],
+    )
+    db.add(row)
+    await db.commit()
+    return _question_dict(row)
+
+
+@router.get("/questions")
+async def my_recent_questions(
+    limit: int = Query(5, ge=1, le=25),
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """The current manager's most recent questions and the answers they were shown."""
+    result = await db.execute(
+        select(CallInsightQuestion)
+        .where(CallInsightQuestion.asked_by == current_user.id)
+        .order_by(CallInsightQuestion.created_at.desc())
+        .limit(limit)
+    )
+    return {"items": [_question_dict(q) for q in result.scalars().all()]}
+
+
+@router.post("/report/send-me")
+async def email_me_the_report(
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Email the last 7 days' call report to the manager who asked for it."""
+    try:
+        return await reports.send_report_to(db, getattr(current_user, "email", None) or "")
+    except reports.ReportError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.get("/unreviewed-calls")

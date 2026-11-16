@@ -198,6 +198,8 @@ class Settings(BaseSettings):
     call_review_transcription_model: str = "nova-3"  # Deepgram model
     call_review_min_duration_seconds: int = 30  # Shorter calls are skipped
     call_review_max_attempts: int = 3  # Retries before a review stays failed
+    # Email the weekly call report to all active managers (Mondays 13:00 UTC). Off by default.
+    call_review_weekly_report_enabled: bool = False
 
     # Tikun AI (ChatGPT-style CRM assistant)
     ai_assistant_enabled: bool = True

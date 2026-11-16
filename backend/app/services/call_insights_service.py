@@ -365,6 +365,8 @@ async def load_calls(
                     if (ev.id, str(i)) not in rejected
                 ],
                 "missed_opportunities": len(result_json.get("missed_appointment_opportunities") or []),
+                "summary": result_json.get("summary") or "",
+                "ai_call_outcome": ev.ai_call_outcome,
                 "appointment": (
                     {"id": str(appt.id), "status": _status_value(appt.status), "scheduled_at": appt.scheduled_at}
                     if appt
@@ -382,6 +384,18 @@ async def get_dashboard(
     rep_user_id: Optional[UUID] = None,
     dealership_id: Optional[UUID] = None,
 ) -> Dict[str, Any]:
+    data, _, _ = await gather(db, start, end, rep_user_id, dealership_id)
+    return data
+
+
+async def gather(
+    db: AsyncSession,
+    start: datetime,
+    end: datetime,
+    rep_user_id: Optional[UUID] = None,
+    dealership_id: Optional[UUID] = None,
+) -> tuple:
+    """The dashboard plus the per-call rows and rep names it was built from."""
     calls = await load_calls(db, start, end, rep_user_id, dealership_id)
     previous = await load_calls(db, start - (end - start), start, rep_user_id, dealership_id)
 
@@ -407,4 +421,4 @@ async def get_dashboard(
         for v, p, n in versions.all()
     ]
     data["period"] = {"start": start.isoformat(), "end": end.isoformat(), "truncated": len(calls) >= MAX_CALLS}
-    return data
+    return data, calls, rep_names

@@ -70,7 +70,7 @@ from app.models.partner_bdc_agent import PartnerBdcAgent
 from app.models.partner_portal_user import PartnerPortalUser
 from app.models.time_entry import TimeEntry
 from app.models.call_review import (
-    CallRubric, CallReview, CallEvaluation, CallEvaluationFeedback, CallReviewStatus, RubricStatus,
+    CallRubric, CallReview, CallEvaluation, CallEvaluationFeedback, CallInsightQuestion, CallReviewStatus, RubricStatus,
 )
 
 __all__ = [
@@ -78,6 +78,7 @@ __all__ = [
     "CallReview",
     "CallEvaluation",
     "CallEvaluationFeedback",
+    "CallInsightQuestion",
     "CallReviewStatus",
     "RubricStatus",
     "Customer",

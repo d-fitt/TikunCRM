@@ -147,6 +147,21 @@ def setup_scheduler():
         misfire_grace_time=300,
     )
 
+    # Weekly call report email - Mondays 13:00 UTC.
+    # The job itself is a no-op unless CALL_REVIEW_WEEKLY_REPORT_ENABLED is on.
+    from apscheduler.triggers.cron import CronTrigger
+    from app.services.call_report_service import send_weekly_reports
+    scheduler.add_job(
+        send_weekly_reports,
+        trigger=CronTrigger(day_of_week="mon", hour=13, minute=0, timezone="UTC"),
+        id="call_review_weekly_report",
+        name="Email the weekly call report to managers",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+
     logger.info("Background scheduler configured (lead sync + appointments only):")
     logger.info("  - AI call review sweep (every 5 minutes, only when CALL_REVIEW_AUTO_ENABLED)")
     logger.info("  - Google Sheets lead sync (every 2 minutes)")

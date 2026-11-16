@@ -215,3 +215,26 @@ class CallEvaluationFeedback(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
+
+
+class CallInsightQuestion(Base):
+    """
+    Audit record of a plain-English question a manager asked about calls and
+    the answer that was shown, with the model and prompt version that produced it.
+    """
+
+    __tablename__ = "call_insight_questions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    asked_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    # {days, rep_user_id, dealership_id}
+    filters: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # {answerable, answer, caveats, supporting_calls, unverified_figures}
+    result: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    calls_considered: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    llm_model: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    prompt_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)

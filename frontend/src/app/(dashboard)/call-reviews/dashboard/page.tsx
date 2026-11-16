@@ -2,7 +2,8 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { AlertCircle, Loader2, PhoneCall, Target } from "lucide-react"
+import { AlertCircle, Loader2, Mail, PhoneCall, Target } from "lucide-react"
+import { AskAboutCalls } from "@/components/call-reviews/ask-about-calls"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -306,6 +307,21 @@ export default function CallIntelligencePage() {
     const [isLoading, setIsLoading] = React.useState(true)
     const [error, setError] = React.useState<string | null>(null)
     const [showTable, setShowTable] = React.useState(false)
+    const [reportState, setReportState] = React.useState<"idle" | "sending">("idle")
+    const [reportNote, setReportNote] = React.useState<{ ok: boolean; text: string } | null>(null)
+
+    const emailReport = async () => {
+        setReportState("sending")
+        setReportNote(null)
+        try {
+            const r = await CallReviewService.emailReportToMe()
+            setReportNote({ ok: true, text: `The last 7 days' report was emailed to ${r.sent_to}.` })
+        } catch (err) {
+            setReportNote({ ok: false, text: apiErrorMessage(err, "The report could not be emailed.") })
+        } finally {
+            setReportState("idle")
+        }
+    }
 
     React.useEffect(() => {
         let cancelled = false
@@ -344,6 +360,15 @@ export default function CallIntelligencePage() {
                 title="Call Intelligence"
                 description="How the team is doing on calls: AI quality scores next to what actually happened in the CRM."
                 actions={
+                    <div className="flex flex-wrap items-center gap-3">
+                    <Button size="sm" variant="outline" onClick={emailReport} disabled={reportState === "sending"}>
+                        {reportState === "sending" ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                            <Mail className="mr-2 h-4 w-4" />
+                        )}
+                        Email me the weekly report
+                    </Button>
                     <div className="flex gap-1" role="group" aria-label="Time period">
                         {PERIODS.map((p) => (
                             <Button
@@ -357,8 +382,16 @@ export default function CallIntelligencePage() {
                             </Button>
                         ))}
                     </div>
+                    </div>
                 }
             />
+
+            {reportNote && (
+                <Alert variant={reportNote.ok ? "default" : "destructive"}>
+                    {reportNote.ok ? <Mail className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
+                    <AlertDescription>{reportNote.text}</AlertDescription>
+                </Alert>
+            )}
 
             {error && (
                 <Alert variant="destructive">
@@ -366,6 +399,8 @@ export default function CallIntelligencePage() {
                     <AlertDescription>{error}</AlertDescription>
                 </Alert>
             )}
+
+            {data && s && s.calls_reviewed > 0 && <AskAboutCalls days={days} />}
 
             {isLoading && !data ? (
                 <div className="flex items-center justify-center py-24">

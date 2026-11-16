@@ -274,6 +274,22 @@ export interface CallDashboard {
     period: { start: string; end: string; days: number; truncated: boolean };
 }
 
+export interface CallQuestionAnswer {
+    id: string;
+    question: string;
+    days: number | null;
+    asked_at: string | null;
+    calls_considered: number;
+    /** null when no AI was involved (for example, no reviewed calls in the period) */
+    llm_model: string | null;
+    answerable: boolean;
+    answer: string;
+    caveats: string[];
+    supporting_calls: { review_id: string; date: string | null; rep: string; score: number | null }[];
+    /** Figures quoted in the answer that the server could not find in the underlying data */
+    unverified_figures: string[];
+}
+
 export interface RubricTestResult {
     review_id: string;
     call_started_at: string | null;
@@ -342,6 +358,21 @@ export const CallReviewService = {
 
     async getDashboard(params: { days: number; rep_user_id?: string; dealership_id?: string }): Promise<CallDashboard> {
         const response = await apiClient.get(`${PREFIX}/dashboard`, { params });
+        return response.data;
+    },
+
+    async ask(question: string, days: number): Promise<CallQuestionAnswer> {
+        const response = await apiClient.post(`${PREFIX}/ask`, { question, days }, { timeout: 120_000 });
+        return response.data;
+    },
+
+    async listQuestions(limit = 3): Promise<CallQuestionAnswer[]> {
+        const response = await apiClient.get(`${PREFIX}/questions`, { params: { limit } });
+        return response.data.items;
+    },
+
+    async emailReportToMe(): Promise<{ sent_to: string; calls_reviewed: number }> {
+        const response = await apiClient.post(`${PREFIX}/report/send-me`);
         return response.data;
     },
 
