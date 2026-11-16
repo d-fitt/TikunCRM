@@ -26,14 +26,15 @@ from app.core.permissions import UserRole
 from app.core.timezone import utc_now
 from app.db.database import get_db
 from app.models.ai_outbound_call import AiOutboundCall
-from app.models.appointment import Appointment
+from app.models.appointment import Appointment, AppointmentStatus
 from app.models.call_log import CallDirection, CallLog, CallStatus
-from app.models.call_review import CallEvaluation, CallReview, CallRubric
+from app.models.call_review import CallEvaluation, CallEvaluationFeedback, CallReview, CallRubric
 from app.models.customer import Customer
 from app.models.dealership import Dealership
 from app.models.lead import Lead
 from app.models.user import User
 from app.services import call_evaluation_service as evaluation
+from app.services import call_insights_service as insights
 from app.services import call_review_service as reviews
 from app.services import call_transcription_service as transcription
 
@@ -336,7 +337,7 @@ async def db(tmp_path, monkeypatch):
     tables = [
         m.__table__
         for m in (
-            CallLog, CallRubric, CallReview, CallEvaluation, AiOutboundCall, Appointment,
+            CallLog, CallRubric, CallReview, CallEvaluation, CallEvaluationFeedback, AiOutboundCall, Appointment,
             User, Customer, Lead, Dealership,
         )
     ]
@@ -723,3 +724,275 @@ class TestReviewApi:
         monkeypatch.setattr(settings, "call_review_auto_enabled", False)
         # Would raise if it tried to open a PostgreSQL session
         await reviews.process_call_review_background(uuid.uuid4())
+
+
+# ------------------------------------------- phase 2: feedback + dashboard ----
+
+class TestObjectionCategories:
+    def test_category_is_kept_and_unknown_ones_become_other(self):
+        raw = llm_output(customer_objections=[
+            {"objection": "Payment too high", "category": "price_or_payment", "resolved": False,
+             "evidence": [{"quote": "I don't want to go over four hundred"}]},
+            {"objection": "Something odd", "category": "made_up_category", "resolved": True, "evidence": []},
+            {"objection": "No category given", "resolved": True, "evidence": []},
+        ])
+        out = evaluation.parse_and_ground(raw, TRANSCRIPT, CRITERIA)
+        assert [o["category"] for o in out["result"]["customer_objections"]] == ["price_or_payment", "other", "other"]
+
+    def test_prompt_lists_the_categories(self):
+        system = evaluation.build_messages(TRANSCRIPT, CRITERIA, None, None)[0]["content"]
+        assert "price_or_payment" in system and "timing_or_too_busy" in system
+
+
+def _call(score=70, lead=True, appt=None, rep="r1", dealer="d1", day=1, cats=None, objections=None, missed=0):
+    from datetime import datetime, timezone
+    return {
+        "score": score,
+        "lead_id": "lead" if lead else None,
+        "appointment": appt,
+        "rep_user_id": rep,
+        "dealership_id": dealer,
+        "started_at": datetime(2026, 11, day, 15, 0, tzinfo=timezone.utc),
+        "category_scores": cats or [],
+        "objections": objections or [],
+        "missed_opportunities": missed,
+    }
+
+
+def _appt(i, status="scheduled"):
+    return {"id": f"a{i}", "status": status, "scheduled_at": None}
+
+
+class TestDashboardMaths:
+    def test_appointment_rate_only_counts_calls_linked_to_a_lead(self):
+        calls = [_call(appt=_appt(1)), _call(), _call(), _call(lead=False)]
+        s = insights.summarise(calls)
+        assert s["calls_reviewed"] == 4
+        assert s["appointment_rate"] == {"numerator": 1, "denominator": 3, "rate": 0.3333}
+        assert s["calls_without_lead"] == 1
+
+    def test_show_rate_ignores_appointments_that_have_not_happened_yet(self):
+        calls = [
+            _call(appt=_appt(1, "completed")), _call(appt=_appt(2, "sold")), _call(appt=_appt(3, "no_show")),
+            _call(appt=_appt(4, "scheduled")), _call(appt=_appt(5, "cancelled")),
+        ]
+        s = insights.summarise(calls)
+        assert s["show_rate"] == {"numerator": 2, "denominator": 3, "rate": 0.6667}
+        assert s["appointments_outcome_pending"] == 2
+
+    def test_two_calls_about_one_appointment_count_one_visit(self):
+        calls = [_call(appt=_appt(1, "completed")), _call(appt=_appt(1, "completed"))]
+        assert insights.summarise(calls)["show_rate"]["denominator"] == 1
+
+    def test_empty_period_has_no_rates_rather_than_zero(self):
+        s = insights.summarise([])
+        assert s["average_score"] is None
+        assert s["appointment_rate"]["rate"] is None and s["show_rate"]["rate"] is None
+
+    def test_score_and_outcome_are_independent(self):
+        """A high-scoring call with no appointment must not move the appointment rate, and vice versa."""
+        calls = [_call(score=95), _call(score=20, appt=_appt(1))]
+        s = insights.summarise(calls)
+        assert s["average_score"] == 57.5
+        assert s["appointment_rate"]["rate"] == 0.5
+
+    def test_full_dashboard(self):
+        from datetime import datetime, timezone
+        cat = lambda opening, close: [  # noqa: E731
+            {"key": "opening", "name": "Opening", "score": opening, "not_applicable": False},
+            {"key": "close", "name": "Asking for the visit", "score": close, "not_applicable": False},
+            {"key": "objections", "name": "Objections", "score": None, "not_applicable": True},
+        ]
+        price = {"category": "price_or_payment", "resolved": False}
+        busy = {"category": "timing_or_too_busy", "resolved": True}
+        calls = [
+            _call(90, rep="r1", day=2, cats=cat(95, 85), appt=_appt(1, "completed"), objections=[price, price]),
+            _call(60, rep="r1", day=2, cats=cat(85, 40), objections=[price, busy], missed=2),
+            _call(40, rep="r2", day=3, cats=cat(80, 20), missed=1),
+        ]
+        previous = [_call(50), _call(50)]
+        d = insights.build_dashboard(
+            calls, previous,
+            datetime(2026, 11, 1, tzinfo=timezone.utc), datetime(2026, 12, 1, tzinfo=timezone.utc),
+            {"r1": "Maria Lopez", "r2": "James Carter"}, {"d1": "Premium Motors"},
+        )
+        assert d["summary"]["average_score"] == 63.3 and d["previous_summary"]["average_score"] == 50
+
+        # Not-applicable criteria are left out entirely, not counted as zero
+        assert [c["key"] for c in d["criteria"]] == ["close", "opening"]
+        assert d["common_mistakes"][0] == {
+            "key": "close", "name": "Asking for the visit", "calls": 3, "average_score": 48.3,
+            "low_count": 2, "high_count": 1,
+        }
+        assert d["successful_behaviors"][0]["key"] == "opening" and d["successful_behaviors"][0]["high_count"] == 3
+
+        # Objections are counted once per call, however often they came up in it
+        assert d["objections"] == [
+            {"category": "price_or_payment", "label": "Price or monthly payment", "calls": 2, "unresolved": 2},
+            {"category": "timing_or_too_busy", "label": "Timing / too busy to visit", "calls": 1, "unresolved": 0},
+        ]
+        assert d["missed_opportunities"] == {"calls": 2, "total": 3}
+
+        maria = next(r for r in d["by_rep"] if r["name"] == "Maria Lopez")
+        assert maria["calls_reviewed"] == 2 and maria["average_score"] == 75
+        assert maria["appointment_rate"] == {"numerator": 1, "denominator": 2, "rate": 0.5}
+        assert d["by_dealership"][0]["name"] == "Premium Motors"
+
+        assert d["trend"]["bucket"] == "day"
+        assert [(p["date"], p["calls_reviewed"]) for p in d["trend"]["points"]] == [("2026-11-02", 2), ("2026-11-03", 1)]
+
+        titles = [f["title"] for f in d["focus"]]
+        assert "Weakest area: Asking for the visit" in titles
+        assert "Most common objection: Price or monthly payment" in titles
+        assert "Call quality is up on the previous period" in titles
+
+    def test_long_periods_are_grouped_by_week(self):
+        from datetime import datetime, timezone
+        d = insights.build_dashboard(
+            [_call(day=3), _call(day=5), _call(day=12)], [],
+            datetime(2026, 9, 1, tzinfo=timezone.utc), datetime(2026, 12, 1, tzinfo=timezone.utc), {}, {},
+        )
+        assert d["trend"]["bucket"] == "week"
+        assert [(p["date"], p["calls_reviewed"]) for p in d["trend"]["points"]] == [("2026-11-02", 2), ("2026-11-09", 1)]
+
+    def test_score_corrections(self):
+        cats = [
+            {"key": "a", "weight": 50, "score": 40, "not_applicable": False},
+            {"key": "b", "weight": 50, "score": None, "not_applicable": True},
+        ]
+        assert insights.apply_score_corrections(cats, {}) is None
+        assert insights.apply_score_corrections(cats, {"unknown": 10}) is None
+        assert insights.apply_score_corrections(cats, {"a": 80}) == 80
+        # Correcting a criterion the AI skipped brings it into the score
+        assert insights.apply_score_corrections(cats, {"b": 100}) == 70
+
+
+class TestFeedbackApi:
+    async def _reviewed(self, db, rep_id=None, **kw):
+        call = await _add_call(db, user_id=rep_id or uuid.uuid4(), **kw)
+        review = await reviews.get_or_create_review(db, call)
+        await db.commit()
+        await reviews.process_review(db, review.id)
+        return call, review
+
+    async def test_manager_marks_items_and_rep_can_see_it(self, api, db, fakes):
+        rep_id = uuid.uuid4()
+        _, review = await self._reviewed(db, rep_id)
+        url = f"/call-reviews/{review.id}/feedback"
+
+        r = await api.client.put(url, json={"item_type": "coaching", "item_key": "0", "verdict": "useful"})
+        assert r.status_code == 200
+        r = await api.client.put(
+            url, json={"item_type": "improvement", "item_key": "0", "verdict": "inaccurate", "note": "She did ask."}
+        )
+        assert r.status_code == 200
+        assert {(f["item_type"], f["verdict"]) for f in r.json()["feedback"]} == {
+            ("coaching", "useful"), ("improvement", "inaccurate"),
+        }
+
+        # Changing a verdict replaces it rather than adding a second one
+        await api.client.put(url, json={"item_type": "coaching", "item_key": "0", "verdict": "not_useful"})
+        # Sending nothing clears it
+        r = await api.client.put(url, json={"item_type": "coaching", "item_key": "0"})
+        assert [(f["item_type"], f["item_key"]) for f in r.json()["feedback"]] == [("improvement", "0")]
+
+        api.as_role(UserRole.SALESPERSON, rep_id)
+        body = (await api.client.get(f"/call-reviews/{review.id}")).json()
+        assert body["feedback"] == [
+            {"item_type": "improvement", "item_key": "0", "verdict": "inaccurate", "corrected_score": None,
+             "note": "She did ask."}
+        ]
+        # ...but a rep cannot grade their own review
+        assert (await api.client.put(url, json={"item_type": "coaching", "item_key": "0", "verdict": "useful"})).status_code == 403
+        assert (await api.client.post(f"/call-reviews/{review.id}/manager-review", json={})).status_code == 403
+
+    async def test_correcting_a_score_keeps_the_ai_score_alongside(self, api, db, fakes):
+        _, review = await self._reviewed(db)
+        url = f"/call-reviews/{review.id}/feedback"
+
+        r = await api.client.put(url, json={"item_type": "category", "item_key": "appointment", "corrected_score": 100})
+        assert r.status_code == 200
+        # opening 90 @ 20 + appointment 100 @ 50 (objections n/a) = 97.1; the AI said 82.9
+        assert (r.json()["overall_score"], r.json()["adjusted_overall_score"]) == (82.9, 97.1)
+
+        detail = (await api.client.get(f"/call-reviews/{review.id}")).json()
+        assert detail["evaluation"]["overall_score"] == 82.9
+        assert detail["evaluation"]["adjusted_overall_score"] == 97.1
+        appointment = next(c for c in detail["evaluation"]["category_scores"] if c["key"] == "appointment")
+        assert appointment["score"] == 80  # stored AI output untouched
+
+        listing = (await api.client.get("/call-reviews")).json()["items"][0]
+        assert listing["overall_score"] == 97.1 and listing["score_corrected"] is True
+
+        # Removing the correction restores the AI score
+        r = await api.client.put(url, json={"item_type": "category", "item_key": "appointment"})
+        assert r.json()["adjusted_overall_score"] is None
+
+    async def test_feedback_must_point_at_a_real_item(self, api, db, fakes):
+        _, review = await self._reviewed(db)
+        url = f"/call-reviews/{review.id}/feedback"
+        bad = [
+            {"item_type": "strength", "item_key": "7", "verdict": "accurate"},
+            {"item_type": "category", "item_key": "nope", "corrected_score": 50},
+            {"item_type": "strength", "item_key": "0", "corrected_score": 50},
+            {"item_type": "category", "item_key": "opening", "corrected_score": 140},
+        ]
+        for body in bad:
+            assert (await api.client.put(url, json=body)).status_code == 422, body
+
+    async def test_manager_sign_off(self, api, db, fakes):
+        _, review = await self._reviewed(db)
+        r = await api.client.post(f"/call-reviews/{review.id}/manager-review", json={"note": "Good call. Use this one in training."})
+        assert r.status_code == 200 and r.json()["reviewed_at"]
+        detail = (await api.client.get(f"/call-reviews/{review.id}")).json()
+        assert detail["manager_review"]["note"] == "Good call. Use this one in training."
+        assert (await api.client.get("/call-reviews")).json()["items"][0]["manager_reviewed"] is True
+
+        r = await api.client.post(f"/call-reviews/{review.id}/manager-review", json={"reviewed": False})
+        assert r.json()["reviewed_at"] is None
+
+
+class TestDashboardApi:
+    async def test_dashboard_from_real_rows(self, api, db, fakes):
+        rep_a, rep_b = uuid.uuid4(), uuid.uuid4()
+        now = utc_now()
+        booked = await _add_call(db, user_id=rep_a, started_at=now - timedelta(days=2), ended_at=now - timedelta(days=2) + timedelta(minutes=3))
+        plain = await _add_call(db, user_id=rep_b, started_at=now - timedelta(days=3), ended_at=now - timedelta(days=3) + timedelta(minutes=3))
+        old = await _add_call(db, user_id=rep_b, started_at=now - timedelta(days=40), ended_at=now - timedelta(days=40) + timedelta(minutes=3))
+        for call in (booked, plain, old):
+            review = await reviews.get_or_create_review(db, call)
+            await db.commit()
+            await reviews.process_review(db, review.id)
+        db.add(Appointment(
+            lead_id=booked.lead_id, title="Visit", scheduled_at=now - timedelta(days=1),
+            status=AppointmentStatus.NO_SHOW, created_at=booked.started_at + timedelta(minutes=2), updated_at=now,
+        ))
+        # Correct one score so the dashboard has to use the manager figure
+        booked_review = (await db.execute(select(CallReview).where(CallReview.call_log_id == booked.id))).scalar_one()
+        await db.commit()
+        await api.client.put(
+            f"/call-reviews/{booked_review.id}/feedback",
+            json={"item_type": "category", "item_key": "appointment", "corrected_score": 100},
+        )
+
+        r = await api.client.get("/call-reviews/dashboard", params={"days": 30})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["summary"]["calls_reviewed"] == 2                      # the 40-day-old call is the previous period
+        assert d["previous_summary"]["calls_reviewed"] == 1
+        assert d["summary"]["average_score"] == 90.0                    # (97.1 corrected + 82.9) / 2
+        assert d["summary"]["appointment_rate"] == {"numerator": 1, "denominator": 2, "rate": 0.5}
+        assert d["summary"]["show_rate"] == {"numerator": 0, "denominator": 1, "rate": 0.0}
+        assert {r["calls_reviewed"] for r in d["by_rep"]} == {1}
+        assert d["period"]["days"] == 30
+
+        only_b = (await api.client.get("/call-reviews/dashboard", params={"rep_user_id": str(rep_b)})).json()
+        assert only_b["summary"]["calls_reviewed"] == 1 and only_b["summary"]["appointment_rate"]["numerator"] == 0
+
+    async def test_dashboard_is_for_managers(self, api):
+        api.as_role(UserRole.SALESPERSON)
+        assert (await api.client.get("/call-reviews/dashboard")).status_code == 403
+
+    async def test_empty_dashboard(self, api):
+        d = (await api.client.get("/call-reviews/dashboard")).json()
+        assert d["summary"]["calls_reviewed"] == 0 and d["focus"] == [] and d["trend"]["points"] == []

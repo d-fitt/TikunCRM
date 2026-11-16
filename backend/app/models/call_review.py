@@ -15,7 +15,7 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -113,6 +113,13 @@ class CallReview(Base):
     transcribed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     call_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+    # Manager sign-off: a person has looked at this AI review
+    manager_reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    manager_reviewed_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    manager_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
@@ -146,6 +153,9 @@ class CallEvaluation(Base):
 
     # Weighted score 0-100, computed in code from category scores (not by the LLM)
     overall_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Overall score after manager corrections to category scores (null = no corrections).
+    # The AI's own score above is never overwritten.
+    adjusted_overall_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     # [{key, name, weight, score, not_applicable, rationale, evidence:[...]}]
     category_scores: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     # Full validated result: summary, strengths, improvements, objections, etc.
@@ -156,3 +166,52 @@ class CallEvaluation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     review: Mapped["CallReview"] = relationship("CallReview", back_populates="evaluations", lazy="noload")
+
+
+class FeedbackItemType(str, Enum):
+    CATEGORY = "category"                    # item_key = rubric criterion key
+    STRENGTH = "strength"                    # item_key = index in the evaluation's list
+    IMPROVEMENT = "improvement"
+    MISSED_OPPORTUNITY = "missed_opportunity"
+    OBJECTION = "objection"
+    COACHING = "coaching"
+
+
+class FeedbackVerdict(str, Enum):
+    ACCURATE = "accurate"
+    INACCURATE = "inaccurate"    # manager says the AI got this wrong
+    USEFUL = "useful"            # coaching suggestion worth using
+    NOT_USEFUL = "not_useful"
+
+
+class CallEvaluationFeedback(Base):
+    """
+    A manager's verdict on one item of an AI evaluation. Evaluations are
+    immutable, so items are addressed by their position in the stored result.
+    """
+
+    __tablename__ = "call_evaluation_feedback"
+    __table_args__ = (
+        UniqueConstraint("evaluation_id", "item_type", "item_key", name="uq_call_eval_feedback_item"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    evaluation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("call_evaluations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    review_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("call_reviews.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    item_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    item_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    verdict: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Only for item_type=category: the score the manager says it should be (0-100)
+    corrected_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )

@@ -7,12 +7,13 @@ Access:
 """
 import asyncio
 import logging
+from datetime import timedelta
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -23,9 +24,12 @@ from app.db.database import get_db
 from app.models.call_log import CallLog, CallStatus
 from app.models.call_review import (
     CallEvaluation,
+    CallEvaluationFeedback,
     CallReview,
     CallReviewStatus,
     CallRubric,
+    FeedbackItemType,
+    FeedbackVerdict,
     RubricStatus,
 )
 from app.models.customer import Customer
@@ -33,6 +37,7 @@ from app.models.dealership import Dealership
 from app.models.lead import Lead
 from app.models.user import User
 from app.services import call_evaluation_service as evaluation
+from app.services import call_insights_service as insights
 from app.services import call_review_service as reviews
 
 logger = logging.getLogger(__name__)
@@ -77,6 +82,29 @@ class RubricDraftRequest(BaseModel):
     criteria: List[RubricCriterion]
     guidance: Optional[str] = None
     change_note: Optional[str] = Field(default=None, max_length=500)
+
+
+class FeedbackRequest(BaseModel):
+    item_type: FeedbackItemType
+    item_key: str = Field(min_length=1, max_length=80)
+    verdict: Optional[FeedbackVerdict] = None
+    corrected_score: Optional[int] = Field(default=None, ge=0, le=100)
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+class ManagerReviewRequest(BaseModel):
+    reviewed: bool = True
+    note: Optional[str] = Field(default=None, max_length=4000)
+
+
+# Where each kind of feedback item lives in the stored evaluation result
+_RESULT_LISTS = {
+    FeedbackItemType.STRENGTH: "strengths",
+    FeedbackItemType.IMPROVEMENT: "improvements",
+    FeedbackItemType.MISSED_OPPORTUNITY: "missed_appointment_opportunities",
+    FeedbackItemType.OBJECTION: "customer_objections",
+    FeedbackItemType.COACHING: "coaching_suggestions",
+}
 
 
 class RubricTestRequest(BaseModel):
@@ -319,6 +347,32 @@ async def _customer_names(db: AsyncSession, rows: List[Any]) -> Dict[Any, Option
     }
 
 
+def _effective_score(ev: Optional[CallEvaluation]) -> Optional[float]:
+    """Manager-corrected score when there is one, otherwise the AI score."""
+    if ev is None:
+        return None
+    return ev.adjusted_overall_score if ev.adjusted_overall_score is not None else ev.overall_score
+
+
+def _feedback_dict(f: CallEvaluationFeedback) -> Dict[str, Any]:
+    return {
+        "item_type": f.item_type,
+        "item_key": f.item_key,
+        "verdict": f.verdict,
+        "corrected_score": f.corrected_score,
+        "note": f.note,
+    }
+
+
+async def _feedback_for(db: AsyncSession, evaluation_id: Any) -> List[CallEvaluationFeedback]:
+    result = await db.execute(
+        select(CallEvaluationFeedback)
+        .where(CallEvaluationFeedback.evaluation_id == evaluation_id)
+        .order_by(CallEvaluationFeedback.created_at)
+    )
+    return list(result.scalars().all())
+
+
 def _call_dict(call: Optional[CallLog]) -> Optional[Dict[str, Any]]:
     if call is None:
         return None
@@ -380,7 +434,9 @@ async def list_call_reviews(
                 "lead_id": str(r.lead_id) if r.lead_id else None,
                 "customer_name": customer_names.get(r.id),
                 "rep": {"id": str(rep.id), "name": rep.full_name} if rep else None,
-                "overall_score": ev.overall_score if ev else None,
+                "overall_score": _effective_score(ev),
+                "score_corrected": bool(ev and ev.adjusted_overall_score is not None),
+                "manager_reviewed": r.manager_reviewed_at is not None,
                 "ai_call_outcome": ev.ai_call_outcome if ev else None,
                 "rubric_version": ev.rubric_version if ev else None,
                 "has_transcript": bool(r.transcript),
@@ -394,6 +450,21 @@ async def list_call_reviews(
         "auto_review_enabled": settings.call_review_auto_enabled,
         "can_manage": _is_manager(current_user),
     }
+
+
+@router.get("/dashboard")
+async def call_intelligence_dashboard(
+    days: int = Query(30, ge=7, le=180),
+    rep_user_id: Optional[UUID] = None,
+    dealership_id: Optional[UUID] = None,
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Team performance over the last N days, compared with the N days before that."""
+    end = utc_now()
+    data = await insights.get_dashboard(db, end - timedelta(days=days), end, rep_user_id, dealership_id)
+    data["period"]["days"] = days
+    return data
 
 
 @router.get("/unreviewed-calls")
@@ -475,6 +546,99 @@ async def rerun_review(
     return {"review_id": str(review.id), "status": "queued"}
 
 
+# ----------------------------------------------------------- manager feedback --
+
+@router.put("/{review_id}/feedback")
+async def save_feedback(
+    review_id: UUID,
+    body: FeedbackRequest,
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Record a manager verdict on one item of the AI evaluation: accurate / inaccurate,
+    useful / not useful, a note, or (for a criterion) the score it should have been.
+    Sending no verdict, score or note clears the feedback for that item.
+    The original AI output is never changed.
+    """
+    ev = (await _current_evaluations(db, [review_id])).get(review_id)
+    if ev is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This call has no evaluation yet")
+
+    if body.item_type == FeedbackItemType.CATEGORY:
+        if not any(c.get("key") == body.item_key for c in ev.category_scores or []):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown criterion")
+    else:
+        if body.corrected_score is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Only criterion scores can be corrected"
+            )
+        items = (ev.result or {}).get(_RESULT_LISTS[body.item_type]) or []
+        if not body.item_key.isdigit() or int(body.item_key) >= len(items):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown item")
+
+    note = (body.note or "").strip() or None
+    existing = (
+        await db.execute(
+            select(CallEvaluationFeedback).where(
+                CallEvaluationFeedback.evaluation_id == ev.id,
+                CallEvaluationFeedback.item_type == body.item_type.value,
+                CallEvaluationFeedback.item_key == body.item_key,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if body.verdict is None and body.corrected_score is None and note is None:
+        if existing is not None:
+            await db.execute(delete(CallEvaluationFeedback).where(CallEvaluationFeedback.id == existing.id))
+    else:
+        row = existing or CallEvaluationFeedback(
+            evaluation_id=ev.id, review_id=review_id, item_type=body.item_type.value, item_key=body.item_key
+        )
+        row.verdict = body.verdict.value if body.verdict else None
+        row.corrected_score = body.corrected_score
+        row.note = note
+        row.created_by = current_user.id
+        if existing is None:
+            db.add(row)
+    await db.flush()
+
+    feedback = await _feedback_for(db, ev.id)
+    corrections = {
+        f.item_key: f.corrected_score
+        for f in feedback
+        if f.item_type == FeedbackItemType.CATEGORY.value and f.corrected_score is not None
+    }
+    ev.adjusted_overall_score = insights.apply_score_corrections(ev.category_scores or [], corrections)
+    await db.commit()
+    return {
+        "feedback": [_feedback_dict(f) for f in feedback],
+        "overall_score": ev.overall_score,
+        "adjusted_overall_score": ev.adjusted_overall_score,
+    }
+
+
+@router.post("/{review_id}/manager-review")
+async def set_manager_review(
+    review_id: UUID,
+    body: ManagerReviewRequest,
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark an AI review as checked by a manager (or undo that), with an optional note for the rep."""
+    review = (await db.execute(select(CallReview).where(CallReview.id == review_id))).scalar_one_or_none()
+    if review is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
+    review.manager_note = (body.note or "").strip() or None
+    review.manager_reviewed_at = utc_now() if body.reviewed else None
+    review.manager_reviewed_by = current_user.id if body.reviewed else None
+    await db.commit()
+    return {
+        "reviewed_at": review.manager_reviewed_at.isoformat() if review.manager_reviewed_at else None,
+        "note": review.manager_note,
+    }
+
+
 # ------------------------------------------------------------------- detail --
 
 @router.get("/{review_id}")
@@ -495,6 +659,8 @@ async def get_call_review(
     rep = (await _by_id(db, User, [review.rep_user_id])).get(review.rep_user_id)
     customer_names = await _customer_names(db, [review])
     dealership = (await _by_id(db, Dealership, [review.dealership_id])).get(review.dealership_id)
+    reviewer = (await _by_id(db, User, [review.manager_reviewed_by])).get(review.manager_reviewed_by)
+    feedback = await _feedback_for(db, ev.id) if ev else []
     history_count = (
         await db.execute(select(func.count(CallEvaluation.id)).where(CallEvaluation.review_id == review.id))
     ).scalar() or 0
@@ -518,6 +684,7 @@ async def get_call_review(
             {
                 "id": str(ev.id),
                 "overall_score": ev.overall_score,
+                "adjusted_overall_score": ev.adjusted_overall_score,
                 "category_scores": ev.category_scores,
                 "ai_call_outcome": ev.ai_call_outcome,
                 "rubric_version": ev.rubric_version,
@@ -530,6 +697,13 @@ async def get_call_review(
             else None
         ),
         "evaluation_count": history_count,
+        # Manager verdicts on individual AI items (reps see these too, as coaching context)
+        "feedback": [_feedback_dict(f) for f in feedback],
+        "manager_review": {
+            "reviewed_at": review.manager_reviewed_at.isoformat() if review.manager_reviewed_at else None,
+            "reviewed_by": reviewer.full_name if reviewer else None,
+            "note": review.manager_note,
+        },
         # Real CRM data, kept separate from the AI's opinion of the call
         "crm_outcome": await reviews.get_crm_outcome(db, call) if call else None,
     }

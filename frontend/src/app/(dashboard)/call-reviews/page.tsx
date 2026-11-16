@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { AlertCircle, Loader2, PhoneCall, PhoneIncoming, PhoneOutgoing, Settings2, Sparkles } from "lucide-react"
+import { AlertCircle, BarChart3, Loader2, PhoneCall, PhoneIncoming, PhoneOutgoing, Settings2, Sparkles } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -39,7 +39,7 @@ function DirectionIcon({ call }: { call: CallSummary | null }) {
 
 function StatusCell({ item }: { item: CallReviewListItem }) {
     if (item.status === "completed") {
-        return <Badge variant="secondary">Reviewed</Badge>
+        return <Badge variant="secondary">{item.manager_reviewed ? "Manager checked" : "AI reviewed"}</Badge>
     }
     if (item.status === "failed") {
         return (
@@ -125,12 +125,20 @@ export default function CallReviewsPage() {
                 description="AI feedback on recorded customer calls, scored against your rubric."
                 actions={
                     data?.can_manage ? (
-                        <Button variant="outline" asChild>
-                            <Link href="/settings/call-scoring">
-                                <Settings2 className="mr-2 h-4 w-4" />
-                                Scoring criteria
-                            </Link>
-                        </Button>
+                        <>
+                            <Button variant="outline" asChild>
+                                <Link href="/call-reviews/dashboard">
+                                    <BarChart3 className="mr-2 h-4 w-4" />
+                                    Team dashboard
+                                </Link>
+                            </Button>
+                            <Button variant="outline" asChild>
+                                <Link href="/settings/call-scoring">
+                                    <Settings2 className="mr-2 h-4 w-4" />
+                                    Scoring criteria
+                                </Link>
+                            </Button>
+                        </>
                     ) : undefined
                 }
             />
@@ -211,6 +219,11 @@ export default function CallReviewsPage() {
                                             )}
                                         >
                                             {item.overall_score != null ? Math.round(item.overall_score) : "—"}
+                                            {item.score_corrected && (
+                                                <span className="ml-1 text-xs font-normal text-muted-foreground" title="Corrected by a manager">
+                                                    (corrected)
+                                                </span>
+                                            )}
                                         </TableCell>
                                         <TableCell className="text-sm">
                                             {item.ai_call_outcome ? AI_OUTCOME_LABELS[item.ai_call_outcome] : "—"}

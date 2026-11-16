@@ -13,13 +13,16 @@ import {
     Play,
     RefreshCw,
     Search,
+    ThumbsDown,
     ThumbsUp,
     TrendingUp,
+    UserCheck,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import apiClient from "@/lib/api-client"
 import { cn } from "@/lib/utils"
@@ -36,6 +39,10 @@ import {
     CallReviewDetail,
     CallReviewService,
     Evidence,
+    FeedbackInput,
+    FeedbackItemType,
+    FeedbackVerdict,
+    ItemFeedback,
     Observation,
     SKIP_REASON_LABELS,
     apiErrorMessage,
@@ -71,6 +78,203 @@ function EvidenceQuote({ evidence, onJump }: { evidence: Evidence; onJump: (seco
     )
 }
 
+interface FeedbackContext {
+    canManage: boolean
+    get: (type: FeedbackItemType, key: string) => ItemFeedback | undefined
+    save: (input: FeedbackInput) => void
+}
+
+/**
+ * Manager verdict on one AI item. Managers get two toggle buttons plus a note;
+ * everyone else just sees the verdict, if there is one.
+ */
+function FeedbackControls({
+    ctx,
+    type,
+    itemKey,
+    positive,
+    negative,
+}: {
+    ctx: FeedbackContext
+    type: FeedbackItemType
+    itemKey: string
+    positive: { verdict: FeedbackVerdict; label: string }
+    negative: { verdict: FeedbackVerdict; label: string }
+}) {
+    const current = ctx.get(type, itemKey)
+    const [noteOpen, setNoteOpen] = React.useState(false)
+    const [note, setNote] = React.useState(current?.note ?? "")
+
+    if (!ctx.canManage) {
+        if (!current?.verdict && !current?.note) return null
+        const isNegative = current.verdict === negative.verdict
+        return (
+            <p className="text-xs text-muted-foreground">
+                <UserCheck className="mr-1 inline h-3.5 w-3.5" />
+                Manager: {current.verdict ? (isNegative ? negative.label : positive.label) : "note"}
+                {current.note ? ` — ${current.note}` : ""}
+            </p>
+        )
+    }
+
+    const toggle = (verdict: FeedbackVerdict) =>
+        ctx.save({
+            item_type: type,
+            item_key: itemKey,
+            verdict: current?.verdict === verdict ? null : verdict,
+            note: current?.note ?? null,
+        })
+
+    return (
+        <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+                <Button
+                    type="button"
+                    size="sm"
+                    variant={current?.verdict === positive.verdict ? "secondary" : "ghost"}
+                    aria-pressed={current?.verdict === positive.verdict}
+                    className="h-7 px-2 text-xs"
+                    onClick={() => toggle(positive.verdict)}
+                >
+                    <ThumbsUp className="mr-1 h-3.5 w-3.5" />
+                    {positive.label}
+                </Button>
+                <Button
+                    type="button"
+                    size="sm"
+                    variant={current?.verdict === negative.verdict ? "secondary" : "ghost"}
+                    aria-pressed={current?.verdict === negative.verdict}
+                    className="h-7 px-2 text-xs"
+                    onClick={() => toggle(negative.verdict)}
+                >
+                    <ThumbsDown className="mr-1 h-3.5 w-3.5" />
+                    {negative.label}
+                </Button>
+                <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => setNoteOpen((o) => !o)}
+                >
+                    {current?.note ? "Edit note" : "Add note"}
+                </Button>
+            </div>
+            {current?.note && !noteOpen && (
+                <p className="text-xs text-muted-foreground">Your note: {current.note}</p>
+            )}
+            {noteOpen && (
+                <div className="flex items-start gap-2">
+                    <Textarea
+                        rows={2}
+                        maxLength={2000}
+                        value={note}
+                        aria-label="Note on this item"
+                        placeholder="What did the AI get wrong, or what should the rep take from this?"
+                        onChange={(e) => setNote(e.target.value)}
+                    />
+                    <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => {
+                            ctx.save({
+                                item_type: type,
+                                item_key: itemKey,
+                                verdict: current?.verdict ?? null,
+                                note: note.trim() || null,
+                            })
+                            setNoteOpen(false)
+                        }}
+                    >
+                        Save
+                    </Button>
+                </div>
+            )}
+        </div>
+    )
+}
+
+const ACCURACY = {
+    positive: { verdict: "accurate" as FeedbackVerdict, label: "Accurate" },
+    negative: { verdict: "inaccurate" as FeedbackVerdict, label: "Not accurate" },
+}
+const USEFULNESS = {
+    positive: { verdict: "useful" as FeedbackVerdict, label: "Useful" },
+    negative: { verdict: "not_useful" as FeedbackVerdict, label: "Not useful" },
+}
+
+/** Lets a manager replace the AI score for one criterion. */
+function ScoreCorrection({ ctx, criterionKey }: { ctx: FeedbackContext; criterionKey: string }) {
+    const current = ctx.get("category", criterionKey)
+    const [open, setOpen] = React.useState(false)
+    const [value, setValue] = React.useState(current?.corrected_score?.toString() ?? "")
+
+    if (!ctx.canManage) return null
+    const parsed = Number(value)
+    const valid = value !== "" && Number.isInteger(parsed) && parsed >= 0 && parsed <= 100
+
+    if (!open) {
+        return (
+            <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setOpen(true)}>
+                {current?.corrected_score != null ? "Change corrected score" : "Correct this score"}
+            </Button>
+        )
+    }
+    return (
+        <div className="flex flex-wrap items-center gap-2">
+            <Input
+                type="number"
+                min={0}
+                max={100}
+                value={value}
+                aria-label="Corrected score, 0 to 100"
+                className="h-8 w-24"
+                onChange={(e) => setValue(e.target.value)}
+            />
+            <Button
+                type="button"
+                size="sm"
+                disabled={!valid}
+                onClick={() => {
+                    ctx.save({
+                        item_type: "category",
+                        item_key: criterionKey,
+                        corrected_score: parsed,
+                        verdict: current?.verdict ?? null,
+                        note: current?.note ?? null,
+                    })
+                    setOpen(false)
+                }}
+            >
+                Save
+            </Button>
+            {current?.corrected_score != null && (
+                <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                        ctx.save({
+                            item_type: "category",
+                            item_key: criterionKey,
+                            corrected_score: null,
+                            verdict: current?.verdict ?? null,
+                            note: current?.note ?? null,
+                        })
+                        setValue("")
+                        setOpen(false)
+                    }}
+                >
+                    Use AI score
+                </Button>
+            )}
+            <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(false)}>
+                Cancel
+            </Button>
+        </div>
+    )
+}
+
 function ObservationList({
     title,
     description,
@@ -78,6 +282,9 @@ function ObservationList({
     items,
     emptyText,
     onJump,
+    ctx,
+    type,
+    labels = ACCURACY,
 }: {
     title: string
     description?: string
@@ -85,6 +292,9 @@ function ObservationList({
     items: Observation[]
     emptyText: string
     onJump: (seconds: number) => void
+    ctx: FeedbackContext
+    type: FeedbackItemType
+    labels?: typeof ACCURACY
 }) {
     return (
         <Card>
@@ -106,6 +316,7 @@ function ObservationList({
                                 {item.evidence.map((ev, j) => (
                                     <EvidenceQuote key={j} evidence={ev} onJump={onJump} />
                                 ))}
+                                <FeedbackControls ctx={ctx} type={type} itemKey={String(i)} {...labels} />
                             </li>
                         ))}
                     </ul>
@@ -217,6 +428,48 @@ export default function CallReviewDetailPage() {
         [transcript]
     )
 
+    const feedbackCtx: FeedbackContext = React.useMemo(
+        () => ({
+            canManage: !!review?.can_manage,
+            get: (type, key) => review?.feedback.find((f) => f.item_type === type && f.item_key === key),
+            save: async (input) => {
+                try {
+                    const result = await CallReviewService.saveFeedback(reviewId, input)
+                    setReview((r) =>
+                        r && r.evaluation
+                            ? {
+                                  ...r,
+                                  feedback: result.feedback,
+                                  evaluation: {
+                                      ...r.evaluation,
+                                      adjusted_overall_score: result.adjusted_overall_score,
+                                  },
+                              }
+                            : r
+                    )
+                    setError(null)
+                } catch (err) {
+                    setError(apiErrorMessage(err, "Could not save your feedback."))
+                }
+            },
+        }),
+        [review, reviewId]
+    )
+
+    const [signOffNote, setSignOffNote] = React.useState<string | null>(null)
+    const handleSignOff = async (reviewed: boolean) => {
+        try {
+            const note = signOffNote ?? review?.manager_review.note ?? null
+            const result = await CallReviewService.setManagerReview(reviewId, reviewed, note)
+            setReview((r) =>
+                r ? { ...r, manager_review: { ...r.manager_review, reviewed_at: result.reviewed_at, note: result.note } } : r
+            )
+            setSignOffNote(null)
+        } catch (err) {
+            setError(apiErrorMessage(err, "Could not save the manager review."))
+        }
+    }
+
     const handleRerun = async () => {
         setIsRerunning(true)
         try {
@@ -254,6 +507,8 @@ export default function CallReviewDetailPage() {
 
     const ev = review.evaluation
     const crm = review.crm_outcome
+    const shownScore = ev ? ev.adjusted_overall_score ?? ev.overall_score : null
+    const mr = review.manager_review
 
     return (
         <div className="space-y-6">
@@ -341,11 +596,17 @@ export default function CallReviewDetailPage() {
                         </CardHeader>
                         <CardContent>
                             <div className="flex items-baseline gap-2">
-                                <span className={cn("text-5xl font-bold tabular-nums", scoreTone(ev.overall_score))}>
-                                    {ev.overall_score != null ? Math.round(ev.overall_score) : "—"}
+                                <span className={cn("text-5xl font-bold tabular-nums", scoreTone(shownScore))}>
+                                    {shownScore != null ? Math.round(shownScore) : "—"}
                                 </span>
                                 <span className="text-muted-foreground">/ 100</span>
                             </div>
+                            {ev.adjusted_overall_score != null && (
+                                <p className="mt-1 text-sm">
+                                    Corrected by a manager. The AI scored it{" "}
+                                    {ev.overall_score != null ? Math.round(ev.overall_score) : "—"}.
+                                </p>
+                            )}
                             <p className="mt-2 text-xs text-muted-foreground">
                                 How well the rep handled the conversation, judged by AI against scoring criteria
                                 version {ev.rubric_version ?? "—"}. Not a measure of whether the customer booked.
@@ -405,6 +666,48 @@ export default function CallReviewDetailPage() {
                 </div>
             )}
 
+            {ev && (review.can_manage || mr.reviewed_at || mr.note) && (
+                <Card>
+                    <CardHeader className="pb-2">
+                        <CardTitle className="flex items-center gap-2 text-base">
+                            <UserCheck className="h-4 w-4" />
+                            Manager review
+                        </CardTitle>
+                        <CardDescription>
+                            {mr.reviewed_at
+                                ? `Checked ${formatCallTime(mr.reviewed_at, true)}${mr.reviewed_by ? ` by ${mr.reviewed_by}` : ""}.`
+                                : "No manager has checked this AI review yet."}
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                        {review.can_manage ? (
+                            <>
+                                <Textarea
+                                    rows={2}
+                                    maxLength={4000}
+                                    aria-label="Note for the representative"
+                                    placeholder="Optional note for the rep"
+                                    value={signOffNote ?? mr.note ?? ""}
+                                    onChange={(e) => setSignOffNote(e.target.value)}
+                                />
+                                <div className="flex flex-wrap gap-2">
+                                    <Button size="sm" onClick={() => handleSignOff(true)}>
+                                        {mr.reviewed_at ? "Save note" : "Mark as reviewed"}
+                                    </Button>
+                                    {mr.reviewed_at && (
+                                        <Button size="sm" variant="ghost" onClick={() => handleSignOff(false)}>
+                                            Undo reviewed
+                                        </Button>
+                                    )}
+                                </div>
+                            </>
+                        ) : (
+                            mr.note && <p className="text-sm">{mr.note}</p>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
+
             {ev?.summary && (
                 <Card>
                     <CardHeader className="pb-2">
@@ -457,6 +760,14 @@ export default function CallReviewDetailPage() {
                                         {c.evidence.map((e, j) => (
                                             <EvidenceQuote key={j} evidence={e} onJump={jumpTo} />
                                         ))}
+                                        {feedbackCtx.get("category", c.key)?.corrected_score != null && (
+                                            <p className="text-sm font-medium">
+                                                <UserCheck className="mr-1 inline h-4 w-4" />
+                                                Manager corrected this to{" "}
+                                                {feedbackCtx.get("category", c.key)?.corrected_score}
+                                            </p>
+                                        )}
+                                        <ScoreCorrection ctx={feedbackCtx} criterionKey={c.key} />
                                     </div>
                                 ))}
                             </CardContent>
@@ -467,6 +778,8 @@ export default function CallReviewDetailPage() {
                         <>
                             <ObservationList
                                 title="What went well"
+                                ctx={feedbackCtx}
+                                type="strength"
                                 icon={<ThumbsUp className="h-4 w-4 text-emerald-600" />}
                                 items={ev.strengths}
                                 emptyText="Nothing specific noted."
@@ -474,6 +787,8 @@ export default function CallReviewDetailPage() {
                             />
                             <ObservationList
                                 title="Areas to improve"
+                                ctx={feedbackCtx}
+                                type="improvement"
                                 icon={<TrendingUp className="h-4 w-4 text-amber-600" />}
                                 items={ev.improvements}
                                 emptyText="Nothing specific noted."
@@ -481,6 +796,8 @@ export default function CallReviewDetailPage() {
                             />
                             <ObservationList
                                 title="Missed appointment opportunities"
+                                ctx={feedbackCtx}
+                                type="missed_opportunity"
                                 description="Moments where the rep could have asked for a visit."
                                 icon={<CalendarX className="h-4 w-4 text-red-600" />}
                                 items={ev.missed_appointment_opportunities}
@@ -514,6 +831,12 @@ export default function CallReviewDetailPage() {
                                                     {o.evidence.map((e, j) => (
                                                         <EvidenceQuote key={j} evidence={e} onJump={jumpTo} />
                                                     ))}
+                                                    <FeedbackControls
+                                                        ctx={feedbackCtx}
+                                                        type="objection"
+                                                        itemKey={String(i)}
+                                                        {...ACCURACY}
+                                                    />
                                                 </li>
                                             ))}
                                         </ul>
@@ -522,6 +845,9 @@ export default function CallReviewDetailPage() {
                             </Card>
                             <ObservationList
                                 title="Coaching suggestions"
+                                ctx={feedbackCtx}
+                                type="coaching"
+                                labels={USEFULNESS}
                                 description="What to try on the next call."
                                 icon={<Lightbulb className="h-4 w-4 text-primary" />}
                                 items={ev.coaching_suggestions}

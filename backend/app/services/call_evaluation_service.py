@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the fixed prompt/guardrails below change, so evaluations made with
 # different instructions can be told apart.
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"
 
 MAX_CRITERIA = 12
 MAX_NAME_LEN = 100
@@ -40,6 +40,22 @@ AI_CALL_OUTCOMES = (
     "no_appointment",
     "not_a_sales_conversation",
 )
+
+
+# Fixed list so objections can be counted across calls on the dashboard.
+OBJECTION_CATEGORIES = {
+    "price_or_payment": "Price or monthly payment",
+    "trade_in_value": "Trade-in value",
+    "credit_or_financing": "Credit or financing",
+    "timing_or_too_busy": "Timing / too busy to visit",
+    "needs_to_consult_someone": "Needs to talk to spouse or family",
+    "still_shopping_around": "Still shopping around",
+    "vehicle_availability_or_fit": "Vehicle availability or fit",
+    "distance_or_location": "Distance or location",
+    "not_ready_to_buy": "Not ready to buy yet",
+    "wants_info_first": "Wants numbers or information first",
+    "other": "Other",
+}
 
 
 class RubricValidationError(ValueError):
@@ -144,6 +160,7 @@ class Observation(BaseModel):
 
 class Objection(BaseModel):
     objection: str = Field(min_length=1, max_length=500)
+    category: str = "other"
     how_rep_responded: str = Field(default="", max_length=1000)
     resolved: bool = False
     evidence: List[Evidence] = Field(default_factory=list)
@@ -186,11 +203,12 @@ Return a single JSON object with exactly these fields:
   "strengths": [{"text": "...", "evidence": [...]}],
   "improvements": [{"text": "...", "evidence": [...]}],
   "missed_appointment_opportunities": [{"text": "moment where the rep could have asked for a visit and did not", "evidence": [...]}],
-  "customer_objections": [{"objection": "...", "how_rep_responded": "...", "resolved": true/false, "evidence": [...]}],
+  "customer_objections": [{"objection": "...", "category": "<one of the objection categories below>", "how_rep_responded": "...", "resolved": true/false, "evidence": [...]}],
   "coaching_suggestions": [{"text": "...", "evidence": [...]}],
   "call_outcome": "appointment_booked" | "follow_up_required" | "no_appointment" | "not_a_sales_conversation"
 }
-"category_scores" must contain exactly one entry for every criterion key in the rubric, and no others. Lists may be empty when there is nothing supported by the transcript to report."""
+"category_scores" must contain exactly one entry for every criterion key in the rubric, and no others. Lists may be empty when there is nothing supported by the transcript to report.
+Objection categories (use the key): """ + ", ".join(f"{k} ({v})" for k, v in OBJECTION_CATEGORIES.items()) + "."
 
 
 def format_timestamp(seconds: float) -> str:
@@ -283,6 +301,8 @@ def _ground_items(items: List[Any], transcript: List[Dict[str, Any]], stats: Dic
     out = []
     for item in items:
         data = item.model_dump()
+        if "category" in data and data["category"] not in OBJECTION_CATEGORIES:
+            data["category"] = "other"
         offered = len(item.evidence)
         data["evidence"] = _ground_evidence(item.evidence, transcript, stats)
         if offered > 0 and not data["evidence"]:

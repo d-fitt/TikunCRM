@@ -76,14 +76,55 @@ export interface Observation {
 
 export interface Objection {
     objection: string;
+    category?: string;
     how_rep_responded: string;
     resolved: boolean;
     evidence: Evidence[];
 }
 
+export type FeedbackItemType =
+    | "category"
+    | "strength"
+    | "improvement"
+    | "missed_opportunity"
+    | "objection"
+    | "coaching";
+
+export type FeedbackVerdict = "accurate" | "inaccurate" | "useful" | "not_useful";
+
+export interface ItemFeedback {
+    item_type: FeedbackItemType;
+    item_key: string;
+    verdict: FeedbackVerdict | null;
+    corrected_score: number | null;
+    note: string | null;
+}
+
+export interface FeedbackInput {
+    item_type: FeedbackItemType;
+    item_key: string;
+    verdict?: FeedbackVerdict | null;
+    corrected_score?: number | null;
+    note?: string | null;
+}
+
+export interface FeedbackResult {
+    feedback: ItemFeedback[];
+    overall_score: number | null;
+    adjusted_overall_score: number | null;
+}
+
+export interface ManagerReview {
+    reviewed_at: string | null;
+    reviewed_by: string | null;
+    note: string | null;
+}
+
 export interface CallEvaluation {
     id: string;
     overall_score: number | null;
+    /** Score after manager corrections; null when nothing was corrected */
+    adjusted_overall_score: number | null;
     category_scores: CategoryScore[];
     ai_call_outcome: AiCallOutcome | null;
     rubric_version: number | null;
@@ -123,6 +164,8 @@ export interface CallReviewListItem {
     customer_name: string | null;
     rep: { id: string; name: string } | null;
     overall_score: number | null;
+    score_corrected: boolean;
+    manager_reviewed: boolean;
     ai_call_outcome: AiCallOutcome | null;
     rubric_version: number | null;
     has_transcript: boolean;
@@ -168,7 +211,67 @@ export interface CallReviewDetail {
     transcript_model: string | null;
     evaluation: CallEvaluation | null;
     evaluation_count: number;
+    feedback: ItemFeedback[];
+    manager_review: ManagerReview;
     crm_outcome: CrmOutcome | null;
+}
+
+export interface Rate {
+    numerator: number;
+    denominator: number;
+    /** 0-1, or null when the denominator is 0 */
+    rate: number | null;
+}
+
+export interface DashboardSummary {
+    calls_reviewed: number;
+    calls_scored: number;
+    average_score: number | null;
+    appointment_rate: Rate;
+    calls_without_lead: number;
+    show_rate: Rate;
+    appointments_outcome_pending: number;
+}
+
+export interface CriterionStats {
+    key: string;
+    name: string;
+    calls: number;
+    average_score: number | null;
+    low_count: number;
+    high_count: number;
+}
+
+export interface GroupStats {
+    id: string | null;
+    name: string;
+    calls_reviewed: number;
+    average_score: number | null;
+    appointment_rate: Rate;
+}
+
+export interface TrendPoint {
+    date: string;
+    calls_reviewed: number;
+    average_score: number | null;
+    appointment_rate: Rate;
+}
+
+export interface CallDashboard {
+    summary: DashboardSummary;
+    previous_summary: DashboardSummary;
+    trend: { bucket: "day" | "week"; points: TrendPoint[] };
+    criteria: CriterionStats[];
+    common_mistakes: CriterionStats[];
+    successful_behaviors: CriterionStats[];
+    objections: { category: string; label: string; calls: number; unresolved: number }[];
+    missed_opportunities: { calls: number; total: number };
+    by_rep: GroupStats[];
+    by_dealership: GroupStats[];
+    focus: { title: string; detail: string }[];
+    thresholds: { low: number; high: number };
+    rubric_changes: { version: number; published_at: string | null; change_note: string | null }[];
+    period: { start: string; end: string; days: number; truncated: boolean };
 }
 
 export interface RubricTestResult {
@@ -225,6 +328,21 @@ export const CallReviewService = {
 
     async rerun(reviewId: string): Promise<void> {
         await apiClient.post(`${PREFIX}/${reviewId}/rerun`);
+    },
+
+    async saveFeedback(reviewId: string, data: FeedbackInput): Promise<FeedbackResult> {
+        const response = await apiClient.put(`${PREFIX}/${reviewId}/feedback`, data);
+        return response.data;
+    },
+
+    async setManagerReview(reviewId: string, reviewed: boolean, note: string | null): Promise<ManagerReview> {
+        const response = await apiClient.post(`${PREFIX}/${reviewId}/manager-review`, { reviewed, note });
+        return response.data;
+    },
+
+    async getDashboard(params: { days: number; rep_user_id?: string; dealership_id?: string }): Promise<CallDashboard> {
+        const response = await apiClient.get(`${PREFIX}/dashboard`, { params });
+        return response.data;
     },
 
     async getRubric(): Promise<RubricState> {

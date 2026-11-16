@@ -173,6 +173,7 @@ const allSidebarItems: SidebarItem[] = [
         roles: ["super_admin", "dealership_admin", "dealership_owner", "bdc"],
         children: [
             { name: "Analytics", icon: BarChart3, href: "/analytics" },
+            { name: "Call Intelligence", icon: PhoneCall, href: "/call-reviews/dashboard" },
             { name: "Team Activity", icon: Activity, href: "/team-activity" },
             { name: "Sold Cars", icon: Car, href: "/sold-cars" },
             { name: "BDC Export", icon: QrCode, href: "/reports/bdc-export" },
