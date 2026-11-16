@@ -2681,8 +2681,9 @@ export default function LeadDetailsPage() {
 
                             <div>
                                 <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
-                                    Sold To
+                                    Sold at
                                 </p>
+                                <p className="mb-1 text-[11px] text-muted-foreground">The store that sold the car.</p>
                                 {!isMentionOnly && canConnectToPartner ? (
                                     <AssignPartnerStore
                                         leadId={lead.id}

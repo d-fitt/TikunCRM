@@ -8,7 +8,6 @@ import {
     type PartnerStore,
     type StoreSendResult,
 } from "@/services/partner-store-service"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
     Dialog,
@@ -19,6 +18,8 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import { useToast } from "@/hooks/use-toast"
+import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
+import { formatDateInTimezone } from "@/utils/timezone"
 
 function optInLabel(programType?: string | null) {
     return programType === "full_bdc" ? "Leads + BDC" : "Leads only"
@@ -26,64 +27,39 @@ function optInLabel(programType?: string | null) {
 
 function rangeLabel(store: PartnerStore) {
     if (store.monthly_leads_min == null || store.monthly_leads_max == null) return null
-    return `${store.monthly_leads_min}–${store.monthly_leads_max}/mo`
+    return `${store.monthly_leads_min}–${store.monthly_leads_max} / month`
 }
 
-export function LeadDeliveries({
+function statusLabel(status: string) {
+    if (status === "delivered") return "Sent"
+    return status.replace(/_/g, " ")
+}
+
+export function SendPartnerStoreButton({
     leadId,
-    canManage,
-    onStoresChange,
+    sentStoreIds = [],
+    onSent,
+    label = "Send",
 }: {
     leadId: string
-    canManage: boolean
-    onStoresChange?: (storeIds: string[]) => void
+    sentStoreIds?: string[]
+    onSent?: (results: StoreSendResult[]) => void
+    label?: string
 }) {
     const { toast } = useToast()
-    const [rows, setRows] = React.useState<LeadDeliveryRow[]>([])
-    const [loading, setLoading] = React.useState(true)
     const [open, setOpen] = React.useState(false)
     const [stores, setStores] = React.useState<PartnerStore[]>([])
     const [selected, setSelected] = React.useState<string[]>([])
     const [busy, setBusy] = React.useState(false)
+    const alreadySent = React.useMemo(() => new Set(sentStoreIds), [sentStoreIds])
 
-    const load = React.useCallback(async () => {
-        setLoading(true)
-        try {
-            const next = await PartnerProgramService.listDeliveries(leadId)
-            setRows(next)
-            onStoresChange?.(
-                next
-                    .filter((row) => row.status !== "dead" && row.status !== "returned")
-                    .map((row) => row.partner_store_id)
-            )
-        } catch {
-            setRows([])
-            onStoresChange?.([])
-        } finally {
-            setLoading(false)
-        }
-    }, [leadId, onStoresChange])
-
-    React.useEffect(() => {
-        load()
-    }, [load])
-
-    const alreadySent = React.useMemo(
-        () =>
-            new Set(
-                rows
-                    .filter((row) => row.status !== "dead" && row.status !== "returned")
-                    .map((row) => row.partner_store_id)
-            ),
-        [rows]
-    )
-
-    async function openPicker() {
+    async function openPicker(event: React.MouseEvent) {
+        event.stopPropagation()
         setOpen(true)
+        setSelected(sentStoreIds)
         try {
             const res = await PartnerStoreService.list({ active_only: true })
             setStores(res.items || [])
-            setSelected(Array.from(alreadySent))
         } catch {
             toast({ title: "Could not load partner stores", variant: "destructive" })
         }
@@ -104,13 +80,15 @@ export function LeadDeliveries({
         try {
             const result = await PartnerStoreService.sendLead(leadId, fresh)
             const sent = result.results.filter((item) => item.status === "sent")
-            const warnings = result.results.map((item) => item.email_error).filter(Boolean)
+            const warning = result.results.find((item) => item.email_error)?.email_error
             toast({
-                title: sent.length ? `Sent to ${sent.map((item) => item.partner_store_name).join(", ")}` : "Already sent",
-                description: warnings[0] || undefined,
+                title: sent.length
+                    ? `Sent to ${sent.map((item) => item.partner_store_name).join(", ")}`
+                    : "Already sent",
+                description: warning || undefined,
             })
             setOpen(false)
-            await load()
+            onSent?.(result.results)
         } catch (err: unknown) {
             const detail =
                 err && typeof err === "object" && "response" in err
@@ -126,68 +104,18 @@ export function LeadDeliveries({
         }
     }
 
-    async function undo(row: LeadDeliveryRow) {
-        setBusy(true)
-        try {
-            setRows(await PartnerProgramService.returnDelivery(leadId, row.id))
-            await load()
-        } catch {
-            toast({ title: "Could not undo that send", variant: "destructive" })
-        } finally {
-            setBusy(false)
-        }
-    }
-
     return (
-        <div>
-            <div className="mb-1 flex items-center justify-between gap-2">
-                <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest">
-                    Partner stores
-                </p>
-                {canManage && (
-                    <Button size="sm" variant="outline" onClick={openPicker} disabled={busy}>
-                        <Store className="mr-1 h-3.5 w-3.5" />
-                        Send to partner store
-                    </Button>
-                )}
-            </div>
-            {loading ? (
-                <p className="text-sm text-muted-foreground">Loading stores…</p>
-            ) : rows.filter((row) => row.status !== "returned").length === 0 ? (
-                <p className="text-sm text-muted-foreground">Not sent to a partner store yet.</p>
-            ) : (
-                <ul className="space-y-2">
-                    {rows
-                        .filter((row) => row.status !== "returned")
-                        .map((row) => (
-                            <li key={row.id} className="flex items-start justify-between gap-2 text-sm">
-                                <span className="min-w-0">
-                                    <span className="block font-medium truncate">{row.partner_store_name || "Store"}</span>
-                                    <span className="block text-xs text-muted-foreground">
-                                        {optInLabel(row.program_type)}
-                                        {row.sent_by_name ? ` · ${row.sent_by_name}` : ""}
-                                        {row.delivered_at ? ` · ${new Date(row.delivered_at).toLocaleDateString()}` : ""}
-                                    </span>
-                                </span>
-                                <span className="flex items-center gap-2 shrink-0">
-                                    <Badge variant="secondary">{row.status.replace(/_/g, " ")}</Badge>
-                                    {canManage && row.status !== "dead" && (
-                                        <Button size="sm" variant="ghost" onClick={() => undo(row)} disabled={busy}>
-                                            Undo
-                                        </Button>
-                                    )}
-                                </span>
-                            </li>
-                        ))}
-                </ul>
-            )}
-
+        <>
+            <Button size="sm" variant="outline" onClick={openPicker} disabled={busy}>
+                <Store className="mr-1 h-3.5 w-3.5" />
+                {label}
+            </Button>
             <Dialog open={open} onOpenChange={setOpen}>
                 <DialogContent className="flex max-h-[min(80vh,720px)] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
                     <DialogHeader className="border-b px-6 py-4">
                         <DialogTitle>Send to partner store</DialogTitle>
                         <DialogDescription>
-                            Choose one or more stores. Each store gets its own copy and its own recipient emails.
+                            Pick one or more stores. Each store is emailed on its own.
                         </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-1 overflow-y-auto px-6 py-3">
@@ -196,7 +124,6 @@ export function LeadDeliveries({
                         )}
                         {stores.map((store) => {
                             const locked = alreadySent.has(store.id)
-                            const checked = selected.includes(store.id)
                             return (
                                 <label
                                     key={store.id}
@@ -205,7 +132,7 @@ export function LeadDeliveries({
                                     <input
                                         type="checkbox"
                                         className="mt-1"
-                                        checked={checked}
+                                        checked={selected.includes(store.id)}
                                         disabled={locked}
                                         onChange={() => toggle(store.id)}
                                     />
@@ -232,8 +159,104 @@ export function LeadDeliveries({
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
-        </div>
+        </>
     )
 }
 
-export type { StoreSendResult }
+export function LeadDeliveries({
+    leadId,
+    canManage,
+    onStoresChange,
+}: {
+    leadId: string
+    canManage: boolean
+    onStoresChange?: (storeIds: string[]) => void
+}) {
+    const { toast } = useToast()
+    const { timezone } = useBrowserTimezone()
+    const [rows, setRows] = React.useState<LeadDeliveryRow[]>([])
+    const [loading, setLoading] = React.useState(true)
+    const [busy, setBusy] = React.useState(false)
+
+    const activeRows = rows.filter((row) => row.status !== "returned" && row.status !== "dead")
+    const sentIds = activeRows.map((row) => row.partner_store_id)
+
+    const load = React.useCallback(async () => {
+        setLoading(true)
+        try {
+            const next = await PartnerProgramService.listDeliveries(leadId)
+            setRows(next)
+            onStoresChange?.(
+                next
+                    .filter((row) => row.status !== "dead" && row.status !== "returned")
+                    .map((row) => row.partner_store_id)
+            )
+        } catch {
+            setRows([])
+            onStoresChange?.([])
+        } finally {
+            setLoading(false)
+        }
+    }, [leadId, onStoresChange])
+
+    React.useEffect(() => {
+        load()
+    }, [load])
+
+    async function removeSend(row: LeadDeliveryRow) {
+        setBusy(true)
+        try {
+            await PartnerProgramService.returnDelivery(leadId, row.id)
+            await load()
+        } catch {
+            toast({ title: "Could not remove that store", variant: "destructive" })
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    return (
+        <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest">
+                    Sent to
+                </p>
+                {canManage && (
+                    <SendPartnerStoreButton
+                        leadId={leadId}
+                        sentStoreIds={sentIds}
+                        label="Send to store"
+                        onSent={() => load()}
+                    />
+                )}
+            </div>
+            {loading ? (
+                <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : activeRows.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Not sent yet.</p>
+            ) : (
+                <ul className="space-y-2">
+                    {activeRows.map((row) => (
+                        <li key={row.id} className="flex items-start justify-between gap-2 text-sm">
+                            <span className="min-w-0">
+                                <span className="block font-medium truncate">{row.partner_store_name || "Store"}</span>
+                                <span className="block text-xs text-muted-foreground">
+                                    {statusLabel(row.status)}
+                                    {row.delivered_at
+                                        ? ` · ${formatDateInTimezone(row.delivered_at, timezone, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
+                                        : ""}
+                                    {row.sent_by_name ? ` · ${row.sent_by_name}` : ""}
+                                </span>
+                            </span>
+                            {canManage && (
+                                <Button size="sm" variant="ghost" onClick={() => removeSend(row)} disabled={busy}>
+                                    Remove
+                                </Button>
+                            )}
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    )
+}

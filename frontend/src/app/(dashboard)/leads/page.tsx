@@ -83,6 +83,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Calendar as CalendarPicker } from "@/components/ui/calendar"
 import { LeadService, Lead, type LeadListParams, type LeadExportFilters, type CampaignFilterOption, type LeadIntakeSummary, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead, isLeadReturnedToPool, getLeadArrival, leadVisibleSource } from "@/services/lead-service"
+import type { StoreSendResult } from "@/services/partner-store-service"
 import { LeadStageService, LeadStage, getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { AssignToSalespersonModal, AssignToDealershipModal } from "@/components/leads/assignment-modal"
 import { CreateLeadModal } from "@/components/leads/create-lead-modal"
@@ -96,6 +97,7 @@ import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { useWebSocketEvent } from "@/hooks/use-websocket"
 import { LeadsPipelineView } from "@/components/leads/leads-pipeline-view"
+import { SendPartnerStoreButton } from "@/components/leads/lead-deliveries"
 import type { DragEndEvent } from "@dnd-kit/core"
 import { getSkateAttemptDetail } from "@/lib/skate-alert"
 import { useSkateAlertStore } from "@/stores/skate-alert-store"
@@ -169,6 +171,75 @@ function getLeadHeat(lead: Lead): { score: number; level: "hot" | "warm" | "cold
     return { score, level }
 }
 
+function storeNames(lead: Lead) {
+    if (lead.partner_sends && lead.partner_sends.length > 0) {
+        return lead.partner_sends.map((store) => store.name)
+    }
+    return lead.partner_store?.name ? [lead.partner_store.name] : []
+}
+
+function sentStoreIds(lead: Lead) {
+    if (lead.partner_sends && lead.partner_sends.length > 0) {
+        return lead.partner_sends.map((store) => store.id)
+    }
+    return lead.partner_store_id ? [lead.partner_store_id] : []
+}
+
+function withPartnerSends(lead: Lead, results: StoreSendResult[]): Lead {
+    const current = lead.partner_sends?.length
+        ? [...lead.partner_sends]
+        : lead.partner_store
+            ? [{ id: lead.partner_store.id, name: lead.partner_store.name, brand: lead.partner_store.brand }]
+            : []
+    for (const item of results) {
+        if (item.status !== "sent" && item.status !== "already_sent") continue
+        if (!current.some((store) => store.id === item.partner_store_id)) {
+            current.push({ id: item.partner_store_id, name: item.partner_store_name })
+        }
+    }
+    const latest = current[current.length - 1]
+    return {
+        ...lead,
+        partner_sends: current,
+        partner_store: latest || lead.partner_store,
+        partner_store_id: latest?.id || lead.partner_store_id,
+    }
+}
+
+function PartnerStoreCell({
+    lead,
+    canSend,
+    onSent,
+}: {
+    lead: Lead
+    canSend: boolean
+    onSent: (results: StoreSendResult[]) => void
+}) {
+    const names = storeNames(lead)
+    return (
+        <div className="min-w-[148px] space-y-1.5">
+            {names.length > 0 ? (
+                <div className="flex items-start gap-1.5">
+                    <Store className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="text-sm font-medium leading-snug" title={names.join(", ")}>
+                        {names.join(", ")}
+                    </span>
+                </div>
+            ) : (
+                <span className="text-xs text-muted-foreground">Not sent</span>
+            )}
+            {canSend && (
+                <SendPartnerStoreButton
+                    leadId={lead.id}
+                    sentStoreIds={sentStoreIds(lead)}
+                    onSent={onSent}
+                    label={names.length ? "Send to another" : "Send"}
+                />
+            )}
+        </div>
+    )
+}
+
 export default function LeadsPage() {
     const router = useRouter()
     const searchParams = useSearchParams()
@@ -181,7 +252,7 @@ export default function LeadsPage() {
     const dealershipIdParam = searchParams.get("dealership_id")
     const { timezone } = useBrowserTimezone()
 
-    const { role, isDealershipAdmin, isDealershipOwner, isDealershipLevel, isSuperAdmin, isSalesperson, isBdc, canAssignToSalesperson, hasPermission } = useRole()
+    const { role, isDealershipAdmin, isDealershipOwner, isDealershipLevel, isSuperAdmin, isSalesperson, isBdc, canAssignToSalesperson, canConnectToPartner, hasPermission } = useRole()
     const orgDealershipId = useOrgDealershipId()
     const isOrgWide = isDealershipLevel || isSuperAdmin || isBdc
     const canCreateLead = hasPermission("create_lead")
@@ -1859,6 +1930,13 @@ export default function LeadsPage() {
                                                         </span>
                                                     )}
                                                 </div>
+                                                <p className="mt-0.5 text-xs text-muted-foreground">
+                                                    {lead.last_inbound_at ? "Came back" : "Came in"} {formatDateInTimezone(
+                                                        lead.last_inbound_at || lead.created_at,
+                                                        timezone,
+                                                        { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }
+                                                    )}
+                                                </p>
                                             </div>
                                         </div>
                                     </TableCell>
@@ -1907,25 +1985,13 @@ export default function LeadsPage() {
                                     )}
                                     {showCol("partner_store") && (
                                     <TableCell>
-                                        {(lead.partner_sends && lead.partner_sends.length > 0) || lead.partner_store?.name ? (
-                                            <div className="flex items-center gap-1.5 min-w-0">
-                                                <Store className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                                                <span
-                                                    className="text-sm font-medium truncate"
-                                                    title={(lead.partner_sends && lead.partner_sends.length > 0
-                                                        ? lead.partner_sends.map((store) => store.name)
-                                                        : [lead.partner_store?.name]
-                                                    ).filter(Boolean).join(", ")}
-                                                >
-                                                    {(lead.partner_sends && lead.partner_sends.length > 0
-                                                        ? lead.partner_sends.map((store) => store.name)
-                                                        : [lead.partner_store?.name]
-                                                    ).filter(Boolean).join(", ")}
-                                                </span>
-                                            </div>
-                                        ) : (
-                                            <span className="text-xs text-muted-foreground">—</span>
-                                        )}
+                                        <PartnerStoreCell
+                                            lead={lead}
+                                            canSend={canConnectToPartner}
+                                            onSent={(results) => {
+                                                setLeads((prev) => prev.map((row) => row.id === lead.id ? withPartnerSends(row, results) : row))
+                                            }}
+                                        />
                                     </TableCell>
                                     )}
                                     {isBdc && (
