@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -33,6 +33,18 @@ class PartnerStore(Base):
     postal_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    external_code: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True, unique=True,
+        comment="External dealership code, for example DLR_001",
+    )
+    monthly_leads_min: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True,
+        comment="Low end of the agreed monthly lead range. Display only.",
+    )
+    monthly_leads_max: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True,
+        comment="High end of the agreed monthly lead range. Display only.",
+    )
     website: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     contact_person: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True,

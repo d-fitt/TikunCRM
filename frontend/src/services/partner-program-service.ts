@@ -52,6 +52,8 @@ export interface LeadDeliveryRow {
     status: string;
     bdc_agent_id?: string | null;
     note?: string | null;
+    sent_by_user_id?: string | null;
+    sent_by_name?: string | null;
     delivered_at: string;
     updated_at: string;
 }

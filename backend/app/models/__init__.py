@@ -61,6 +61,10 @@ from app.models.lead_credit_application import (
 )
 from app.models.partner_store import PartnerStore
 from app.models.partner_program import PartnerProgram
+from app.models.partner_store_campaign import PartnerStoreCampaign
+from app.models.partner_store_recipient import PartnerStoreRecipient
+from app.models.partner_store_channel import PartnerStoreChannel
+from app.models.partner_inventory import PartnerInventorySource, PartnerInventoryUrl
 from app.models.lead_delivery import LeadDelivery
 from app.models.partner_bdc_agent import PartnerBdcAgent
 from app.models.partner_portal_user import PartnerPortalUser
@@ -146,6 +150,11 @@ __all__ = [
     "CreditApplicationType",
     "PartnerStore",
     "PartnerProgram",
+    "PartnerStoreCampaign",
+    "PartnerStoreRecipient",
+    "PartnerStoreChannel",
+    "PartnerInventorySource",
+    "PartnerInventoryUrl",
     "LeadDelivery",
     "PartnerBdcAgent",
     "PartnerPortalUser",

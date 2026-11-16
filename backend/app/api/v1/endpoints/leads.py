@@ -470,6 +470,22 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
         if getattr(lead, "partner_store_id", None):
             partner_store_ids.add(lead.partner_store_id)
 
+    from app.models.lead_delivery import RELEASED_STATUSES, LeadDelivery
+    sends_by_lead: dict = {}
+    lead_id_list = [lead.id for lead in leads]
+    if lead_id_list:
+        send_rows = await db.execute(
+            select(LeadDelivery.lead_id, LeadDelivery.partner_store_id).where(
+                LeadDelivery.lead_id.in_(lead_id_list),
+                LeadDelivery.status.notin_(list(RELEASED_STATUSES)),
+            )
+        )
+        for sent_lead_id, sent_store_id in send_rows.all():
+            bucket = sends_by_lead.setdefault(sent_lead_id, [])
+            if sent_store_id not in bucket:
+                bucket.append(sent_store_id)
+                partner_store_ids.add(sent_store_id)
+
     def _customer_brief(c: Customer) -> dict:
         return {
             "id": str(c.id),
@@ -623,6 +639,11 @@ async def enrich_leads_with_relations(db: AsyncSession, leads: list) -> list:
             "down_payment": float(lead.down_payment) if getattr(lead, "down_payment", None) is not None else None,
             "partner_store_id": str(lead.partner_store_id) if getattr(lead, "partner_store_id", None) else None,
             "partner_store": partner_stores_map.get(lead.partner_store_id) if getattr(lead, "partner_store_id", None) else None,
+            "partner_sends": [
+                partner_stores_map[store_id]
+                for store_id in sends_by_lead.get(lead.id, [])
+                if store_id in partner_stores_map
+            ],
             "has_ssn_stip": bool(getattr(lead, "has_ssn_stip", False)),
             "has_dl_stip": bool(getattr(lead, "has_dl_stip", False)),
             "is_business": getattr(lead, "is_business", None),
@@ -3102,6 +3123,24 @@ async def update_lead_partner_destinations(
         sold_id = payload["sold_to_partner_store_id"]
         if sold_id is not None:
             await _require_active_partner_store(db, sold_id)
+            from app.models.lead_delivery import LeadDelivery
+            sent_ids = set(
+                (
+                    await db.execute(
+                        select(LeadDelivery.partner_store_id).where(LeadDelivery.lead_id == lead.id)
+                    )
+                ).scalars().all()
+            )
+            allowed = set(sent_ids)
+            if lead.partner_store_id:
+                allowed.add(lead.partner_store_id)
+            if lead.sold_partner_store_id:
+                allowed.add(lead.sold_partner_store_id)
+            if sold_id not in allowed:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Send this lead to that partner store before marking it sold there.",
+                )
         lead.sold_partner_store_id = sold_id
 
     if changed_sent and not changed_sold:

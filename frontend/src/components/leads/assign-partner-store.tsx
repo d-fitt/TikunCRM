@@ -24,6 +24,8 @@ interface AssignPartnerStoreProps {
     currentPartnerStoreId?: string | null
     currentPartnerStoreName?: string | null
     stores?: PartnerStore[]
+    /** When set, only these stores can be chosen. */
+    limitToIds?: string[]
     disabled?: boolean
     compact?: boolean
     className?: string
@@ -40,6 +42,7 @@ export function AssignPartnerStore({
     currentPartnerStoreId,
     currentPartnerStoreName,
     stores: storesProp,
+    limitToIds,
     disabled = false,
     compact = false,
     className,
@@ -75,7 +78,10 @@ export function AssignPartnerStore({
         }
     }, [storesProp])
 
-    const stores = storesProp ?? fetchedStores
+    const stores = (storesProp ?? fetchedStores).filter((store) => {
+        if (!limitToIds) return true
+        return limitToIds.includes(store.id) || store.id === value
+    })
     const label = kind === "sold" ? "Sold To" : "Sent To"
     const currentMissing = Boolean(value && !stores.some((s) => s.id === value))
 
@@ -114,6 +120,10 @@ export function AssignPartnerStore({
         } finally {
             setSaving(false)
         }
+    }
+
+    if (limitToIds && limitToIds.length === 0 && !value) {
+        return <p className={cn("text-sm text-muted-foreground", className)}>Send this lead to a store first.</p>
     }
 
     if (loadingList && stores.length === 0) {

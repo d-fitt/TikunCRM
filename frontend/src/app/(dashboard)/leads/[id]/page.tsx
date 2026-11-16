@@ -507,6 +507,7 @@ export default function LeadDetailsPage() {
     }, [])
 
     const [lead, setLead] = React.useState<Lead | null>(null)
+    const [sentPartnerStoreIds, setSentPartnerStoreIds] = React.useState<string[]>([])
     const [fetchError, setFetchError] = React.useState<"not_found" | "forbidden" | null>(null)
     const [activities, setActivities] = React.useState<Activity[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
@@ -2675,42 +2676,9 @@ export default function LeadDetailsPage() {
                             <LeadDeliveries
                                 leadId={lead.id}
                                 canManage={Boolean(!isMentionOnly && canConnectToPartner)}
+                                onStoresChange={setSentPartnerStoreIds}
                             />
 
-                            {/* Partner destinations */}
-                            <div>
-                                <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
-                                    Sent To
-                                </p>
-                                {!isMentionOnly && canConnectToPartner ? (
-                                    <AssignPartnerStore
-                                        leadId={lead.id}
-                                        kind="sent"
-                                        currentPartnerStoreId={lead.partner_store_id}
-                                        currentPartnerStoreName={lead.partner_store?.name}
-                                        onAssigned={(dest) => {
-                                            setLead((prev) =>
-                                                prev
-                                                    ? {
-                                                          ...prev,
-                                                          partner_store_id: dest.sent_to_partner_store_id ?? null,
-                                                          partner_store: dest.sent_to_partner_store ?? null,
-                                                          sold_partner_store_id: dest.sold_to_partner_store_id ?? null,
-                                                          sold_partner_store: dest.sold_to_partner_store ?? null,
-                                                      }
-                                                    : prev
-                                            )
-                                        }}
-                                    />
-                                ) : lead.partner_store?.name ? (
-                                    <p className="font-medium flex items-center gap-2 text-sm">
-                                        <Store className="h-4 w-4 text-primary" />
-                                        {lead.partner_store.name}
-                                    </p>
-                                ) : (
-                                    <p className="text-sm text-muted-foreground">Not assigned</p>
-                                )}
-                            </div>
                             <div>
                                 <p className="text-xs text-muted-foreground uppercase font-bold tracking-widest mb-1">
                                     Sold To
@@ -2719,6 +2687,11 @@ export default function LeadDetailsPage() {
                                     <AssignPartnerStore
                                         leadId={lead.id}
                                         kind="sold"
+                                        limitToIds={Array.from(new Set([
+                                            ...sentPartnerStoreIds,
+                                            lead.partner_store_id,
+                                            lead.sold_partner_store_id,
+                                        ].filter((id): id is string => Boolean(id))))}
                                         currentPartnerStoreId={lead.sold_partner_store_id}
                                         currentPartnerStoreName={lead.sold_partner_store?.name}
                                         onAssigned={(dest) => {

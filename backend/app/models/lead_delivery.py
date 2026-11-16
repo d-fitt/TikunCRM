@@ -101,6 +101,13 @@ class LeadDelivery(Base):
         nullable=True,
         index=True,
     )
+    sent_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="CRM user who sent this lead to the store",
+    )
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     delivered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False, index=True

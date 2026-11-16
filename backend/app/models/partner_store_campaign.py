@@ -1,7 +1,7 @@
-"""Campaigns whose leads are delivered to a partner store.
+"""Campaigns associated with a partner store.
 
-One store can be linked to many campaigns. A campaign can also be linked to
-more than one store; routing then picks a store using the usual caps.
+A store can be linked to many campaigns. Linking a campaign records where the
+store's leads come from. It does not send the next lead to that store.
 """
 import uuid
 

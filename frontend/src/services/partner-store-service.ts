@@ -17,6 +17,9 @@ export interface PartnerStore {
     postal_code?: string | null;
     phone?: string | null;
     email?: string | null;
+    external_code?: string | null;
+    monthly_leads_min?: number | null;
+    monthly_leads_max?: number | null;
     website?: string | null;
     contact_person?: string | null;
     notes?: string | null;
@@ -37,6 +40,9 @@ export interface PartnerStoreCreate {
     postal_code?: string | null;
     phone?: string | null;
     email?: string | null;
+    external_code?: string | null;
+    monthly_leads_min?: number | null;
+    monthly_leads_max?: number | null;
     website?: string | null;
     contact_person?: string | null;
     notes?: string | null;
@@ -52,10 +58,96 @@ export interface PartnerStoreUpdate {
     postal_code?: string | null;
     phone?: string | null;
     email?: string | null;
+    external_code?: string | null;
+    monthly_leads_min?: number | null;
+    monthly_leads_max?: number | null;
     website?: string | null;
     contact_person?: string | null;
     notes?: string | null;
     is_active?: boolean;
+}
+
+export interface InventoryUrlInput {
+    url: string
+    inventory_type: "new" | "used" | "cpo"
+}
+
+export interface InventorySourceInput {
+    source_id?: string | null
+    source_name: string
+    inventory_urls: InventoryUrlInput[]
+    platforms: string[]
+    enabled: boolean
+}
+
+export interface LeadChannelInput {
+    channel_type: "marketplace" | "website" | "other"
+    platform?: string
+    label: string
+    enabled: boolean
+}
+
+export interface StoreProfile {
+    opt_in: "leads_only" | "full_bdc"
+    recipient_emails: string[]
+    campaign_mapping_ids: string[]
+    lead_channels: LeadChannelInput[]
+    inventory_sources: InventorySourceInput[]
+}
+
+export interface StoreSendResult {
+    partner_store_id: string
+    partner_store_name: string
+    delivery_id: string
+    status: "sent" | "already_sent"
+    program_type: string
+    recipients: string[]
+    emailed: string[]
+    email_error?: string | null
+}
+
+export interface PartnerStoreDashboard {
+    id: string
+    name: string
+    brand?: string | null
+    email?: string | null
+    phone?: string | null
+    website?: string | null
+    contact_person?: string | null
+    address?: string | null
+    city?: string | null
+    state?: string | null
+    postal_code?: string | null
+    external_code?: string | null
+    is_active: boolean
+    opt_in?: "leads_only" | "full_bdc" | null
+    monthly_leads_min?: number | null
+    monthly_leads_max?: number | null
+    sent_this_month: number
+    range_position?: "below" | "in_range" | "above" | null
+    recipient_emails: string[]
+    campaigns: { campaign_mapping_id: string; label: string; type: string }[]
+    lead_channels: LeadChannelInput[]
+    inventory_sources: InventorySourceInput[]
+    metrics: {
+        total_sent: number
+        sent_this_month: number
+        sold: number
+        by_status: { status: string; count: number }[]
+        by_sender: { user_id?: string | null; name: string; count: number }[]
+    }
+    leads: {
+        delivery_id: string
+        lead_id: string
+        customer_name: string
+        phone?: string | null
+        email?: string | null
+        sent_at?: string | null
+        sent_by?: string | null
+        delivery_status: string
+        lead_outcome?: string | null
+        program_type: string
+    }[]
 }
 
 export interface PartnerStoreBrief {
@@ -160,6 +252,28 @@ export const PartnerStoreService = {
     async disconnectLeadFromPartner(leadId: string): Promise<unknown> {
         const response = await apiClient.delete(`/leads/${leadId}/connect-partner`);
         return response.data;
+    },
+
+    async getProfile(id: string): Promise<StoreProfile> {
+        const response = await apiClient.get(`${PREFIX}/${id}/profile`)
+        return response.data
+    },
+
+    async saveProfile(id: string, data: StoreProfile): Promise<StoreProfile> {
+        const response = await apiClient.put(`${PREFIX}/${id}/profile`, data)
+        return response.data
+    },
+
+    async dashboard(id: string): Promise<PartnerStoreDashboard> {
+        const response = await apiClient.get(`${PREFIX}/${id}/dashboard`)
+        return response.data
+    },
+
+    async sendLead(leadId: string, partnerStoreIds: string[]): Promise<{ lead_id: string; results: StoreSendResult[] }> {
+        const response = await apiClient.post(`/leads/${leadId}/send-to-partner-stores`, {
+            partner_store_ids: partnerStoreIds,
+        })
+        return response.data
     },
 
     async setLeadPartnerDestinations(

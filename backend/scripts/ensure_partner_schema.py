@@ -97,6 +97,59 @@ def ensure_partner_schema(conn) -> None:
           AND (outcome = 'converted' OR converted_at IS NOT NULL)
     """))
 
+    conn.execute(text("""
+        ALTER TABLE partner_stores ADD COLUMN IF NOT EXISTS external_code VARCHAR(50)
+    """))
+    conn.execute(text("""
+        ALTER TABLE partner_stores ADD COLUMN IF NOT EXISTS monthly_leads_min INTEGER
+    """))
+    conn.execute(text("""
+        ALTER TABLE partner_stores ADD COLUMN IF NOT EXISTS monthly_leads_max INTEGER
+    """))
+    conn.execute(text("""
+        ALTER TABLE lead_deliveries ADD COLUMN IF NOT EXISTS sent_by_user_id UUID
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS partner_store_recipients (
+            id UUID PRIMARY KEY,
+            partner_store_id UUID NOT NULL REFERENCES partner_stores (id) ON DELETE CASCADE,
+            email VARCHAR(255) NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_partner_store_recipient_email UNIQUE (partner_store_id, email)
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS partner_store_channels (
+            id UUID PRIMARY KEY,
+            partner_store_id UUID NOT NULL REFERENCES partner_stores (id) ON DELETE CASCADE,
+            channel_type VARCHAR(30) NOT NULL,
+            platform VARCHAR(100) NOT NULL DEFAULT '',
+            label VARCHAR(255) NOT NULL,
+            enabled BOOLEAN NOT NULL DEFAULT true,
+            CONSTRAINT uq_partner_store_channel UNIQUE (partner_store_id, channel_type, platform, label)
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS partner_inventory_sources (
+            id UUID PRIMARY KEY,
+            partner_store_id UUID NOT NULL REFERENCES partner_stores (id) ON DELETE CASCADE,
+            external_source_id VARCHAR(50),
+            source_name VARCHAR(255) NOT NULL,
+            platforms JSONB NOT NULL DEFAULT '[]',
+            enabled BOOLEAN NOT NULL DEFAULT true,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS partner_inventory_urls (
+            id UUID PRIMARY KEY,
+            inventory_source_id UUID NOT NULL REFERENCES partner_inventory_sources (id) ON DELETE CASCADE,
+            url TEXT NOT NULL,
+            inventory_type VARCHAR(20) NOT NULL
+        )
+    """))
+
 
 def main() -> int:
     from app.core.config import settings

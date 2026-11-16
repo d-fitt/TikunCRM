@@ -206,17 +206,14 @@ def pick_store(candidates: list, usage: dict) -> Optional[tuple]:
     return program, store
 
 
-async def route_lead_safely(db: AsyncSession, lead_id: UUID) -> list[LeadDelivery]:
-    """Route inside a savepoint so a routing error does not roll back the lead."""
-    try:
-        async with db.begin_nested():
-            return await route_lead(db, lead_id)
-    except Exception:
-        logger.exception("Partner routing failed for lead %s", lead_id)
-        return []
+async def route_lead_safely(_db: AsyncSession, lead_id: UUID) -> list[LeadDelivery]:
+    """Partner stores are chosen by an admin or a BDC user. Nothing is assigned here."""
+    logger.debug("Skipping automatic partner routing for lead %s", lead_id)
+    return []
 
 
 async def route_lead(db: AsyncSession, lead_id: UUID) -> list[LeadDelivery]:
+    """Legacy matcher. Not used. Sends happen from the lead page."""
     lead = await db.get(Lead, lead_id)
     if lead is None or not lead.is_active:
         return []
@@ -573,36 +570,8 @@ async def return_delivery(db: AsyncSession, delivery: LeadDelivery, note: Option
 
 
 async def run_partner_routing_retry() -> None:
-    """Pick up leads that arrived while every matching store was closed or full."""
-    from app.db.database import async_session_maker
-
-    cutoff = utc_now() - timedelta(days=14)
-    async with async_session_maker() as session:
-        open_delivery = (
-            select(LeadDelivery.id)
-            .where(
-                LeadDelivery.lead_id == Lead.id,
-                LeadDelivery.status.in_(LOCKING_STATUSES),
-            )
-            .exists()
-        )
-        lead_ids = list(
-            (
-                await session.execute(
-                    select(Lead.id)
-                    .where(
-                        Lead.is_active.is_(True),
-                        Lead.created_at >= cutoff,
-                        ~open_delivery,
-                    )
-                    .order_by(Lead.created_at.desc())
-                    .limit(50)
-                )
-            ).scalars().all()
-        )
-        for lead_id in lead_ids:
-            await route_lead_safely(session, lead_id)
-        await session.commit()
+    """Kept so the scheduler import stays valid. Stores are chosen by a person."""
+    return
 
 
 async def _email_store(store: PartnerStore, subject: str, message: str) -> None:

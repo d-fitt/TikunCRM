@@ -8,6 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -33,6 +34,9 @@ class PartnerStoreCreate(BaseModel):
     postal_code: Optional[str] = Field(None, max_length=20)
     phone: Optional[str] = Field(None, max_length=20)
     email: Optional[str] = Field(None, max_length=255)
+    external_code: Optional[str] = Field(None, max_length=50)
+    monthly_leads_min: Optional[int] = Field(None, ge=0, le=100000)
+    monthly_leads_max: Optional[int] = Field(None, ge=0, le=100000)
     website: Optional[str] = Field(None, max_length=255)
     contact_person: Optional[str] = Field(None, max_length=255)
     notes: Optional[str] = None
@@ -48,6 +52,9 @@ class PartnerStoreUpdate(BaseModel):
     postal_code: Optional[str] = Field(None, max_length=20)
     phone: Optional[str] = Field(None, max_length=20)
     email: Optional[str] = Field(None, max_length=255)
+    external_code: Optional[str] = Field(None, max_length=50)
+    monthly_leads_min: Optional[int] = Field(None, ge=0, le=100000)
+    monthly_leads_max: Optional[int] = Field(None, ge=0, le=100000)
     website: Optional[str] = Field(None, max_length=255)
     contact_person: Optional[str] = Field(None, max_length=255)
     notes: Optional[str] = None
@@ -65,6 +72,9 @@ class PartnerStoreResponse(BaseModel):
     postal_code: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
+    external_code: Optional[str] = None
+    monthly_leads_min: Optional[int] = None
+    monthly_leads_max: Optional[int] = None
     website: Optional[str] = None
     contact_person: Optional[str] = None
     notes: Optional[str] = None
@@ -163,6 +173,24 @@ async def get_partner_store(
     return store
 
 
+def _store_payload(data: dict) -> dict:
+    if "external_code" in data:
+        code = (data.get("external_code") or "").strip()
+        data["external_code"] = code or None
+    if "email" in data and isinstance(data["email"], str):
+        data["email"] = data["email"].strip() or None
+    return data
+
+
+def _check_monthly_range(low: Optional[int], high: Optional[int]) -> None:
+    from app.services.partner_profile_service import ProfileError, validate_monthly_range
+
+    try:
+        validate_monthly_range(low, high)
+    except ProfileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/", response_model=PartnerStoreResponse, status_code=status.HTTP_201_CREATED)
 async def create_partner_store(
     body: PartnerStoreCreate,
@@ -172,9 +200,15 @@ async def create_partner_store(
     ),
 ) -> Any:
     """Create a new partner store (admin/manager only)."""
-    store = PartnerStore(**body.model_dump())
+    payload = _store_payload(body.model_dump())
+    _check_monthly_range(payload.get("monthly_leads_min"), payload.get("monthly_leads_max"))
+    store = PartnerStore(**payload)
     db.add(store)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="That dealership code is already in use")
     await db.refresh(store)
     logger.info(f"Partner store created: {store.name} by {current_user.email}")
     return store
@@ -197,10 +231,18 @@ async def update_partner_store(
     if not store:
         raise HTTPException(status_code=404, detail="Partner store not found")
 
-    for field, value in body.model_dump(exclude_unset=True).items():
+    changes = _store_payload(body.model_dump(exclude_unset=True))
+    low = changes.get("monthly_leads_min", store.monthly_leads_min)
+    high = changes.get("monthly_leads_max", store.monthly_leads_max)
+    _check_monthly_range(low, high)
+    for field, value in changes.items():
         setattr(store, field, value)
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="That dealership code is already in use")
     await db.refresh(store)
     logger.info(f"Partner store updated: {store.name} by {current_user.email}")
     return store
@@ -550,3 +592,87 @@ async def replace_store_campaigns(
         )
     await db.commit()
     return await list_store_campaigns(store_id, db, current_user)
+
+
+class LeadChannelIn(BaseModel):
+    channel_type: str
+    platform: Optional[str] = None
+    label: str
+    enabled: bool = True
+
+
+class InventoryUrlIn(BaseModel):
+    url: str
+    inventory_type: str
+
+
+class InventorySourceIn(BaseModel):
+    source_id: Optional[str] = None
+    source_name: str
+    inventory_urls: List[InventoryUrlIn] = Field(default_factory=list)
+    platforms: List[str] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class StoreProfileUpdate(BaseModel):
+    opt_in: str
+    recipient_emails: List[str] = Field(default_factory=list)
+    campaign_mapping_ids: List[UUID] = Field(default_factory=list)
+    lead_channels: List[LeadChannelIn] = Field(default_factory=list)
+    inventory_sources: List[InventorySourceIn] = Field(default_factory=list)
+
+
+@router.get("/{store_id}/profile")
+async def get_store_profile(
+    store_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_permission(Permission.MANAGE_PARTNER_STORES)),
+) -> Any:
+    await _get_store_or_404(db, store_id)
+    from app.services.partner_dashboard_service import load_profile
+
+    return await load_profile(db, store_id)
+
+
+@router.put("/{store_id}/profile")
+async def save_store_profile(
+    store_id: UUID,
+    body: StoreProfileUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_permission(Permission.MANAGE_PARTNER_STORES)),
+) -> Any:
+    from app.services.partner_dashboard_service import load_profile
+    from app.services.partner_profile_service import ProfileError, replace_store_profile
+
+    store = await _get_store_or_404(db, store_id)
+    try:
+        await replace_store_profile(
+            db,
+            store,
+            opt_in=body.opt_in,
+            recipient_emails=body.recipient_emails,
+            campaign_mapping_ids=body.campaign_mapping_ids,
+            lead_channels=[item.model_dump() for item in body.lead_channels],
+            inventory_sources=[item.model_dump() for item in body.inventory_sources],
+        )
+        await db.commit()
+    except ProfileError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="That store profile conflicts with an existing record")
+    logger.info("Partner profile saved for %s by %s", store.name, current_user.email)
+    return await load_profile(db, store_id)
+
+
+@router.get("/{store_id}/dashboard")
+async def get_store_dashboard(
+    store_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    from app.services.partner_dashboard_service import build_store_dashboard
+
+    store = await _get_store_or_404(db, store_id)
+    return await build_store_dashboard(db, store)

@@ -1907,11 +1907,20 @@ export default function LeadsPage() {
                                     )}
                                     {showCol("partner_store") && (
                                     <TableCell>
-                                        {lead.partner_store?.name ? (
+                                        {(lead.partner_sends && lead.partner_sends.length > 0) || lead.partner_store?.name ? (
                                             <div className="flex items-center gap-1.5 min-w-0">
                                                 <Store className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                                                <span className="text-sm font-medium truncate" title={lead.partner_store.name}>
-                                                    {lead.partner_store.name}
+                                                <span
+                                                    className="text-sm font-medium truncate"
+                                                    title={(lead.partner_sends && lead.partner_sends.length > 0
+                                                        ? lead.partner_sends.map((store) => store.name)
+                                                        : [lead.partner_store?.name]
+                                                    ).filter(Boolean).join(", ")}
+                                                >
+                                                    {(lead.partner_sends && lead.partner_sends.length > 0
+                                                        ? lead.partner_sends.map((store) => store.name)
+                                                        : [lead.partner_store?.name]
+                                                    ).filter(Boolean).join(", ")}
                                                 </span>
                                             </div>
                                         ) : (
