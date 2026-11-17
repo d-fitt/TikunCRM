@@ -180,20 +180,38 @@ export function SendPartnerStoreButton({
 export function LeadDeliveries({
     leadId,
     canManage,
+    knownStores = [],
     onStoresChange,
 }: {
     leadId: string
     canManage: boolean
+    knownStores?: { id: string; name: string }[]
     onStoresChange?: (storeIds: string[]) => void
 }) {
     const { toast } = useToast()
     const { timezone } = useBrowserTimezone()
     const [rows, setRows] = React.useState<LeadDeliveryRow[]>([])
+    const [hiddenIds, setHiddenIds] = React.useState<string[]>([])
     const [loading, setLoading] = React.useState(true)
     const [busy, setBusy] = React.useState(false)
 
     const activeRows = rows.filter((row) => row.status !== "returned" && row.status !== "dead")
-    const sentIds = activeRows.map((row) => row.partner_store_id)
+    const shownStores = React.useMemo(() => {
+        const hidden = new Set(hiddenIds)
+        const byId = new Map<string, { id: string; name: string; row?: LeadDeliveryRow }>()
+        for (const store of knownStores) {
+            if (store.id && !hidden.has(store.id)) byId.set(store.id, { id: store.id, name: store.name })
+        }
+        for (const row of activeRows) {
+            byId.set(row.partner_store_id, {
+                id: row.partner_store_id,
+                name: row.partner_store_name || byId.get(row.partner_store_id)?.name || "Store",
+                row,
+            })
+        }
+        return Array.from(byId.values())
+    }, [activeRows, knownStores, hiddenIds])
+    const sentIds = shownStores.map((store) => store.id)
 
     const load = React.useCallback(async () => {
         setLoading(true)
@@ -221,6 +239,7 @@ export function LeadDeliveries({
         setBusy(true)
         try {
             await PartnerProgramService.returnDelivery(leadId, row.id)
+            setHiddenIds((prev) => (prev.includes(row.partner_store_id) ? prev : [...prev, row.partner_store_id]))
             await load()
         } catch {
             toast({ title: "Could not remove that store", variant: "destructive" })
@@ -239,31 +258,36 @@ export function LeadDeliveries({
                     <SendPartnerStoreButton
                         leadId={leadId}
                         sentStoreIds={sentIds}
-                        label="Send to store"
+                        label={shownStores.length ? "Send to other stores" : "Send to store"}
                         onSent={() => load()}
                     />
                 )}
             </div>
-            {loading ? (
+            {loading && shownStores.length === 0 ? (
                 <p className="text-sm text-muted-foreground">Loading…</p>
-            ) : activeRows.length === 0 ? (
+            ) : shownStores.length === 0 ? (
                 <p className="text-sm text-muted-foreground">Not sent yet.</p>
             ) : (
                 <ul className="space-y-2">
-                    {activeRows.map((row) => (
-                        <li key={row.id} className="flex items-start justify-between gap-2 text-sm">
+                    {shownStores.map((store) => (
+                        <li key={store.id} className="flex items-start justify-between gap-2 text-sm">
                             <span className="min-w-0">
-                                <span className="block font-medium truncate">{row.partner_store_name || "Store"}</span>
-                                <span className="block text-xs text-muted-foreground">
-                                    {statusLabel(row.status)}
-                                    {row.delivered_at
-                                        ? ` · ${formatDateInTimezone(row.delivered_at, timezone, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
-                                        : ""}
-                                    {row.sent_by_name ? ` · ${row.sent_by_name}` : ""}
+                                <span className="inline-flex max-w-full items-center gap-1.5 rounded-md bg-slate-100 px-2 py-1 text-sm font-medium text-slate-800">
+                                    <Store className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                                    <span className="truncate">{store.name}</span>
                                 </span>
+                                {store.row && (
+                                    <span className="mt-1 block text-xs text-muted-foreground">
+                                        {statusLabel(store.row.status)}
+                                        {store.row.delivered_at
+                                            ? ` · ${formatDateInTimezone(store.row.delivered_at, timezone, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
+                                            : ""}
+                                        {store.row.sent_by_name ? ` · ${store.row.sent_by_name}` : ""}
+                                    </span>
+                                )}
                             </span>
-                            {canManage && (
-                                <Button size="sm" variant="ghost" onClick={() => removeSend(row)} disabled={busy}>
+                            {canManage && store.row && (
+                                <Button size="sm" variant="ghost" onClick={() => removeSend(store.row as LeadDeliveryRow)} disabled={busy}>
                                     Remove
                                 </Button>
                             )}

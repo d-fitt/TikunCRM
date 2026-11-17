@@ -184,6 +184,22 @@ async def return_lead_delivery(
     if delivery.status in ("dead", "returned"):
         raise HTTPException(status_code=400, detail="Delivery is already closed")
     await return_delivery(db, delivery, body.note)
+    from app.models.lead_delivery import RELEASED_STATUSES
+
+    remaining = [
+        store_id
+        for store_id in (
+            await db.execute(
+                select(LeadDelivery.partner_store_id).where(
+                    LeadDelivery.lead_id == lead_id,
+                    LeadDelivery.status.notin_(list(RELEASED_STATUSES)),
+                )
+            )
+        ).scalars().all()
+    ]
+    if lead.partner_store_id not in remaining:
+        lead.partner_store_id = remaining[-1] if remaining else None
+        lead.partner_connected_at = delivery.updated_at if remaining else None
     rows = list(
         (
             await db.execute(

@@ -1990,32 +1990,58 @@ async def get_lead(
                 "name": dealership.name
             }
 
-    # Partner stores (included in lead detail — no extra client fan-out)
+    # Same stores the leads list shows: each active delivery, plus the legacy sent-to store.
+    from app.models.lead_delivery import RELEASED_STATUSES, LeadDelivery
+
+    sent_store_ids = []
+    for sent_store_id in (
+        await db.execute(
+            select(LeadDelivery.partner_store_id).where(
+                LeadDelivery.lead_id == lead.id,
+                LeadDelivery.status.notin_(list(RELEASED_STATUSES)),
+            )
+        )
+    ).scalars().all():
+        if sent_store_id not in sent_store_ids:
+            sent_store_ids.append(sent_store_id)
+    if getattr(lead, "partner_store_id", None) and lead.partner_store_id not in sent_store_ids:
+        sent_store_ids.append(lead.partner_store_id)
+
     partner_ids = [
         pid for pid in (
-            getattr(lead, "partner_store_id", None),
+            *sent_store_ids,
             getattr(lead, "sold_partner_store_id", None),
         ) if pid
     ]
+    partners = {}
     if partner_ids:
         partner_result = await db.execute(
             select(PartnerStore).where(PartnerStore.id.in_(partner_ids))
         )
         partners = {p.id: p for p in partner_result.scalars().all()}
-        sent = partners.get(lead.partner_store_id) if getattr(lead, "partner_store_id", None) else None
-        if sent:
-            response_data["partner_store"] = {
-                "id": sent.id,
-                "name": sent.name,
-                "brand": sent.brand,
-            }
-        sold = partners.get(lead.sold_partner_store_id) if getattr(lead, "sold_partner_store_id", None) else None
-        if sold:
-            response_data["sold_partner_store"] = {
-                "id": sold.id,
-                "name": sold.name,
-                "brand": sold.brand,
-            }
+    response_data["partner_sends"] = [
+        {"id": partners[store_id].id, "name": partners[store_id].name, "brand": partners[store_id].brand}
+        for store_id in sent_store_ids
+        if store_id in partners
+    ]
+    sent = partners.get(lead.partner_store_id) if getattr(lead, "partner_store_id", None) else None
+    if sent is None and response_data["partner_sends"]:
+        sent = partners.get(response_data["partner_sends"][-1]["id"])
+    if sent:
+        response_data["partner_store"] = {
+            "id": sent.id,
+            "name": sent.name,
+            "brand": sent.brand,
+        }
+        if not response_data.get("partner_store_id"):
+            response_data["partner_store_id"] = sent.id
+    sold = partners.get(lead.sold_partner_store_id) if getattr(lead, "sold_partner_store_id", None) else None
+    if sold:
+        response_data["sold_partner_store"] = {
+            "id": sold.id,
+            "name": sold.name,
+            "brand": sold.brand,
+        }
 
     # Primary campaign mapping (targeting message shown near source on lead detail)
     mapping = None

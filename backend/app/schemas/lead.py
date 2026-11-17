@@ -266,6 +266,7 @@ class LeadResponse(BaseModel):
     partner_store_id: Optional[UUID] = None
     partner_connected_at: Optional[datetime] = None
     partner_store: Optional[PartnerStoreBrief] = None
+    partner_sends: List[PartnerStoreBrief] = Field(default_factory=list)
     sold_partner_store_id: Optional[UUID] = None
     sold_partner_store: Optional[PartnerStoreBrief] = None
     campaign_mapping_id: Optional[UUID] = None

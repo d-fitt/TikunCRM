@@ -234,7 +234,7 @@ function PartnerStoreCell({
                     leadId={lead.id}
                     sentStoreIds={sentStoreIds(lead)}
                     onSent={onSent}
-                    label={names.length ? "Add store" : "Send to store"}
+                    label={names.length ? "Send to other stores" : "Send to store"}
                 />
             )}
         </div>

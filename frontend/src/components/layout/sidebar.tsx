@@ -620,7 +620,7 @@ export function Sidebar() {
                                         title={item.name}
                                         className={cn(
                                             "relative flex items-center justify-center rounded-md py-2 text-sm font-medium transition-colors hover:bg-accent",
-                                            sectionActive ? "bg-primary/10 text-primary" : "text-muted-foreground"
+                                            sectionActive ? "bg-accent text-accent-foreground" : "text-muted-foreground"
                                         )}
                                     >
                                         <item.icon className="h-4 w-4 shrink-0" />
@@ -641,7 +641,7 @@ export function Sidebar() {
                                         className={cn(
                                             "group relative flex w-full items-center rounded-md py-2 text-sm font-medium transition-colors hover:bg-accent",
                                             "justify-between px-3",
-                                            sectionActive ? "bg-primary/10 text-primary" : "text-muted-foreground"
+                                            sectionActive ? "bg-accent text-accent-foreground" : "text-muted-foreground"
                                         )}
                                     >
                                         <div className="flex items-center min-w-0">
@@ -674,11 +674,11 @@ export function Sidebar() {
                                                         href={child.href}
                                                         className={cn(
                                                             "flex items-center justify-between rounded-md py-1.5 pl-2 pr-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground",
-                                                            active ? "bg-primary text-primary-foreground font-medium" : "text-muted-foreground"
+                                                            active ? "bg-accent text-accent-foreground font-medium" : "text-muted-foreground"
                                                         )}
                                                     >
                                                         <div className="flex items-center min-w-0">
-                                                            <child.icon className={cn("h-3.5 w-3.5 shrink-0 mr-2", active ? "text-primary-foreground" : "text-muted-foreground")} />
+                                                            <child.icon className={cn("h-3.5 w-3.5 shrink-0 mr-2", active ? "text-primary" : "text-muted-foreground")} />
                                                             <span className="truncate">{child.name}</span>
                                                         </div>
                                                         {(child as any).badge > 0 && (

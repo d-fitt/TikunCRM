@@ -2676,6 +2676,13 @@ export default function LeadDetailsPage() {
                             <LeadDeliveries
                                 leadId={lead.id}
                                 canManage={Boolean(!isMentionOnly && canConnectToPartner)}
+                                knownStores={
+                                    lead.partner_sends?.length
+                                        ? lead.partner_sends
+                                        : lead.partner_store
+                                          ? [lead.partner_store]
+                                          : []
+                                }
                                 onStoresChange={setSentPartnerStoreIds}
                             />
 
