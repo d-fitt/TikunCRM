@@ -149,6 +149,19 @@ def ensure_partner_schema(conn) -> None:
             inventory_type VARCHAR(20) NOT NULL
         )
     """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS lead_delivery_mailbox (
+            id UUID PRIMARY KEY,
+            smtp_host VARCHAR(255) NOT NULL DEFAULT 'smtp.office365.com',
+            smtp_port INTEGER NOT NULL DEFAULT 587,
+            smtp_user VARCHAR(255) NOT NULL DEFAULT '',
+            smtp_password_encrypted TEXT NOT NULL DEFAULT '',
+            use_tls BOOLEAN NOT NULL DEFAULT true,
+            use_ssl BOOLEAN NOT NULL DEFAULT false,
+            from_name VARCHAR(255) NOT NULL DEFAULT 'Carvaminos',
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """))
 
 
 def main() -> int:

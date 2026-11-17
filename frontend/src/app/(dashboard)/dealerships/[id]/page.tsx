@@ -62,7 +62,6 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { DealershipService, Dealership, UpdateDealershipData, DealershipTwilioConfig, DealershipTwilioConfigUpdate } from "@/services/dealership-service"
-import { DealershipEmailService, EmailConfigStatus, DealershipEmailConfigCreate } from "@/services/dealership-email-service"
 import { TeamService, UserWithStats, CreateUserData, UpdateUserData } from "@/services/team-service"
 import { LeadStageService, LeadStage } from "@/services/lead-stage-service"
 import { useRole } from "@/hooks/use-role"
@@ -100,8 +99,6 @@ export default function DealershipDetailPage() {
     const [twilioForm, setTwilioForm] = React.useState<DealershipTwilioConfigUpdate>({})
     const [isLoadingTwilio, setIsLoadingTwilio] = React.useState(false)
     const [isSavingTwilio, setIsSavingTwilio] = React.useState(false)
-    const [emailStatus, setEmailStatus] = React.useState<EmailConfigStatus | null>(null)
-    const [isLoadingEmail, setIsLoadingEmail] = React.useState(false)
     const [configAccessStatus, setConfigAccessStatus] = React.useState<{
         eligible: boolean
         config_access_password_set: boolean
@@ -213,20 +210,6 @@ export default function DealershipDetailPage() {
         }
     }, [dealershipId, applyTwilioFromServer, toast])
 
-    // Load email status
-    const loadEmailStatus = React.useCallback(async () => {
-        if (!dealershipId) return
-        setIsLoadingEmail(true)
-        try {
-            const status = await DealershipEmailService.getStatus(dealershipId)
-            setEmailStatus(status)
-        } catch (error) {
-            console.error("Failed to load email status:", error)
-        } finally {
-            setIsLoadingEmail(false)
-        }
-    }, [dealershipId])
-
     // Load team members
     const loadTeam = React.useCallback(async () => {
         if (!dealershipId) return
@@ -258,7 +241,6 @@ export default function DealershipDetailPage() {
     // Handle tab changes (Twilio requires configuration-access password + unlock token)
     React.useEffect(() => {
         if (activeTab === "communication") {
-            loadEmailStatus()
             getConfigAccessStatus()
                 .then((s) => {
                     setConfigAccessStatus(s)
@@ -288,7 +270,7 @@ export default function DealershipDetailPage() {
         } else if (activeTab === "settings") {
             loadStages()
         }
-    }, [activeTab, loadTwilioConfig, loadEmailStatus, loadTeam, loadStages])
+    }, [activeTab, loadTwilioConfig, loadTeam, loadStages])
 
     // Save dealership info
     const handleSaveDealership = async () => {
@@ -1139,60 +1121,6 @@ export default function DealershipDetailPage() {
                         </CardContent>
                     </Card>
 
-                    {/* Email Configuration */}
-                    <Card>
-                        <CardHeader>
-                            <div className="flex items-center gap-2">
-                                <Mail className="h-5 w-5 text-primary" />
-                                <CardTitle>Email Configuration</CardTitle>
-                            </div>
-                            <CardDescription>
-                                SMTP/IMAP configuration for sending and receiving emails. Mailbox passwords are stored
-                                encrypted in the database and are not returned by the API after save.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            {isLoadingEmail ? (
-                                <div className="flex justify-center py-4">
-                                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                                </div>
-                            ) : emailStatus?.has_config ? (
-                                <div className="space-y-4">
-                                    <div className="flex items-center gap-4">
-                                        <Badge variant={emailStatus.is_verified ? "default" : "secondary"}>
-                                            {emailStatus.is_verified ? "Verified" : "Not Verified"}
-                                        </Badge>
-                                        <Badge variant={emailStatus.is_active ? "default" : "destructive"}>
-                                            {emailStatus.is_active ? "Active" : "Inactive"}
-                                        </Badge>
-                                    </div>
-                                    {emailStatus.smtp_host && (
-                                        <p className="text-sm text-muted-foreground">
-                                            SMTP Host: {emailStatus.smtp_host}
-                                        </p>
-                                    )}
-                                    <Button
-                                        variant="outline"
-                                        onClick={() => router.push(`/settings/dealership-email?dealership_id=${dealershipId}`)}
-                                    >
-                                        Manage Email Settings
-                                    </Button>
-                                </div>
-                            ) : (
-                                <div className="text-center py-6">
-                                    <Mail className="h-12 w-12 mx-auto text-muted-foreground/20" />
-                                    <p className="mt-2 text-sm text-muted-foreground">No email configuration</p>
-                                    <Button
-                                        variant="outline"
-                                        className="mt-4"
-                                        onClick={() => router.push(`/settings/dealership-email?dealership_id=${dealershipId}`)}
-                                    >
-                                        Configure Email
-                                    </Button>
-                                </div>
-                            )}
-                        </CardContent>
-                    </Card>
                 </TabsContent>
 
                 {/* Team Tab */}

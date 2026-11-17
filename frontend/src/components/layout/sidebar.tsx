@@ -17,15 +17,13 @@ import {
     ChevronDown,
     Sparkles,
     LayoutDashboard,
-    Share2,
-    UserPlus,
     InboxIcon,
     ClipboardList,
     ClipboardCheck,
     Bell,
     MessageSquare,
     MessageCircle,
-    Phone,
+    Layers,
     MessagesSquare,
     Store,
     Contact,
@@ -55,6 +53,8 @@ interface SidebarLink {
     name: string
     icon: React.ComponentType<{ className?: string }>
     href: string
+    roles?: UserRole[]
+    badge?: string | number
 }
 
 interface SidebarItem {
@@ -75,44 +75,23 @@ const allSidebarItems: SidebarItem[] = [
         href: "/dashboard" 
     },
     {
-        name: "Time & Pay",
-        icon: Timer,
-        href: "/time-tracking",
-        roles: ["bdc", "super_admin", "dealership_admin", "dealership_owner"],
-    },
-    {
-        name: "Leads", 
-        icon: Inbox, 
-        href: "/leads" 
+        name: "Leads",
+        icon: Inbox,
+        children: [
+            { name: "All leads", icon: Inbox, href: "/leads" },
+            { name: "Unassigned", icon: InboxIcon, href: "/leads?filter=unassigned" },
+            {
+                name: "Manager review",
+                icon: ClipboardCheck,
+                href: "/leads?filter=manager_review",
+                roles: ["super_admin", "dealership_admin", "dealership_owner"],
+            },
+        ],
     },
     {
         name: "Customers",
         icon: Contact,
         href: "/customers",
-    },
-    { 
-        name: "Unassigned Pool", 
-        icon: InboxIcon, 
-        href: "/leads?filter=unassigned",
-        roles: undefined  // Visible to all users
-    },
-    {
-        name: "Manager review",
-        icon: ClipboardCheck,
-        href: "/leads?filter=manager_review",
-        roles: ["super_admin", "dealership_admin", "dealership_owner"]
-    },
-    { 
-        name: "Team", 
-        icon: Users, 
-        href: "/team",
-        roles: ["super_admin", "dealership_admin", "dealership_owner"]  // Not for Salesperson
-    },
-    { 
-        name: "Schedules", 
-        icon: Calendar, 
-        href: "/schedules",
-        roles: ["super_admin", "dealership_admin", "dealership_owner"]
     },
     { 
         name: "Appointments", 
@@ -137,11 +116,6 @@ const allSidebarItems: SidebarItem[] = [
         href: "/follow-ups" 
     },
     {
-        name: "Tasks",
-        icon: ClipboardCheck,
-        href: "/tasks"
-    },
-    {
         name: "Conversations",
         icon: MessagesSquare,
         children: [
@@ -151,10 +125,35 @@ const allSidebarItems: SidebarItem[] = [
         ],
     },
     {
-        name: "Auto WhatsApp",
-        icon: Send,
-        href: "/auto-whatsapp",
-        roles: ["super_admin", "dealership_admin", "dealership_owner"],
+        name: "More",
+        icon: Layers,
+        children: [
+            {
+                name: "Team",
+                icon: Users,
+                href: "/team",
+                roles: ["super_admin", "dealership_admin", "dealership_owner"],
+            },
+            {
+                name: "Schedules",
+                icon: Calendar,
+                href: "/schedules",
+                roles: ["super_admin", "dealership_admin", "dealership_owner"],
+            },
+            { name: "Tasks", icon: ClipboardCheck, href: "/tasks" },
+            {
+                name: "Time & Pay",
+                icon: Timer,
+                href: "/time-tracking",
+                roles: ["bdc", "super_admin", "dealership_admin", "dealership_owner"],
+            },
+            {
+                name: "Auto WhatsApp",
+                icon: Send,
+                href: "/auto-whatsapp",
+                roles: ["super_admin", "dealership_admin", "dealership_owner"],
+            },
+        ],
     },
     { 
         name: "Notifications", 
@@ -174,26 +173,25 @@ const allSidebarItems: SidebarItem[] = [
         ],
     },
     { 
-        name: "Integrations", 
-        icon: Share2, 
-        href: "/integrations",
-        roles: ["super_admin", "dealership_admin", "dealership_owner"]  // Manager can manage integrations
-    },
-    { 
         name: "Settings", 
         icon: Settings, 
         href: "/settings" 
     },
 ]
 
+function visibleToRole(roles: UserRole[] | undefined, role: UserRole): boolean {
+    return !roles || roles.includes(role)
+}
+
 function getSidebarItemsForRole(role: UserRole | null): SidebarItem[] {
     if (!role) return []
-    
-    return allSidebarItems.filter(item => {
-        // If no roles specified, visible to all
-        if (!item.roles) return true
-        // Check if user's role is in the allowed roles
-        return item.roles.includes(role)
+
+    return allSidebarItems.flatMap((item) => {
+        if (!visibleToRole(item.roles, role)) return []
+        if (!item.children) return [item]
+        const children = item.children.filter((child) => visibleToRole(child.roles, role))
+        if (children.length === 0) return []
+        return [{ ...item, children }]
     })
 }
 
@@ -470,15 +468,24 @@ export function Sidebar() {
     const isReportsSectionActive = reportPaths.some(
         (p) => pathname === p || pathname.startsWith(`${p}/`)
     )
-    const [expandedGroup, setExpandedGroup] = React.useState<string | null>(() =>
-        isConversationsActive ? "Conversations" : null
+    const morePaths = ["/team", "/schedules", "/tasks", "/time-tracking", "/auto-whatsapp"]
+    const isMoreSectionActive = morePaths.some(
+        (p) => pathname === p || pathname.startsWith(`${p}/`)
     )
+    const isLeadsSectionActive = pathname === "/leads" || pathname.startsWith("/leads/")
+    const activeGroup = isConversationsActive
+        ? "Conversations"
+        : isReportsSectionActive
+            ? "Reports"
+            : isLeadsSectionActive
+                ? "Leads"
+                : isMoreSectionActive
+                    ? "More"
+                    : null
+    const [expandedGroup, setExpandedGroup] = React.useState<string | null>(activeGroup)
     React.useEffect(() => {
-        if (isConversationsActive) setExpandedGroup("Conversations")
-    }, [isConversationsActive])
-    React.useEffect(() => {
-        if (isReportsSectionActive) setExpandedGroup("Reports")
-    }, [isReportsSectionActive])
+        if (activeGroup) setExpandedGroup(activeGroup)
+    }, [activeGroup])
 
     // Build sidebar items with dynamic badges
     const sidebarItems = React.useMemo(() => {
@@ -490,30 +497,28 @@ export function Sidebar() {
             if (!item.children && item.href === "/follow-ups" && badgeCounts.followUps > 0) {
                 return { ...item, badge: badgeCounts.followUps }
             }
-            if (!item.children && item.href === "/leads?filter=unassigned" && badgeCounts.unassigned > 0) {
-                return { ...item, badge: badgeCounts.unassigned }
-            }
-            if (!item.children && item.href === "/leads?filter=manager_review" && badgeCounts.managerReview > 0) {
-                return { ...item, badge: badgeCounts.managerReview }
-            }
             if (!item.children && item.href === "/notifications" && badgeCounts.notifications > 0) {
                 return { ...item, badge: badgeCounts.notifications }
             }
-            // Handle child items (e.g., WhatsApp in Conversations group)
             if (item.children) {
                 const updatedChildren = item.children.map(child => {
                     if (child.href === "/whatsapp" && badgeCounts.whatsappUnread > 0) {
                         return { ...child, badge: badgeCounts.whatsappUnread }
                     }
+                    if (child.href === "/leads?filter=unassigned" && badgeCounts.unassigned > 0) {
+                        return { ...child, badge: badgeCounts.unassigned }
+                    }
+                    if (child.href === "/leads?filter=manager_review" && badgeCounts.managerReview > 0) {
+                        return { ...child, badge: badgeCounts.managerReview }
+                    }
                     return child
                 })
-                const totalChildBadge = badgeCounts.whatsappUnread
+                const totalChildBadge = updatedChildren.reduce((sum, child) => sum + (Number(child.badge) || 0), 0)
                 const isExpanded = expandedGroup === item.name
-                // Show badge on parent only when collapsed, on children when expanded
-                return { 
-                    ...item, 
-                    children: updatedChildren, 
-                    badge: (!isExpanded && totalChildBadge > 0) ? totalChildBadge : undefined 
+                return {
+                    ...item,
+                    children: updatedChildren,
+                    badge: (!isExpanded && totalChildBadge > 0) ? totalChildBadge : undefined,
                 }
             }
             return item
@@ -599,29 +604,28 @@ export function Sidebar() {
                     {sidebarItems.map((item) => {
                         if (item.children) {
                             const isOpen = expandedGroup === item.name
-                            const isChildActive = item.children.some(
-                                c => pathname === c.href || (c.href !== "/dashboard" && pathname.startsWith(c.href))
+                            const isChildActive = item.children.some((child) =>
+                                isSidebarLinkActive(pathname, searchParams, child.href)
                             )
                             if (collapsed) {
+                                const first = item.children[0]
                                 return (
-                                    <div key={item.name} className="space-y-1">
-                                        {item.children.map((child) => {
-                                            const active = pathname === child.href || pathname.startsWith(child.href + "/")
-                                            return (
-                                                <Link
-                                                    key={child.href}
-                                                    href={child.href}
-                                                    title={child.name}
-                                                    className={cn(
-                                                        "flex items-center justify-center rounded-md py-2 text-sm font-medium transition-colors hover:bg-accent",
-                                                        active ? "bg-accent text-accent-foreground" : "text-muted-foreground"
-                                                    )}
-                                                >
-                                                    <child.icon className="h-4 w-4 shrink-0" />
-                                                </Link>
-                                            )
-                                        })}
-                                    </div>
+                                    <Link
+                                        key={item.name}
+                                        href={first.href}
+                                        title={item.name}
+                                        className={cn(
+                                            "relative flex items-center justify-center rounded-md py-2 text-sm font-medium transition-colors hover:bg-accent",
+                                            isChildActive ? "bg-accent text-accent-foreground" : "text-muted-foreground"
+                                        )}
+                                    >
+                                        <item.icon className="h-4 w-4 shrink-0" />
+                                        {item.badge && (
+                                            <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-bold text-primary-foreground">
+                                                {item.badge}
+                                            </span>
+                                        )}
+                                    </Link>
                                 )
                             }
                             return (
@@ -645,14 +649,21 @@ export function Sidebar() {
                                             />
                                             <span className="truncate">{item.name}</span>
                                         </div>
-                                        <ChevronDown
-                                            className={cn("h-4 w-4 shrink-0 transition-transform", isOpen && "rotate-180")}
-                                        />
+                                        <span className="flex items-center gap-2">
+                                            {item.badge && (
+                                                <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
+                                                    {item.badge}
+                                                </span>
+                                            )}
+                                            <ChevronDown
+                                                className={cn("h-4 w-4 shrink-0 transition-transform", isOpen && "rotate-180")}
+                                            />
+                                        </span>
                                     </button>
                                     {isOpen && (
                                         <div className="ml-4 space-y-0.5 border-l border-border pl-2">
                                             {item.children.map((child) => {
-                                                const active = pathname === child.href || pathname.startsWith(child.href + "/")
+                                                const active = isSidebarLinkActive(pathname, searchParams, child.href)
                                                 return (
                                                     <Link
                                                         key={child.href}

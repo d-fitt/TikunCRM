@@ -66,6 +66,7 @@ from app.models.partner_store_recipient import PartnerStoreRecipient
 from app.models.partner_store_channel import PartnerStoreChannel
 from app.models.partner_inventory import PartnerInventorySource, PartnerInventoryUrl
 from app.models.lead_delivery import LeadDelivery
+from app.models.lead_delivery_mailbox import LeadDeliveryMailbox
 from app.models.partner_bdc_agent import PartnerBdcAgent
 from app.models.partner_portal_user import PartnerPortalUser
 from app.models.time_entry import TimeEntry

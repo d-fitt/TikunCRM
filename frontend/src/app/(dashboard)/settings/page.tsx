@@ -10,7 +10,6 @@ import {
     Shield, 
     Palette,
     ChevronRight,
-    FileText,
     Send,
     FolderOpen,
     Database,
@@ -41,19 +40,6 @@ const settingsSections: SettingSection[] = [
         href: "/settings/email-config",
         icon: Send,
         highlight: true,
-    },
-    {
-        title: "Email Templates",
-        description: "Create and manage reusable email templates",
-        href: "/settings/email-templates",
-        icon: FileText,
-    },
-    {
-        title: "Dealership Email",
-        description: "Configure the dealership-wide email account for outbound mail",
-        href: "/settings/dealership-email",
-        icon: Send,
-        adminOnly: true,
     },
     {
         title: "WhatsApp Templates",
@@ -107,6 +93,13 @@ const settingsSections: SettingSection[] = [
         description: "Configure Google Sheets and other lead import sources",
         href: "/settings/sync-sources",
         icon: Database,
+        superAdminOnly: true,
+    },
+    {
+        title: "Lead delivery email",
+        description: "Microsoft mailbox that sends a lead to a partner store",
+        href: "/settings/lead-delivery-email",
+        icon: Mail,
         superAdminOnly: true,
     },
     {

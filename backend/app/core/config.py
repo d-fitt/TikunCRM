@@ -138,6 +138,17 @@ class Settings(BaseSettings):
     # Default sender (used when sending on behalf of users)
     email_from_address: str = ""  # e.g., noreply@yourcompany.com
     email_from_name: str = "TikunCRM"
+
+    # Partner-store lead delivery. Separate mailbox from TikunCRM notifications.
+    # Microsoft 365: smtp.office365.com, port 587, STARTTLS.
+    # Outlook.com / Hotmail / Live: smtp-mail.outlook.com, port 587, STARTTLS.
+    lead_delivery_smtp_host: str = "smtp.office365.com"
+    lead_delivery_smtp_port: int = 587
+    lead_delivery_smtp_user: str = ""
+    lead_delivery_smtp_password: str = ""
+    lead_delivery_smtp_use_tls: bool = True
+    lead_delivery_smtp_use_ssl: bool = False
+    lead_delivery_from_name: str = "Carvaminos"
     
     # SendGrid (Recommended for production)
     sendgrid_api_key: str = ""

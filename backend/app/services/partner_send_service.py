@@ -197,50 +197,60 @@ async def send_lead_to_stores(
 
     fresh = [item for item in results if item.status == "sent"]
     if fresh:
-        await _email_stores(fresh, by_id, customer, user, lead)
+        await _email_stores(db, fresh, by_id, customer, user, lead)
     return results
 
 
 async def _email_stores(
+    db: AsyncSession,
     results: list[StoreSendResult],
     stores: dict,
     customer: Optional[Customer],
     user: User,
     lead: Lead,
 ) -> None:
-    from app.services.email_notifier import EmailNotifier
+    import asyncio
 
-    notifier = EmailNotifier()
-    customer_name = customer.full_name if customer else "Customer"
-    phone = customer.phone if customer else ""
-    email = customer.email if customer else ""
-    sender = f"{user.first_name} {user.last_name}".strip() or user.email
-    interest = lead.interested_in or ""
+    from app.services.partner_lead_email import (
+        build_partner_lead_email,
+        resolve_delivery_mailbox,
+        send_partner_lead_email_sync,
+    )
+
+    mailbox = await resolve_delivery_mailbox(db)
+    if not mailbox.ready:
+        for item in results:
+            if item.recipients:
+                item.email_error = "The lead was saved. The lead-delivery mailbox is not configured yet."
+            else:
+                item.email_error = "This store has no recipient emails."
+        return
 
     for item in results:
         if not item.recipients:
             item.email_error = "This store has no recipient emails."
             continue
         store = stores[item.partner_store_id]
-        opt_in = "Leads + BDC" if item.program_type == "full_bdc" else "Leads only"
-        message = (
-            f"A lead was sent to {store.name}.\n\n"
-            f"Customer: {customer_name}\n"
-            f"Phone: {phone or '—'}\n"
-            f"Email: {email or '—'}\n"
-            f"Interested in: {interest or '—'}\n"
-            f"Sent by: {sender}\n"
-            f"Opt-in: {opt_in}"
+        subject, body_text, body_html = build_partner_lead_email(
+            store=store,
+            customer=customer,
+            user=user,
+            lead=lead,
+            program_type=item.program_type,
+            sent_at=lead.partner_connected_at,
+            from_name=mailbox.from_name,
         )
         emailed = []
         errors = []
         for address in item.recipients:
             try:
-                ok = await notifier.send_notification_email(
-                    to_email=address,
-                    to_name=store.name,
-                    subject=f"New lead for {store.name}",
-                    message=message,
+                ok = await asyncio.to_thread(
+                    send_partner_lead_email_sync,
+                    mailbox,
+                    address,
+                    subject,
+                    body_text,
+                    body_html,
                 )
                 if ok:
                     emailed.append(address)
