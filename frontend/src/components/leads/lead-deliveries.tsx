@@ -148,7 +148,7 @@ export function SendPartnerStoreButton({
         { label: "Has business", value: yesNoLabel(business) },
         { label: "Has SSN", value: hasSsn === "yes" ? "Yes" : "" },
         { label: "Has license", value: hasDl === "yes" ? "Yes" : "" },
-    ]
+    ].filter((row) => row.value)
 
     async function openPicker(event: React.MouseEvent) {
         event.stopPropagation()
@@ -276,16 +276,20 @@ export function SendPartnerStoreButton({
                                         <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-stone-400">Email preview</p>
                                         <p className="mt-1 text-lg font-semibold">{leadName(lead)}</p>
                                     </div>
-                                    <dl className="divide-y px-5">
-                                        {previewRows.map((row) => (
-                                            <div key={row.label} className="grid grid-cols-[132px_minmax(0,1fr)] items-baseline gap-3 py-2.5">
-                                                <dt className="text-sm text-muted-foreground">{row.label}</dt>
-                                                <dd className={cn("text-sm", row.value ? "font-medium" : "text-muted-foreground")}>
-                                                    {row.value || "Left off the email"}
-                                                </dd>
-                                            </div>
-                                        ))}
-                                    </dl>
+                                    {previewRows.length === 0 ? (
+                                        <p className="px-5 py-4 text-sm text-muted-foreground">
+                                            Details show here as you fill them in.
+                                        </p>
+                                    ) : (
+                                        <dl className="divide-y px-5">
+                                            {previewRows.map((row) => (
+                                                <div key={row.label} className="grid grid-cols-[132px_minmax(0,1fr)] items-baseline gap-3 py-2.5">
+                                                    <dt className="text-sm text-muted-foreground">{row.label}</dt>
+                                                    <dd className="text-sm font-medium">{row.value}</dd>
+                                                </div>
+                                            ))}
+                                        </dl>
+                                    )}
                                 </section>
 
                                 <section className="space-y-2">
