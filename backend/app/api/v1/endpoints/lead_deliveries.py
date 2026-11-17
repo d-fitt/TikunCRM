@@ -44,9 +44,13 @@ class SendToStoresRequest(BaseModel):
     partner_store_ids: List[UUID] = Field(default_factory=list)
     postal_code: Optional[str] = Field(None, max_length=20)
     email: Optional[str] = Field(None, max_length=255)
+    city: Optional[str] = Field(None, max_length=100)
+    state: Optional[str] = Field(None, max_length=100)
     down_payment: Optional[Decimal] = None
     is_business: Optional[bool] = None
     interested_in: Optional[str] = Field(None, max_length=255)
+    interested_brand: Optional[str] = Field(None, max_length=100)
+    budget_range: Optional[str] = Field(None, max_length=100)
 
 
 class StoreSendResponse(BaseModel):
@@ -148,11 +152,15 @@ async def send_lead_to_partner_stores(
             SendDetails(
                 postal_code=(body.postal_code or "") if "postal_code" in provided else None,
                 email=(body.email or "") if "email" in provided else None,
+                city=(body.city or "") if "city" in provided else None,
+                state=(body.state or "") if "state" in provided else None,
                 down_payment=body.down_payment if "down_payment" in provided and body.down_payment is not None else None,
                 clear_down_payment="down_payment" in provided and body.down_payment is None,
                 is_business=body.is_business if "is_business" in provided else None,
                 clear_business="is_business" in provided and body.is_business is None,
                 interested_in=(body.interested_in or "") if "interested_in" in provided else None,
+                interested_brand=(body.interested_brand or "") if "interested_brand" in provided else None,
+                budget_range=(body.budget_range or "") if "budget_range" in provided else None,
             ),
         )
     except SendError as exc:

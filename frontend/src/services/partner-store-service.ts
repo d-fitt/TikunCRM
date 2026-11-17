@@ -275,18 +275,26 @@ export const PartnerStoreService = {
         details?: {
             postal_code?: string
             email?: string
+            city?: string
+            state?: string
             down_payment?: number
-            is_business?: boolean
+            is_business?: boolean | null
             interested_in?: string
+            interested_brand?: string
+            budget_range?: string
         },
     ): Promise<{ lead_id: string; results: StoreSendResult[] }> {
         const response = await apiClient.post(`/leads/${leadId}/send-to-partner-stores`, {
             partner_store_ids: partnerStoreIds,
             postal_code: details?.postal_code || null,
             email: details?.email || null,
+            city: details?.city || null,
+            state: details?.state || null,
             down_payment: details?.down_payment ?? null,
-            is_business: details?.is_business ?? null,
+            is_business: details && "is_business" in details ? details.is_business : null,
             interested_in: details?.interested_in || null,
+            interested_brand: details?.interested_brand || null,
+            budget_range: details?.budget_range || null,
         })
         return response.data
     },

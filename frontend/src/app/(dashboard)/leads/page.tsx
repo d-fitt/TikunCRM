@@ -508,6 +508,10 @@ export default function LeadsPage() {
 
     const handleLeadActivation = React.useCallback(
         (lead: Lead, e?: React.MouseEvent) => {
+            const target = e?.target
+            if (target instanceof Element && target.closest("[role='dialog'], [data-slot='dialog-overlay']")) {
+                return
+            }
             if (e && (e.metaKey || e.ctrlKey)) {
                 rememberLeadsListLocation()
                 window.open(`/leads/${lead.id}`, "_blank", "noopener,noreferrer")
@@ -1852,8 +1856,12 @@ export default function LeadsPage() {
                                         arrival === "duplicate" && "bg-amber-50 hover:!bg-amber-100/90 dark:bg-amber-950/40 dark:hover:!bg-amber-950/60 shadow-[inset_3px_0_0_0_#d97706]",
                                         arrival == null && "hover:bg-muted/30",
                                     )}
-                                    onClick={(e) => handleLeadActivation(lead, e)}
+                                    onClick={(e) => {
+                                        if (e.target instanceof Node && !e.currentTarget.contains(e.target)) return
+                                        handleLeadActivation(lead, e)
+                                    }}
                                     onAuxClick={(e) => {
+                                        if (e.target instanceof Node && !e.currentTarget.contains(e.target)) return
                                         if (e.button === 1) {
                                             e.preventDefault()
                                             window.open(`/leads/${lead.id}`, "_blank", "noopener,noreferrer")

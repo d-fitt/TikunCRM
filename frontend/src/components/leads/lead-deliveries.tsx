@@ -21,6 +21,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import { useToast } from "@/hooks/use-toast"
+import { cn } from "@/lib/utils"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 
@@ -53,6 +54,15 @@ function leadName(lead: Lead | null) {
     return name || "This lead"
 }
 
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+    return (
+        <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-muted-foreground">{label}</Label>
+            {children}
+        </div>
+    )
+}
+
 export function SendPartnerStoreButton({
     leadId,
     sentStoreIds = [],
@@ -74,9 +84,13 @@ export function SendPartnerStoreButton({
     const [lead, setLead] = React.useState<Lead | null>(null)
     const [postalCode, setPostalCode] = React.useState("")
     const [email, setEmail] = React.useState("")
+    const [city, setCity] = React.useState("")
+    const [state, setState] = React.useState("")
     const [downPayment, setDownPayment] = React.useState("")
-    const [business, setBusiness] = React.useState("")
     const [lookingFor, setLookingFor] = React.useState("")
+    const [brand, setBrand] = React.useState("")
+    const [budget, setBudget] = React.useState("")
+    const [business, setBusiness] = React.useState<"" | "yes" | "no">("")
     const alreadySent = React.useMemo(() => new Set(sentStoreIds), [sentStoreIds])
 
     async function openPicker(event: React.MouseEvent) {
@@ -92,9 +106,13 @@ export function SendPartnerStoreButton({
             setLead(row)
             setPostalCode(row.customer?.postal_code || "")
             setEmail(row.customer?.email || "")
+            setCity(row.customer?.city || "")
+            setState(row.customer?.state || "")
             setDownPayment(row.down_payment != null ? String(row.down_payment) : "")
-            setBusiness(row.is_business == null ? "" : row.is_business ? "yes" : "no")
             setLookingFor(row.interested_in || "")
+            setBrand(row.interested_brand || "")
+            setBudget(row.budget_range || "")
+            setBusiness(row.is_business == null ? "" : row.is_business ? "yes" : "no")
         } catch {
             toast({ title: "Could not load partner stores", variant: "destructive" })
         }
@@ -121,11 +139,15 @@ export function SendPartnerStoreButton({
                 return
             }
             const result = await PartnerStoreService.sendLead(leadId, fresh, {
-                postal_code: postalCode.trim() || undefined,
-                email: email.trim() || undefined,
+                postal_code: postalCode.trim(),
+                email: email.trim(),
+                city: city.trim(),
+                state: state.trim(),
                 down_payment: parsedDown,
-                is_business: business === "" ? undefined : business === "yes",
-                interested_in: lookingFor.trim() || undefined,
+                is_business: business === "" ? null : business === "yes",
+                interested_in: lookingFor.trim(),
+                interested_brand: brand.trim(),
+                budget_range: budget.trim(),
             })
             const sent = result.results.filter((item) => item.status === "sent")
             const warning = result.results.find((item) => item.email_error)?.email_error
@@ -171,82 +193,106 @@ export function SendPartnerStoreButton({
                 </Button>
             )}
             <Dialog open={open} onOpenChange={setOpen}>
-                <DialogContent className="flex max-h-[min(80vh,720px)] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
+                <DialogContent className="flex max-h-[min(86vh,760px)] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
                     <DialogHeader className="border-b px-6 py-4">
                         <DialogTitle>Send to partner store</DialogTitle>
                         <DialogDescription>
-                            Pick one or more stores. Each store is emailed on its own.
+                            Choose the stores. Filled details are saved on the lead and included in the email.
                         </DialogDescription>
                     </DialogHeader>
-                    <div className="space-y-4 overflow-y-auto px-6 py-4">
-                        <div>
-                            <p className="text-sm font-medium">{leadName(lead)}</p>
+                    <div className="space-y-5 overflow-y-auto px-6 py-5">
+                        <div className="rounded-lg bg-muted/50 px-3 py-2.5">
+                            <p className="text-sm font-semibold">{leadName(lead)}</p>
                             <p className="text-sm text-muted-foreground">{formatUsPhone(lead?.customer?.phone) || "No phone yet"}</p>
                         </div>
-                        {stores.length === 0 && (
-                            <p className="text-sm text-muted-foreground">No active partner stores.</p>
-                        )}
-                        {stores.map((store) => {
-                            const locked = alreadySent.has(store.id)
-                            return (
-                                <label
-                                    key={store.id}
-                                    className="flex items-start gap-2 rounded-md px-1 py-2 hover:bg-muted/60"
-                                >
-                                    <input
-                                        type="checkbox"
-                                        className="mt-1"
-                                        checked={selected.includes(store.id)}
-                                        disabled={locked}
-                                        onChange={() => toggle(store.id)}
-                                    />
-                                    <span className="min-w-0">
-                                        <span className="block text-sm font-medium">{store.name}</span>
-                                        <span className="block text-xs text-muted-foreground">
-                                            {optInLabel(store.program_type)}
-                                            {rangeLabel(store) ? ` · ${rangeLabel(store)}` : ""}
-                                            {locked ? " · Already sent" : ""}
-                                        </span>
-                                    </span>
-                                </label>
-                            )
-                        })}
-                        <div className="space-y-3 border-t pt-4">
+                        <div className="space-y-2">
+                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Stores</p>
+                            {stores.length === 0 && (
+                                <p className="text-sm text-muted-foreground">No active partner stores.</p>
+                            )}
+                            <div className="space-y-1.5">
+                                {stores.map((store) => {
+                                    const locked = alreadySent.has(store.id)
+                                    const checked = selected.includes(store.id)
+                                    return (
+                                        <label
+                                            key={store.id}
+                                            className={cn(
+                                                "flex items-center gap-3 rounded-lg border px-3 py-2.5",
+                                                locked ? "bg-muted/40 text-muted-foreground" : "cursor-pointer hover:bg-muted/40",
+                                                checked && !locked && "border-primary/40 bg-primary/5",
+                                            )}
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                className="h-4 w-4"
+                                                checked={checked}
+                                                disabled={locked}
+                                                onChange={() => toggle(store.id)}
+                                            />
+                                            <span className="min-w-0">
+                                                <span className="block text-sm font-medium">{store.name}</span>
+                                                <span className="block text-xs text-muted-foreground">
+                                                    {optInLabel(store.program_type)}
+                                                    {rangeLabel(store) ? ` · ${rangeLabel(store)}` : ""}
+                                                    {locked ? " · Already sent" : ""}
+                                                </span>
+                                            </span>
+                                        </label>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                        <div className="space-y-3">
                             <div>
-                                <p className="text-sm font-medium">Add to the email</p>
-                                <p className="text-xs text-muted-foreground">Leave a field blank and it stays off the email.</p>
+                                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Lead details</p>
+                                <p className="mt-1 text-xs text-muted-foreground">A blank field is left off the email.</p>
                             </div>
+                            <Field label="Email">
+                                <Input id="send-email" type="email" value={email} placeholder="name@email.com" onChange={(event) => setEmail(event.target.value)} />
+                            </Field>
                             <div className="grid grid-cols-2 gap-3">
-                                <div className="space-y-1">
-                                    <Label htmlFor="send-zip">ZIP</Label>
-                                    <Input id="send-zip" value={postalCode} onChange={(event) => setPostalCode(event.target.value)} />
+                                <Field label="City">
+                                    <Input value={city} placeholder="Atlanta" onChange={(event) => setCity(event.target.value)} />
+                                </Field>
+                                <Field label="State">
+                                    <Input value={state} placeholder="GA" onChange={(event) => setState(event.target.value)} />
+                                </Field>
+                                <Field label="ZIP">
+                                    <Input value={postalCode} placeholder="30349" onChange={(event) => setPostalCode(event.target.value)} />
+                                </Field>
+                                <Field label="Down payment">
+                                    <Input inputMode="decimal" value={downPayment} placeholder="2000" onChange={(event) => setDownPayment(event.target.value)} />
+                                </Field>
+                                <Field label="Looking for">
+                                    <Input value={lookingFor} placeholder="Explorer" onChange={(event) => setLookingFor(event.target.value)} />
+                                </Field>
+                                <Field label="Brand">
+                                    <Input value={brand} placeholder="Ford" onChange={(event) => setBrand(event.target.value)} />
+                                </Field>
+                            </div>
+                            <Field label="Budget">
+                                <Input value={budget} placeholder="25000" onChange={(event) => setBudget(event.target.value)} />
+                            </Field>
+                            <Field label="Business">
+                                <div className="flex gap-2">
+                                    {(["yes", "no"] as const).map((value) => (
+                                        <button
+                                            key={value}
+                                            type="button"
+                                            onClick={() => setBusiness((current) => (current === value ? "" : value))}
+                                            className={cn(
+                                                "h-9 flex-1 rounded-md border text-sm font-medium",
+                                                business === value
+                                                    ? "border-primary bg-primary/10 text-primary"
+                                                    : "border-input text-muted-foreground hover:bg-muted/60",
+                                            )}
+                                        >
+                                            {value === "yes" ? "Yes" : "No"}
+                                        </button>
+                                    ))}
                                 </div>
-                                <div className="space-y-1">
-                                    <Label htmlFor="send-down">Down payment</Label>
-                                    <Input id="send-down" inputMode="decimal" value={downPayment} onChange={(event) => setDownPayment(event.target.value)} />
-                                </div>
-                            </div>
-                            <div className="space-y-1">
-                                <Label htmlFor="send-email">Email</Label>
-                                <Input id="send-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
-                            </div>
-                            <div className="space-y-1">
-                                <Label htmlFor="send-business">Business</Label>
-                                <select
-                                    id="send-business"
-                                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
-                                    value={business}
-                                    onChange={(event) => setBusiness(event.target.value)}
-                                >
-                                    <option value="">Leave off the email</option>
-                                    <option value="yes">Yes</option>
-                                    <option value="no">No</option>
-                                </select>
-                            </div>
-                            <div className="space-y-1">
-                                <Label htmlFor="send-looking">Looking for</Label>
-                                <Input id="send-looking" value={lookingFor} onChange={(event) => setLookingFor(event.target.value)} />
-                            </div>
+                            </Field>
                         </div>
                     </div>
                     <DialogFooter className="border-t px-6 py-4">

@@ -37,11 +37,15 @@ class SendDetails:
     """Optional details filled in at send time. Blank values are left unchanged."""
     postal_code: Optional[str] = None
     email: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
     down_payment: Optional[Decimal] = None
     clear_down_payment: bool = False
     is_business: Optional[bool] = None
     clear_business: bool = False
     interested_in: Optional[str] = None
+    interested_brand: Optional[str] = None
+    budget_range: Optional[str] = None
 
 
 @dataclass
@@ -62,6 +66,10 @@ def _apply_send_details(lead: Lead, customer: Optional[Customer], details: Optio
         return
     if customer is not None and details.postal_code is not None:
         customer.postal_code = details.postal_code.strip()[:20] or None
+    if customer is not None and details.city is not None:
+        customer.city = details.city.strip()[:100] or None
+    if customer is not None and details.state is not None:
+        customer.state = details.state.strip()[:100] or None
     if customer is not None and details.email is not None:
         email = details.email.strip()
         if email and "@" not in email:
@@ -69,6 +77,10 @@ def _apply_send_details(lead: Lead, customer: Optional[Customer], details: Optio
         customer.email = email[:255] or None
     if details.interested_in is not None:
         lead.interested_in = details.interested_in.strip()[:255] or None
+    if details.interested_brand is not None:
+        lead.interested_brand = details.interested_brand.strip()[:100] or None
+    if details.budget_range is not None:
+        lead.budget_range = details.budget_range.strip()[:100] or None
     if details.down_payment is not None:
         if details.down_payment < 0:
             raise SendError("Down payment cannot be negative.")

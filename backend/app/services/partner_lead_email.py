@@ -119,7 +119,11 @@ def build_partner_lead_email(
     phone = _format_phone(customer.phone if customer else None)
     email = _clean(customer.email if customer else None)
     postal = _clean(customer.postal_code if customer else None)
+    city = _clean(customer.city if customer else None)
+    state = _clean(customer.state if customer else None)
     interest = _clean(lead.interested_in)
+    vehicle_brand = _clean(lead.interested_brand)
+    budget = _clean(lead.budget_range)
     down_payment = _down_payment(lead)
     business = _business_label(lead.is_business)
     brand_name = (from_name or "Carvaminos").strip() or "Carvaminos"
@@ -128,16 +132,24 @@ def build_partner_lead_email(
     rows = []
     if phone:
         rows.append(("Phone", phone))
-    if postal:
-        rows.append(("ZIP", postal))
     if email:
         rows.append(("Email", email))
+    if city:
+        rows.append(("City", city))
+    if state:
+        rows.append(("State", state))
+    if postal:
+        rows.append(("ZIP", postal))
+    if interest:
+        rows.append(("Looking for", interest))
+    if vehicle_brand:
+        rows.append(("Brand", vehicle_brand))
+    if budget:
+        rows.append(("Budget", budget))
     if down_payment:
         rows.append(("Down payment", down_payment))
     if business:
         rows.append(("Business", business))
-    if interest:
-        rows.append(("Looking for", interest))
 
     text_lines = [
         f"New lead for {store.name}",
