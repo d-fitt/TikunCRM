@@ -158,7 +158,7 @@ def ensure_partner_schema(conn) -> None:
             smtp_password_encrypted TEXT NOT NULL DEFAULT '',
             use_tls BOOLEAN NOT NULL DEFAULT true,
             use_ssl BOOLEAN NOT NULL DEFAULT false,
-            from_name VARCHAR(255) NOT NULL DEFAULT 'Carvaminos',
+            from_name VARCHAR(255) NOT NULL DEFAULT 'Carvamonos',
             graph_tenant_id VARCHAR(64) NOT NULL DEFAULT '',
             graph_client_id VARCHAR(64) NOT NULL DEFAULT '',
             graph_client_secret_encrypted TEXT NOT NULL DEFAULT '',

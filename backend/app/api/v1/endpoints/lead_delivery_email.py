@@ -56,7 +56,7 @@ class MailboxResponse(BaseModel):
 class MailboxUpdate(BaseModel):
     smtp_user: str = Field(..., max_length=255)
     password: Optional[str] = Field(None, max_length=200)
-    from_name: str = Field("Carvaminos", max_length=255)
+    from_name: str = Field("Carvamonos", max_length=255)
     provider: str = Field("microsoft365")
     graph_tenant_id: str = Field("", max_length=64)
     graph_client_id: str = Field("", max_length=64)
@@ -83,7 +83,7 @@ def _public(row: Optional[LeadDeliveryMailbox], active_email: str, source: str) 
             smtp_host="smtp.office365.com",
             smtp_port=587,
             smtp_user="",
-            from_name="Carvaminos",
+            from_name="Carvamonos",
             use_tls=True,
             use_ssl=False,
             has_password=False,
@@ -127,7 +127,7 @@ async def save_lead_delivery_email(
     if not _EMAIL.match(email):
         raise HTTPException(status_code=400, detail="Enter a valid mailbox address.")
     host, _provider = mailbox_host(email, body.provider)
-    from_name = body.from_name.strip() or "Carvaminos"
+    from_name = body.from_name.strip() or "Carvamonos"
     tenant_id = body.graph_tenant_id.strip()
     client_id = body.graph_client_id.strip()
     client_secret = (body.graph_client_secret or "").strip()

@@ -148,7 +148,7 @@ class Settings(BaseSettings):
     lead_delivery_smtp_password: str = ""
     lead_delivery_smtp_use_tls: bool = True
     lead_delivery_smtp_use_ssl: bool = False
-    lead_delivery_from_name: str = "Carvaminos"
+    lead_delivery_from_name: str = "Carvamonos"
     
     # SendGrid (Recommended for production)
     sendgrid_api_key: str = ""

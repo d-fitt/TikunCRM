@@ -274,7 +274,7 @@ export function SendPartnerStoreButton({
                             <Field label="Budget">
                                 <Input value={budget} placeholder="25000" onChange={(event) => setBudget(event.target.value)} />
                             </Field>
-                            <Field label="Business">
+                            <Field label="Has business">
                                 <div className="flex gap-2">
                                     {(["yes", "no"] as const).map((value) => (
                                         <button

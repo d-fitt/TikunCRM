@@ -19,7 +19,7 @@ export default function LeadDeliveryEmailPage() {
     const [testing, setTesting] = React.useState(false)
     const [mailbox, setMailbox] = React.useState<LeadDeliveryMailbox | null>(null)
     const [email, setEmail] = React.useState("leads@carvamonos.com")
-    const [fromName, setFromName] = React.useState("Carvaminos")
+    const [fromName, setFromName] = React.useState("Carvamonos")
     const [tenantId, setTenantId] = React.useState("")
     const [clientId, setClientId] = React.useState("")
     const [clientSecret, setClientSecret] = React.useState("")
@@ -34,7 +34,7 @@ export default function LeadDeliveryEmailPage() {
             .then((row) => {
                 setMailbox(row)
                 setEmail(row.smtp_user || row.active_email || "leads@carvamonos.com")
-                setFromName(row.from_name || "Carvaminos")
+                setFromName(row.from_name || "Carvamonos")
                 setTenantId(row.graph_tenant_id || "")
                 setClientId(row.graph_client_id || "")
                 setTestTo(row.smtp_user || row.active_email || "")
@@ -51,7 +51,7 @@ export default function LeadDeliveryEmailPage() {
         try {
             const row = await LeadDeliveryEmailService.save({
                 smtp_user: email.trim(),
-                from_name: fromName.trim() || "Carvaminos",
+                from_name: fromName.trim() || "Carvamonos",
                 graph_tenant_id: tenantId.trim(),
                 graph_client_id: clientId.trim(),
                 graph_client_secret: clientSecret.trim() || undefined,

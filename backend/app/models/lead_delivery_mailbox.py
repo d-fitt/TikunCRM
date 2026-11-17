@@ -22,7 +22,7 @@ class LeadDeliveryMailbox(Base):
     smtp_password_encrypted: Mapped[str] = mapped_column(Text, nullable=False, default="")
     use_tls: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     use_ssl: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    from_name: Mapped[str] = mapped_column(String(255), nullable=False, default="Carvaminos")
+    from_name: Mapped[str] = mapped_column(String(255), nullable=False, default="Carvamonos")
     graph_tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     graph_client_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     graph_client_secret_encrypted: Mapped[str] = mapped_column(Text, nullable=False, default="")

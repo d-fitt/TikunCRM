@@ -66,7 +66,7 @@ def _server_mailbox() -> DeliveryMailbox:
         password=(settings.lead_delivery_smtp_password or "").replace(" ", ""),
         use_tls=settings.lead_delivery_smtp_use_tls,
         use_ssl=settings.lead_delivery_smtp_use_ssl,
-        from_name=(settings.lead_delivery_from_name or "Carvaminos").strip() or "Carvaminos",
+        from_name=(settings.lead_delivery_from_name or "Carvamonos").strip() or "Carvamonos",
         source="server" if settings.lead_delivery_smtp_user and settings.lead_delivery_smtp_password else "none",
     )
 
@@ -95,7 +95,7 @@ async def resolve_delivery_mailbox(db: AsyncSession) -> DeliveryMailbox:
             password=password,
             use_tls=row.use_tls,
             use_ssl=row.use_ssl,
-            from_name=(row.from_name or "Carvaminos").strip() or "Carvaminos",
+            from_name=(row.from_name or "Carvamonos").strip() or "Carvamonos",
             source="portal",
             graph_tenant_id=(row.graph_tenant_id or "").strip(),
             graph_client_id=(row.graph_client_id or "").strip(),
@@ -112,7 +112,7 @@ def build_partner_lead_email(
     lead: Lead,
     program_type: str,
     sent_at: Optional[datetime] = None,
-    from_name: str = "Carvaminos",
+    from_name: str = "Carvamonos",
 ) -> tuple[str, str, str]:
     """Return subject, plain text, and HTML for one store."""
     name = _customer_name(customer)
@@ -126,7 +126,13 @@ def build_partner_lead_email(
     budget = _clean(lead.budget_range)
     down_payment = _down_payment(lead)
     business = _business_label(lead.is_business)
-    brand_name = (from_name or "Carvaminos").strip() or "Carvaminos"
+    sender = f"{user.first_name or ''} {user.last_name or ''}".strip() or (user.email or "").strip()
+    when = sent_at or datetime.now(_BUSINESS_TZ)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=ZoneInfo("UTC"))
+    when = when.astimezone(_BUSINESS_TZ)
+    sent_time = when.strftime("%b %d, %Y · %I:%M %p ET").replace(" 0", " ")
+    brand_name = (from_name or "Carvamonos").strip() or "Carvamonos"
     subject = f"New lead: {name} — {store.name}"
 
     rows = []
@@ -149,7 +155,10 @@ def build_partner_lead_email(
     if down_payment:
         rows.append(("Down payment", down_payment))
     if business:
-        rows.append(("Business", business))
+        rows.append(("Has business", business))
+    if sender:
+        rows.append(("Sent by", sender))
+    rows.append(("Sent at", sent_time))
 
     text_lines = [
         f"New lead for {store.name}",
