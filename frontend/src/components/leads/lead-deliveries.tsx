@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, Store } from "lucide-react"
+import { Loader2, Plus, Store } from "lucide-react"
 import { PartnerProgramService, type LeadDeliveryRow } from "@/services/partner-program-service"
 import {
     PartnerStoreService,
@@ -113,9 +113,9 @@ export function SendPartnerStoreButton({
                     type="button"
                     onClick={openPicker}
                     disabled={busy}
-                    className="inline-flex h-7 items-center gap-1.5 rounded-md border border-dashed border-slate-300 bg-white px-2 text-xs font-medium text-slate-600 hover:border-primary hover:bg-primary/5 hover:text-primary disabled:opacity-50"
+                    className="inline-flex h-6 items-center gap-1 whitespace-nowrap text-xs font-medium text-primary hover:underline disabled:opacity-50"
                 >
-                    <Store className="h-3.5 w-3.5" />
+                    <Plus className="h-3 w-3" />
                     {label}
                 </button>
             ) : (

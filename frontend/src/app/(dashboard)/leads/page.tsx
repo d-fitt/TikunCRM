@@ -217,14 +217,14 @@ function PartnerStoreCell({
 }) {
     const names = storeNames(lead)
     return (
-        <div className="flex w-36 flex-col items-start gap-1.5">
+        <div className="flex w-[13.5rem] flex-col items-start gap-1">
             {names.map((name) => (
                 <span
                     key={name}
                     title={name}
-                    className="inline-flex max-w-full items-center gap-1 rounded-md bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-700"
+                    className="inline-flex max-w-full items-center gap-1.5 text-sm font-medium text-slate-800"
                 >
-                    <Store className="h-3 w-3 shrink-0 text-slate-500" />
+                    <Store className="h-3.5 w-3.5 shrink-0 text-slate-400" />
                     <span className="truncate">{name}</span>
                 </span>
             ))}
@@ -1780,7 +1780,7 @@ export default function LeadsPage() {
                             {showCol("status") && <TableHead>Status</TableHead>}
                             {showCol("source") && <TableHead>Source</TableHead>}
                             {showCol("heat") && <TableHead>Heat</TableHead>}
-                            {showCol("partner_store") && <TableHead className="min-w-[9.5rem]">Partner store</TableHead>}
+                            {showCol("partner_store") && <TableHead className="min-w-[13.5rem]">Partner store</TableHead>}
                             {isBdc && <TableHead>Dealership</TableHead>}
                             {showCol("assigned_to") && <TableHead>Assigned To</TableHead>}
                             {showCol("notes") && <TableHead className="max-w-[140px]">Notes</TableHead>}

@@ -40,7 +40,7 @@ export default function LeadDeliveryEmailPage() {
                 setMailbox(row)
                 setEmail(row.smtp_user || row.active_email || "")
                 setFromName(row.from_name || "Carvaminos")
-                setProvider(providerForAddress(row.smtp_user || row.active_email || ""))
+                setProvider(row.smtp_host === "smtp-mail.outlook.com" ? "outlook" : "microsoft365")
                 setTestTo(row.smtp_user || row.active_email || "")
             })
             .catch(() => {
@@ -57,9 +57,10 @@ export default function LeadDeliveryEmailPage() {
                 smtp_user: email.trim(),
                 password: password.trim() || undefined,
                 from_name: fromName.trim() || "Carvaminos",
-                provider: providerForAddress(email),
+                provider,
             })
             setMailbox(row)
+            setProvider(row.smtp_host === "smtp-mail.outlook.com" ? "outlook" : "microsoft365")
             setPassword("")
             setTestTo(row.smtp_user)
             toast({ title: "Lead delivery mailbox saved" })
@@ -127,7 +128,7 @@ export default function LeadDeliveryEmailPage() {
                                 <select
                                     id="provider"
                                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
-                                    value={providerForAddress(email)}
+                                    value={provider}
                                     onChange={(event) => setProvider(event.target.value as "microsoft365" | "outlook")}
                                 >
                                     <option value="microsoft365">Microsoft 365 — company address such as @carvamonos.com</option>
@@ -147,7 +148,7 @@ export default function LeadDeliveryEmailPage() {
                                     onChange={(event) => {
                                         const next = event.target.value
                                         setEmail(next)
-                                        setProvider(providerForAddress(next))
+                                        if (providerForAddress(next) === "outlook") setProvider("outlook")
                                     }}
                                     placeholder="leads@yourcompany.com"
                                     required
@@ -164,7 +165,10 @@ export default function LeadDeliveryEmailPage() {
                                     autoComplete="new-password"
                                 />
                                 <p className="text-xs text-muted-foreground">
-                                    A company address uses Microsoft 365. Outlook.com is only for @outlook.com, @hotmail.com, or @live.com. SMTP sending must be turned on for the mailbox.
+                                    {provider === "outlook"
+                                        ? "Outlook.com uses smtp-mail.outlook.com. Choose this for @outlook.com, @hotmail.com, or @live.com."
+                                        : "Microsoft 365 uses smtp.office365.com. This is the server for a company address such as @carvamonos.com."}{" "}
+                                    SMTP sending must be turned on for the mailbox.
                                 </p>
                             </div>
                             <Button type="submit" disabled={saving}>

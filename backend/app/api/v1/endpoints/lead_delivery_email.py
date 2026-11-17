@@ -29,12 +29,11 @@ _HOSTS = {
 }
 
 
-def mailbox_host(email: str) -> tuple[str, str]:
-    """Company addresses use Microsoft 365. Outlook.com is only for consumer addresses."""
-    domain = email.rsplit("@", 1)[-1]
-    if domain in _CONSUMER_DOMAINS:
-        return _HOSTS["outlook"], "outlook"
-    return _HOSTS["microsoft365"], "microsoft365"
+def mailbox_host(email: str, provider: str = "microsoft365") -> tuple[str, str]:
+    """Honor the selected account. Consumer addresses always use Outlook.com."""
+    domain = email.rsplit("@", 1)[-1].lower()
+    chosen = "outlook" if provider == "outlook" or domain in _CONSUMER_DOMAINS else "microsoft365"
+    return _HOSTS[chosen], chosen
 
 
 class MailboxResponse(BaseModel):
@@ -105,7 +104,7 @@ async def save_lead_delivery_email(
     email = body.smtp_user.strip().lower()
     if not _EMAIL.match(email):
         raise HTTPException(status_code=400, detail="Enter a valid mailbox address.")
-    host, _provider = mailbox_host(email)
+    host, _provider = mailbox_host(email, body.provider)
     from_name = body.from_name.strip() or "Carvaminos"
     row = (await db.execute(select(LeadDeliveryMailbox).limit(1))).scalar_one_or_none()
     password = (body.password or "").strip()
