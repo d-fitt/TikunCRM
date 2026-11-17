@@ -78,7 +78,7 @@ const allSidebarItems: SidebarItem[] = [
         name: "Leads",
         icon: Inbox,
         children: [
-            { name: "All leads", icon: Inbox, href: "/leads" },
+            { name: "All leads", icon: Inbox, href: "/leads?filter=all" },
             { name: "Unassigned", icon: InboxIcon, href: "/leads?filter=unassigned" },
             {
                 name: "Manager review",
@@ -206,6 +206,13 @@ interface BadgeCounts {
 }
 
 function isSidebarLinkActive(pathname: string, searchParams: URLSearchParams, href: string): boolean {
+    if (href === "/leads" || href === "/leads?filter=all") {
+        const onLeads = pathname === "/leads" || pathname.startsWith("/leads/")
+        if (!onLeads) return false
+        if (pathname.startsWith("/leads/")) return true
+        const filter = searchParams.get("filter")
+        return !filter || filter === "all"
+    }
     if (href.includes("?")) {
         const [path, query] = href.split("?", 2)
         if (pathname !== path) return false
@@ -214,12 +221,6 @@ function isSidebarLinkActive(pathname: string, searchParams: URLSearchParams, hr
             if (searchParams.get(key) !== value) return false
         }
         return true
-    }
-    if (href === "/leads") {
-        return (
-            (pathname === "/leads" || pathname.startsWith("/leads/"))
-            && !searchParams.get("filter")
-        )
     }
     return pathname === href || (href !== "/dashboard" && pathname.startsWith(href))
 }
@@ -607,6 +608,9 @@ export function Sidebar() {
                             const isChildActive = item.children.some((child) =>
                                 isSidebarLinkActive(pathname, searchParams, child.href)
                             )
+                            const sectionActive = isChildActive || (
+                                item.name === "Leads" && (pathname === "/leads" || pathname.startsWith("/leads/"))
+                            )
                             if (collapsed) {
                                 const first = item.children[0]
                                 return (
@@ -616,7 +620,7 @@ export function Sidebar() {
                                         title={item.name}
                                         className={cn(
                                             "relative flex items-center justify-center rounded-md py-2 text-sm font-medium transition-colors hover:bg-accent",
-                                            isChildActive ? "bg-accent text-accent-foreground" : "text-muted-foreground"
+                                            sectionActive ? "bg-primary/10 text-primary" : "text-muted-foreground"
                                         )}
                                     >
                                         <item.icon className="h-4 w-4 shrink-0" />
@@ -637,14 +641,14 @@ export function Sidebar() {
                                         className={cn(
                                             "group relative flex w-full items-center rounded-md py-2 text-sm font-medium transition-colors hover:bg-accent",
                                             "justify-between px-3",
-                                            isChildActive ? "text-accent-foreground" : "text-muted-foreground"
+                                            sectionActive ? "bg-primary/10 text-primary" : "text-muted-foreground"
                                         )}
                                     >
                                         <div className="flex items-center min-w-0">
                                             <item.icon
                                                 className={cn(
                                                     "h-4 w-4 shrink-0 mr-3",
-                                                    isChildActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
+                                                    sectionActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
                                                 )}
                                             />
                                             <span className="truncate">{item.name}</span>
@@ -670,11 +674,11 @@ export function Sidebar() {
                                                         href={child.href}
                                                         className={cn(
                                                             "flex items-center justify-between rounded-md py-1.5 pl-2 pr-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground",
-                                                            active ? "bg-accent text-accent-foreground font-medium" : "text-muted-foreground"
+                                                            active ? "bg-primary text-primary-foreground font-medium" : "text-muted-foreground"
                                                         )}
                                                     >
                                                         <div className="flex items-center min-w-0">
-                                                            <child.icon className="h-3.5 w-3.5 shrink-0 mr-2 text-muted-foreground" />
+                                                            <child.icon className={cn("h-3.5 w-3.5 shrink-0 mr-2", active ? "text-primary-foreground" : "text-muted-foreground")} />
                                                             <span className="truncate">{child.name}</span>
                                                         </div>
                                                         {(child as any).badge > 0 && (

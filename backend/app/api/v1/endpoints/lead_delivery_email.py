@@ -22,10 +22,19 @@ from app.services.partner_lead_email import (
 router = APIRouter()
 
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_CONSUMER_DOMAINS = {"outlook.com", "hotmail.com", "live.com", "msn.com"}
 _HOSTS = {
     "microsoft365": "smtp.office365.com",
     "outlook": "smtp-mail.outlook.com",
 }
+
+
+def mailbox_host(email: str) -> tuple[str, str]:
+    """Company addresses use Microsoft 365. Outlook.com is only for consumer addresses."""
+    domain = email.rsplit("@", 1)[-1]
+    if domain in _CONSUMER_DOMAINS:
+        return _HOSTS["outlook"], "outlook"
+    return _HOSTS["microsoft365"], "microsoft365"
 
 
 class MailboxResponse(BaseModel):
@@ -96,9 +105,7 @@ async def save_lead_delivery_email(
     email = body.smtp_user.strip().lower()
     if not _EMAIL.match(email):
         raise HTTPException(status_code=400, detail="Enter a valid mailbox address.")
-    host = _HOSTS.get(body.provider)
-    if host is None:
-        raise HTTPException(status_code=400, detail="Choose Microsoft 365 or Outlook.")
+    host, _provider = mailbox_host(email)
     from_name = body.from_name.strip() or "Carvaminos"
     row = (await db.execute(select(LeadDeliveryMailbox).limit(1))).scalar_one_or_none()
     password = (body.password or "").strip()
@@ -136,7 +143,7 @@ async def test_lead_delivery_email(
     mailbox = await resolve_delivery_mailbox(db)
     if not mailbox.ready:
         raise HTTPException(status_code=400, detail="Save the mailbox before sending a test.")
-    ok = await asyncio.to_thread(
+    ok, reason = await asyncio.to_thread(
         send_partner_lead_email_sync,
         mailbox,
         to_email,
@@ -145,8 +152,5 @@ async def test_lead_delivery_email(
         f"<p>This message confirms <strong>{mailbox.user}</strong> can send partner-store leads.</p>",
     )
     if not ok:
-        raise HTTPException(
-            status_code=400,
-            detail="Microsoft did not accept the mailbox. Check the address, password, and that SMTP sending is turned on.",
-        )
+        raise HTTPException(status_code=400, detail=reason)
     return {"sent": True, "to_email": to_email}

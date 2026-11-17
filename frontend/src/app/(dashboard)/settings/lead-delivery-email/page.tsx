@@ -11,8 +11,10 @@ import { useToast } from "@/hooks/use-toast"
 import { useRole } from "@/hooks/use-role"
 import { LeadDeliveryEmailService, type LeadDeliveryMailbox } from "@/services/lead-delivery-email-service"
 
-function providerFor(host: string): "microsoft365" | "outlook" {
-    return host === "smtp-mail.outlook.com" ? "outlook" : "microsoft365"
+function providerForAddress(address: string): "microsoft365" | "outlook" {
+    const domain = address.split("@")[1]?.trim().toLowerCase() || ""
+    if (["outlook.com", "hotmail.com", "live.com", "msn.com"].includes(domain)) return "outlook"
+    return "microsoft365"
 }
 
 export default function LeadDeliveryEmailPage() {
@@ -38,7 +40,7 @@ export default function LeadDeliveryEmailPage() {
                 setMailbox(row)
                 setEmail(row.smtp_user || row.active_email || "")
                 setFromName(row.from_name || "Carvaminos")
-                setProvider(providerFor(row.smtp_host))
+                setProvider(providerForAddress(row.smtp_user || row.active_email || ""))
                 setTestTo(row.smtp_user || row.active_email || "")
             })
             .catch(() => {
@@ -55,7 +57,7 @@ export default function LeadDeliveryEmailPage() {
                 smtp_user: email.trim(),
                 password: password.trim() || undefined,
                 from_name: fromName.trim() || "Carvaminos",
-                provider,
+                provider: providerForAddress(email),
             })
             setMailbox(row)
             setPassword("")
@@ -125,11 +127,11 @@ export default function LeadDeliveryEmailPage() {
                                 <select
                                     id="provider"
                                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
-                                    value={provider}
+                                    value={providerForAddress(email)}
                                     onChange={(event) => setProvider(event.target.value as "microsoft365" | "outlook")}
                                 >
-                                    <option value="microsoft365">Microsoft 365 work mailbox</option>
-                                    <option value="outlook">Outlook, Hotmail, or Live</option>
+                                    <option value="microsoft365">Microsoft 365 — company address such as @carvamonos.com</option>
+                                    <option value="outlook">Outlook.com, Hotmail, or Live only</option>
                                 </select>
                             </div>
                             <div className="space-y-2">
@@ -142,7 +144,11 @@ export default function LeadDeliveryEmailPage() {
                                     id="mailbox"
                                     type="email"
                                     value={email}
-                                    onChange={(event) => setEmail(event.target.value)}
+                                    onChange={(event) => {
+                                        const next = event.target.value
+                                        setEmail(next)
+                                        setProvider(providerForAddress(next))
+                                    }}
                                     placeholder="leads@yourcompany.com"
                                     required
                                 />
@@ -158,7 +164,7 @@ export default function LeadDeliveryEmailPage() {
                                     autoComplete="new-password"
                                 />
                                 <p className="text-xs text-muted-foreground">
-                                    SMTP sending must be turned on for this mailbox. Use an app password when the account has multi-factor authentication.
+                                    A company address uses Microsoft 365. Outlook.com is only for @outlook.com, @hotmail.com, or @live.com. SMTP sending must be turned on for the mailbox.
                                 </p>
                             </div>
                             <Button type="submit" disabled={saving}>

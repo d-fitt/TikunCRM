@@ -1267,21 +1267,21 @@ export default function LeadsPage() {
                         })
                     }}
                 >
-                    <TabsList>
-                        <TabsTrigger value="mine">Your Leads</TabsTrigger>
-                        <TabsTrigger value="unassigned">Unassigned</TabsTrigger>
-                        <TabsTrigger value="all">All Leads</TabsTrigger>
-                        <TabsTrigger value="multi_campaign">
+                    <TabsList className="h-auto flex-wrap justify-start">
+                        <TabsTrigger value="mine" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Your Leads</TabsTrigger>
+                        <TabsTrigger value="unassigned" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Unassigned</TabsTrigger>
+                        <TabsTrigger value="all" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">All Leads</TabsTrigger>
+                        <TabsTrigger value="multi_campaign" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
                             <FileStack className="h-4 w-4 mr-1.5 shrink-0" />
                             Multiple form fills
                         </TabsTrigger>
-                        <TabsTrigger value="fresh">Fresh (untouched)</TabsTrigger>
-                        <TabsTrigger value="converted">
+                        <TabsTrigger value="fresh" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Fresh (untouched)</TabsTrigger>
+                        <TabsTrigger value="converted" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
                             <CheckCircle2 className="h-4 w-4 mr-1.5" />
                             Converted & Sold
                         </TabsTrigger>
                         {(isDealershipAdmin || isDealershipOwner || isSuperAdmin) && (
-                            <TabsTrigger value="manager_review">Manager review</TabsTrigger>
+                            <TabsTrigger value="manager_review" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Manager review</TabsTrigger>
                         )}
                     </TabsList>
                 </Tabs>
@@ -1309,11 +1309,11 @@ export default function LeadsPage() {
                         }}
                     >
                         <TabsList>
-                            <TabsTrigger value="list">
+                            <TabsTrigger value="list" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
                                 <List className="h-4 w-4 mr-1.5" />
                                 List
                             </TabsTrigger>
-                            <TabsTrigger value="pipeline">
+                            <TabsTrigger value="pipeline" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
                                 <LayoutGrid className="h-4 w-4 mr-1.5" />
                                 Pipeline
                             </TabsTrigger>

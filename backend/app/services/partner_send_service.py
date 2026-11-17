@@ -244,7 +244,7 @@ async def _email_stores(
         errors = []
         for address in item.recipients:
             try:
-                ok = await asyncio.to_thread(
+                ok, _reason = await asyncio.to_thread(
                     send_partner_lead_email_sync,
                     mailbox,
                     address,

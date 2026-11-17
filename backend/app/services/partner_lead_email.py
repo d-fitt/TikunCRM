@@ -183,10 +183,10 @@ def send_partner_lead_email_sync(
     subject: str,
     body_text: str,
     body_html: str,
-) -> bool:
+) -> tuple[bool, str]:
     if not mailbox.ready:
         logger.warning("Lead delivery email skipped: no mailbox is configured")
-        return False
+        return False, "No mailbox is configured."
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = formataddr((mailbox.from_name, mailbox.user))
@@ -205,10 +205,21 @@ def send_partner_lead_email_sync(
                     server.starttls(context=ssl.create_default_context())
                 server.login(mailbox.user, mailbox.password)
                 server.send_message(msg)
-        return True
+        return True, ""
+    except smtplib.SMTPAuthenticationError as exc:
+        logger.warning("Lead delivery login rejected for %s via %s", mailbox.user, mailbox.host)
+        detail = str(exc)
+        if "SmtpClientAuthentication is disabled" in detail or "5.7.139" in detail:
+            return False, (
+                "Microsoft has SMTP sending turned off for the whole company. "
+                "An admin must turn on Authenticated SMTP, then send the test again."
+            )
+        return False, (
+            "Microsoft rejected the login. Use the app password, not the normal sign-in password."
+        )
     except Exception:
-        logger.exception("Lead delivery email failed for %s", to_email)
-        return False
+        logger.exception("Lead delivery email failed for %s via %s", mailbox.user, mailbox.host)
+        return False, "Could not reach the Microsoft mail server. Try the test again."
 
 
 def _customer_name(customer: Optional[Customer]) -> str:
