@@ -244,7 +244,7 @@ async def _email_stores(
         errors = []
         for address in item.recipients:
             try:
-                ok, _reason = await asyncio.to_thread(
+                ok, reason = await asyncio.to_thread(
                     send_partner_lead_email_sync,
                     mailbox,
                     address,
@@ -255,12 +255,12 @@ async def _email_stores(
                 if ok:
                     emailed.append(address)
                 else:
-                    errors.append(address)
+                    errors.append(reason or "The lead was saved. Email could not be sent.")
             except Exception:
                 logger.exception("Partner lead email failed for %s", address)
-                errors.append(address)
+                errors.append("The lead was saved. Email could not be sent.")
         item.emailed = emailed
         if errors and not emailed:
-            item.email_error = "The lead was saved. Email could not be sent."
+            item.email_error = errors[0]
         elif errors:
             item.email_error = "The lead was saved. Some recipient emails could not be sent."

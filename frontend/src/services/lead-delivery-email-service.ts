@@ -8,6 +8,10 @@ export interface LeadDeliveryMailbox {
     use_tls: boolean
     use_ssl: boolean
     has_password: boolean
+    graph_tenant_id: string
+    graph_client_id: string
+    has_graph_secret: boolean
+    send_mode: "graph" | "smtp" | "none" | string
     active_email: string
     source: "portal" | "server" | "none" | string
 }
@@ -19,9 +23,10 @@ export const LeadDeliveryEmailService = {
     },
     async save(body: {
         smtp_user: string
-        password?: string
         from_name: string
-        provider: "microsoft365" | "outlook"
+        graph_tenant_id: string
+        graph_client_id: string
+        graph_client_secret?: string
     }): Promise<LeadDeliveryMailbox> {
         const response = await apiClient.put<LeadDeliveryMailbox>("/admin/lead-delivery-email", body)
         return response.data

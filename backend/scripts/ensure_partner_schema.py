@@ -159,9 +159,15 @@ def ensure_partner_schema(conn) -> None:
             use_tls BOOLEAN NOT NULL DEFAULT true,
             use_ssl BOOLEAN NOT NULL DEFAULT false,
             from_name VARCHAR(255) NOT NULL DEFAULT 'Carvaminos',
+            graph_tenant_id VARCHAR(64) NOT NULL DEFAULT '',
+            graph_client_id VARCHAR(64) NOT NULL DEFAULT '',
+            graph_client_secret_encrypted TEXT NOT NULL DEFAULT '',
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """))
+    conn.execute(text("ALTER TABLE lead_delivery_mailbox ADD COLUMN IF NOT EXISTS graph_tenant_id VARCHAR(64) NOT NULL DEFAULT ''"))
+    conn.execute(text("ALTER TABLE lead_delivery_mailbox ADD COLUMN IF NOT EXISTS graph_client_id VARCHAR(64) NOT NULL DEFAULT ''"))
+    conn.execute(text("ALTER TABLE lead_delivery_mailbox ADD COLUMN IF NOT EXISTS graph_client_secret_encrypted TEXT NOT NULL DEFAULT ''"))
 
 
 def main() -> int:

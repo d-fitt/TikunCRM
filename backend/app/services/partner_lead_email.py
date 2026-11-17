@@ -7,6 +7,8 @@ import html
 import logging
 import smtplib
 import ssl
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
@@ -14,6 +16,8 @@ from email.mime.text import MIMEText
 from email.utils import formataddr
 from typing import Optional
 from zoneinfo import ZoneInfo
+
+import httpx
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,10 +45,17 @@ class DeliveryMailbox:
     use_ssl: bool
     from_name: str
     source: str
+    graph_tenant_id: str = ""
+    graph_client_id: str = ""
+    graph_client_secret: str = ""
+
+    @property
+    def graph_ready(self) -> bool:
+        return bool(self.user and self.graph_tenant_id and self.graph_client_id and self.graph_client_secret)
 
     @property
     def ready(self) -> bool:
-        return bool(self.user and self.password)
+        return self.graph_ready or bool(self.user and self.password)
 
 
 def _server_mailbox() -> DeliveryMailbox:
@@ -60,21 +71,36 @@ def _server_mailbox() -> DeliveryMailbox:
     )
 
 
+def _saved_secret(encrypted: str) -> str:
+    if not encrypted:
+        return ""
+    try:
+        return decrypt_value(encrypted).strip()
+    except Exception:
+        logger.warning("Could not read the saved lead-delivery app secret")
+        return ""
+
+
 async def resolve_delivery_mailbox(db: AsyncSession) -> DeliveryMailbox:
     row = (await db.execute(select(LeadDeliveryMailbox).limit(1))).scalar_one_or_none()
-    if row and row.smtp_user and row.smtp_password_encrypted:
-        password = decrypt_value(row.smtp_password_encrypted).replace(" ", "")
-        if password:
-            return DeliveryMailbox(
-                host=row.smtp_host,
-                port=row.smtp_port,
-                user=row.smtp_user.strip(),
-                password=password,
-                use_tls=row.use_tls,
-                use_ssl=row.use_ssl,
-                from_name=(row.from_name or "Carvaminos").strip() or "Carvaminos",
-                source="portal",
-            )
+    if row is None or not (row.smtp_user or "").strip():
+        return _server_mailbox()
+    password = _saved_secret(row.smtp_password_encrypted).replace(" ", "")
+    graph_secret = _saved_secret(row.graph_client_secret_encrypted)
+    if password or graph_secret:
+        return DeliveryMailbox(
+            host=row.smtp_host,
+            port=row.smtp_port,
+            user=row.smtp_user.strip(),
+            password=password,
+            use_tls=row.use_tls,
+            use_ssl=row.use_ssl,
+            from_name=(row.from_name or "Carvaminos").strip() or "Carvaminos",
+            source="portal",
+            graph_tenant_id=(row.graph_tenant_id or "").strip(),
+            graph_client_id=(row.graph_client_id or "").strip(),
+            graph_client_secret=graph_secret,
+        )
     return _server_mailbox()
 
 
@@ -177,6 +203,106 @@ def build_partner_lead_email(
     return subject, text, body_html
 
 
+_token_lock = threading.Lock()
+_token_cache = {"key": "", "token": "", "expires_at": 0.0}
+
+
+def _graph_access_token(mailbox: DeliveryMailbox) -> tuple[str, str]:
+    """Return a Graph token, asking Microsoft for a new one when the last one is near expiry."""
+    cache_key = f"{mailbox.graph_tenant_id}:{mailbox.graph_client_id}"
+    now = time.time()
+    with _token_lock:
+        if _token_cache["key"] == cache_key and _token_cache["expires_at"] > now + 120:
+            return _token_cache["token"], ""
+    response = httpx.post(
+        f"https://login.microsoftonline.com/{mailbox.graph_tenant_id}/oauth2/v2.0/token",
+        data={
+            "client_id": mailbox.graph_client_id,
+            "client_secret": mailbox.graph_client_secret,
+            "scope": "https://graph.microsoft.com/.default",
+            "grant_type": "client_credentials",
+        },
+        timeout=30,
+    )
+    try:
+        payload = response.json()
+    except Exception:
+        payload = {}
+    if response.status_code != 200 or not payload.get("access_token"):
+        return "", _graph_auth_error(payload, response.status_code)
+    expires_in = int(payload.get("expires_in") or 3600)
+    with _token_lock:
+        _token_cache["key"] = cache_key
+        _token_cache["token"] = payload["access_token"]
+        _token_cache["expires_at"] = time.time() + max(expires_in, 60)
+    return payload["access_token"], ""
+
+
+def _graph_auth_error(payload: dict, status_code: int) -> str:
+    code = str(payload.get("error") or "")
+    description = str(payload.get("error_description") or "")
+    text = f"{code} {description}".lower()
+    if "7000215" in text or "invalid client secret" in text:
+        return "Microsoft rejected the app secret. Paste the secret value again and save."
+    if "700016" in text or "7000229" in text:
+        return "Microsoft could not find this application. Check the tenant ID and client ID."
+    if description:
+        return description.split("\r\n", 1)[0][:300]
+    return f"Microsoft did not issue a send token ({status_code})."
+
+
+def _graph_send_error(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except Exception:
+        payload = {}
+    error = payload.get("error") if isinstance(payload, dict) else None
+    code = ""
+    message = ""
+    if isinstance(error, dict):
+        code = str(error.get("code") or "")
+        message = str(error.get("message") or "")
+    text = f"{code} {message}".lower()
+    if response.status_code == 403 or "erroraccessdenied" in text or "errorsendasdenied" in text:
+        return (
+            "This app cannot send as this mailbox yet. "
+            "Exchange Application RBAC must allow Mail.Send only for this address."
+        )
+    if response.status_code == 404:
+        return "Microsoft could not find this mailbox. Save the full address, such as leads@carvamonos.com."
+    if message:
+        return message[:300]
+    return f"Microsoft Graph did not accept the message ({response.status_code})."
+
+
+def _send_graph(mailbox: DeliveryMailbox, to_email: str, subject: str, body_html: str) -> tuple[bool, str]:
+    token, token_error = _graph_access_token(mailbox)
+    if token_error:
+        return False, token_error
+    sender = mailbox.user
+    response = httpx.post(
+        f"https://graph.microsoft.com/v1.0/users/{sender}/sendMail",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={
+            "message": {
+                "subject": subject,
+                "body": {"contentType": "HTML", "content": body_html},
+                "toRecipients": [{"emailAddress": {"address": to_email}}],
+            },
+            "saveToSentItems": True,
+        },
+        timeout=30,
+    )
+    if response.status_code in (202, 200):
+        return True, ""
+    if response.status_code == 401:
+        with _token_lock:
+            _token_cache["expires_at"] = 0
+        return False, "Microsoft expired the send token. Send the test again."
+    logger.warning("Graph lead email failed for %s status %s", sender, response.status_code)
+    return False, _graph_send_error(response)
+
+
 def send_partner_lead_email_sync(
     mailbox: DeliveryMailbox,
     to_email: str,
@@ -187,6 +313,12 @@ def send_partner_lead_email_sync(
     if not mailbox.ready:
         logger.warning("Lead delivery email skipped: no mailbox is configured")
         return False, "No mailbox is configured."
+    if mailbox.graph_ready:
+        try:
+            return _send_graph(mailbox, to_email, subject, body_html)
+        except httpx.HTTPError:
+            logger.exception("Lead delivery Graph request failed for %s", mailbox.user)
+            return False, "Could not reach Microsoft Graph. Try the test again."
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = formataddr((mailbox.from_name, mailbox.user))
@@ -209,13 +341,18 @@ def send_partner_lead_email_sync(
     except smtplib.SMTPAuthenticationError as exc:
         logger.warning("Lead delivery login rejected for %s via %s", mailbox.user, mailbox.host)
         detail = str(exc)
+        if "security defaults" in detail.lower():
+            return False, (
+                "Microsoft locked this mailbox with Security Defaults. "
+                "An admin must allow SMTP sending for this mailbox, then send the test again."
+            )
         if "SmtpClientAuthentication is disabled" in detail or "5.7.139" in detail:
             return False, (
                 "Microsoft has SMTP sending turned off for the whole company. "
                 "An admin must turn on Authenticated SMTP, then send the test again."
             )
         return False, (
-            "Microsoft rejected the login. Use the app password, not the normal sign-in password."
+            "The mail server rejected the login. Use the app password, not the normal sign-in password."
         )
     except Exception:
         logger.exception("Lead delivery email failed for %s via %s", mailbox.user, mailbox.host)

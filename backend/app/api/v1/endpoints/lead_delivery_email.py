@@ -22,6 +22,7 @@ from app.services.partner_lead_email import (
 router = APIRouter()
 
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _CONSUMER_DOMAINS = {"outlook.com", "hotmail.com", "live.com", "msn.com"}
 _HOSTS = {
     "microsoft365": "smtp.office365.com",
@@ -44,6 +45,10 @@ class MailboxResponse(BaseModel):
     use_tls: bool
     use_ssl: bool
     has_password: bool
+    graph_tenant_id: str = ""
+    graph_client_id: str = ""
+    has_graph_secret: bool = False
+    send_mode: str = "none"
     active_email: str
     source: str
 
@@ -53,10 +58,23 @@ class MailboxUpdate(BaseModel):
     password: Optional[str] = Field(None, max_length=200)
     from_name: str = Field("Carvaminos", max_length=255)
     provider: str = Field("microsoft365")
+    graph_tenant_id: str = Field("", max_length=64)
+    graph_client_id: str = Field("", max_length=64)
+    graph_client_secret: Optional[str] = Field(None, max_length=500)
 
 
 class MailboxTest(BaseModel):
     to_email: str = Field(..., max_length=255)
+
+
+def _send_mode(row: Optional[LeadDeliveryMailbox]) -> str:
+    if row is None:
+        return "none"
+    if row.graph_tenant_id and row.graph_client_id and row.graph_client_secret_encrypted:
+        return "graph"
+    if row.smtp_user and row.smtp_password_encrypted:
+        return "smtp"
+    return "none"
 
 
 def _public(row: Optional[LeadDeliveryMailbox], active_email: str, source: str) -> MailboxResponse:
@@ -80,6 +98,10 @@ def _public(row: Optional[LeadDeliveryMailbox], active_email: str, source: str) 
         use_tls=row.use_tls,
         use_ssl=row.use_ssl,
         has_password=bool(row.smtp_password_encrypted),
+        graph_tenant_id=row.graph_tenant_id or "",
+        graph_client_id=row.graph_client_id or "",
+        has_graph_secret=bool(row.graph_client_secret_encrypted),
+        send_mode=_send_mode(row),
         active_email=active_email,
         source=source,
     )
@@ -106,17 +128,33 @@ async def save_lead_delivery_email(
         raise HTTPException(status_code=400, detail="Enter a valid mailbox address.")
     host, _provider = mailbox_host(email, body.provider)
     from_name = body.from_name.strip() or "Carvaminos"
+    tenant_id = body.graph_tenant_id.strip()
+    client_id = body.graph_client_id.strip()
+    client_secret = (body.graph_client_secret or "").strip()
+    if tenant_id and not _GUID.match(tenant_id):
+        raise HTTPException(status_code=400, detail="Tenant ID must be the Directory (tenant) ID.")
+    if client_id and not _GUID.match(client_id):
+        raise HTTPException(status_code=400, detail="Client ID must be the Application (client) ID.")
     row = (await db.execute(select(LeadDeliveryMailbox).limit(1))).scalar_one_or_none()
     password = (body.password or "").strip()
     if row is None:
-        if not password:
-            raise HTTPException(status_code=400, detail="Enter the mailbox password.")
         row = LeadDeliveryMailbox()
         db.add(row)
     if password:
         row.smtp_password_encrypted = encrypt_value(password.replace(" ", ""))
-    elif not row.smtp_password_encrypted:
-        raise HTTPException(status_code=400, detail="Enter the mailbox password.")
+    if client_secret:
+        row.graph_client_secret_encrypted = encrypt_value(client_secret)
+    row.graph_tenant_id = tenant_id
+    row.graph_client_id = client_id
+    graph_ready = bool(row.graph_tenant_id and row.graph_client_id and row.graph_client_secret_encrypted)
+    smtp_ready = bool(row.smtp_password_encrypted)
+    if not graph_ready and not smtp_ready:
+        raise HTTPException(
+            status_code=400,
+            detail="Enter the Microsoft app tenant ID, client ID, and client secret.",
+        )
+    if (tenant_id or client_id) and not graph_ready:
+        raise HTTPException(status_code=400, detail="Enter the client secret. Microsoft shows it only once.")
     row.smtp_host = host
     row.smtp_port = 587
     row.smtp_user = email

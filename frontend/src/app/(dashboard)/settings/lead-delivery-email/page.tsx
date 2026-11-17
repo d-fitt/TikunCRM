@@ -11,12 +11,6 @@ import { useToast } from "@/hooks/use-toast"
 import { useRole } from "@/hooks/use-role"
 import { LeadDeliveryEmailService, type LeadDeliveryMailbox } from "@/services/lead-delivery-email-service"
 
-function providerForAddress(address: string): "microsoft365" | "outlook" {
-    const domain = address.split("@")[1]?.trim().toLowerCase() || ""
-    if (["outlook.com", "hotmail.com", "live.com", "msn.com"].includes(domain)) return "outlook"
-    return "microsoft365"
-}
-
 export default function LeadDeliveryEmailPage() {
     const { isSuperAdmin } = useRole()
     const { toast } = useToast()
@@ -24,10 +18,11 @@ export default function LeadDeliveryEmailPage() {
     const [saving, setSaving] = React.useState(false)
     const [testing, setTesting] = React.useState(false)
     const [mailbox, setMailbox] = React.useState<LeadDeliveryMailbox | null>(null)
-    const [email, setEmail] = React.useState("")
-    const [password, setPassword] = React.useState("")
+    const [email, setEmail] = React.useState("leads@carvamonos.com")
     const [fromName, setFromName] = React.useState("Carvaminos")
-    const [provider, setProvider] = React.useState<"microsoft365" | "outlook">("microsoft365")
+    const [tenantId, setTenantId] = React.useState("")
+    const [clientId, setClientId] = React.useState("")
+    const [clientSecret, setClientSecret] = React.useState("")
     const [testTo, setTestTo] = React.useState("")
 
     React.useEffect(() => {
@@ -38,9 +33,10 @@ export default function LeadDeliveryEmailPage() {
         LeadDeliveryEmailService.get()
             .then((row) => {
                 setMailbox(row)
-                setEmail(row.smtp_user || row.active_email || "")
+                setEmail(row.smtp_user || row.active_email || "leads@carvamonos.com")
                 setFromName(row.from_name || "Carvaminos")
-                setProvider(row.smtp_host === "smtp-mail.outlook.com" ? "outlook" : "microsoft365")
+                setTenantId(row.graph_tenant_id || "")
+                setClientId(row.graph_client_id || "")
                 setTestTo(row.smtp_user || row.active_email || "")
             })
             .catch(() => {
@@ -55,18 +51,17 @@ export default function LeadDeliveryEmailPage() {
         try {
             const row = await LeadDeliveryEmailService.save({
                 smtp_user: email.trim(),
-                password: password.trim() || undefined,
                 from_name: fromName.trim() || "Carvaminos",
-                provider,
+                graph_tenant_id: tenantId.trim(),
+                graph_client_id: clientId.trim(),
+                graph_client_secret: clientSecret.trim() || undefined,
             })
             setMailbox(row)
-            setProvider(row.smtp_host === "smtp-mail.outlook.com" ? "outlook" : "microsoft365")
-            setPassword("")
+            setClientSecret("")
             setTestTo(row.smtp_user)
-            toast({ title: "Lead delivery mailbox saved" })
+            toast({ title: "Lead delivery app saved" })
         } catch (err: unknown) {
-            const detail = errorDetail(err)
-            toast({ title: "Could not save the mailbox", description: detail, variant: "destructive" })
+            toast({ title: "Could not save the mailbox", description: errorDetail(err), variant: "destructive" })
         } finally {
             setSaving(false)
         }
@@ -92,6 +87,8 @@ export default function LeadDeliveryEmailPage() {
         return <p className="text-sm text-muted-foreground">Only a super admin can change this mailbox.</p>
     }
 
+    const usingGraph = mailbox?.send_mode === "graph"
+
     return (
         <div className="mx-auto max-w-2xl space-y-6">
             <div>
@@ -103,19 +100,17 @@ export default function LeadDeliveryEmailPage() {
                 </Button>
                 <h1 className="text-2xl font-bold">Lead delivery email</h1>
                 <p className="text-muted-foreground">
-                    This Microsoft mailbox sends a lead to a partner store. TikunCRM notifications stay on the other mailbox.
+                    Leads go out through Microsoft Graph as this mailbox. TikunCRM asks Microsoft for a new send token when the last one expires. Security defaults stays on.
                 </p>
             </div>
 
             <Card>
                 <CardHeader>
-                    <CardTitle>Sending mailbox</CardTitle>
+                    <CardTitle>Microsoft app</CardTitle>
                     <CardDescription>
-                        {mailbox?.source === "portal"
-                            ? `Leads go out from ${mailbox.active_email}.`
-                            : mailbox?.source === "server"
-                                ? `Leads currently go out from the server mailbox ${mailbox.active_email}. Save here to replace it.`
-                                : "No mailbox is set yet. Leads are saved, and the store email waits until this is filled in."}
+                        {usingGraph
+                            ? `Leads go out from ${mailbox?.active_email} with the saved app.`
+                            : "Paste the tenant ID, client ID, and client secret from the app registration. The secret is shown only once."}
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -124,56 +119,59 @@ export default function LeadDeliveryEmailPage() {
                     ) : (
                         <form className="space-y-4" onSubmit={save}>
                             <div className="space-y-2">
-                                <Label htmlFor="provider">Microsoft account</Label>
-                                <select
-                                    id="provider"
-                                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
-                                    value={provider}
-                                    onChange={(event) => setProvider(event.target.value as "microsoft365" | "outlook")}
-                                >
-                                    <option value="microsoft365">Microsoft 365 — company address such as @carvamonos.com</option>
-                                    <option value="outlook">Outlook.com, Hotmail, or Live only</option>
-                                </select>
+                                <Label htmlFor="mailbox">Send as</Label>
+                                <Input
+                                    id="mailbox"
+                                    type="email"
+                                    value={email}
+                                    onChange={(event) => setEmail(event.target.value)}
+                                    placeholder="leads@carvamonos.com"
+                                    required
+                                />
                             </div>
                             <div className="space-y-2">
                                 <Label htmlFor="from-name">Name on the email</Label>
                                 <Input id="from-name" value={fromName} onChange={(event) => setFromName(event.target.value)} />
                             </div>
                             <div className="space-y-2">
-                                <Label htmlFor="mailbox">Mailbox address</Label>
+                                <Label htmlFor="tenant-id">Tenant ID</Label>
                                 <Input
-                                    id="mailbox"
-                                    type="email"
-                                    value={email}
-                                    onChange={(event) => {
-                                        const next = event.target.value
-                                        setEmail(next)
-                                        if (providerForAddress(next) === "outlook") setProvider("outlook")
-                                    }}
-                                    placeholder="leads@yourcompany.com"
+                                    id="tenant-id"
+                                    value={tenantId}
+                                    onChange={(event) => setTenantId(event.target.value)}
+                                    placeholder="Directory (tenant) ID"
+                                    autoComplete="off"
                                     required
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label htmlFor="password">Password</Label>
+                                <Label htmlFor="client-id">Client ID</Label>
                                 <Input
-                                    id="password"
+                                    id="client-id"
+                                    value={clientId}
+                                    onChange={(event) => setClientId(event.target.value)}
+                                    placeholder="Application (client) ID"
+                                    autoComplete="off"
+                                    required
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="client-secret">Client secret</Label>
+                                <Input
+                                    id="client-secret"
                                     type="password"
-                                    value={password}
-                                    onChange={(event) => setPassword(event.target.value)}
-                                    placeholder={mailbox?.has_password ? "Leave blank to keep the saved password" : "Mailbox or app password"}
+                                    value={clientSecret}
+                                    onChange={(event) => setClientSecret(event.target.value)}
+                                    placeholder={mailbox?.has_graph_secret ? "Leave blank to keep the saved secret" : "Secret value"}
                                     autoComplete="new-password"
                                 />
                                 <p className="text-xs text-muted-foreground">
-                                    {provider === "outlook"
-                                        ? "Outlook.com uses smtp-mail.outlook.com. Choose this for @outlook.com, @hotmail.com, or @live.com."
-                                        : "Microsoft 365 uses smtp.office365.com. This is the server for a company address such as @carvamonos.com."}{" "}
-                                    SMTP sending must be turned on for the mailbox.
+                                    The hourly send token is renewed by TikunCRM. The client secret itself lasts until the date chosen in Microsoft, at most 24 months. Paste a new secret here when that date arrives.
                                 </p>
                             </div>
                             <Button type="submit" disabled={saving}>
                                 {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                Save mailbox
+                                Save app
                             </Button>
                         </form>
                     )}
@@ -183,7 +181,7 @@ export default function LeadDeliveryEmailPage() {
             <Card>
                 <CardHeader>
                     <CardTitle>Send a test</CardTitle>
-                    <CardDescription>Confirms the saved mailbox can send. Save first, then send the test.</CardDescription>
+                    <CardDescription>Confirms the app can send as this mailbox. Save first, then send the test.</CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-3 sm:flex-row">
                     <Input
