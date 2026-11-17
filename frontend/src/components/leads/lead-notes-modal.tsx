@@ -33,20 +33,22 @@ function authorName(activity: Activity): string {
     return `${user.first_name || ""} ${user.last_name || ""}`.trim() || user.email || "Team"
 }
 
-export function LeadNotesModal({
-    open,
-    onOpenChange,
+export function LeadNotesPanel({
     leadId,
-    leadName,
     leadNotes,
-}: LeadNotesModalProps) {
+    active = true,
+}: {
+    leadId: string | null
+    leadNotes?: string | null
+    active?: boolean
+}) {
     const { timezone } = useBrowserTimezone()
     const [notes, setNotes] = React.useState<Activity[]>([])
     const [isLoading, setIsLoading] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
 
     React.useEffect(() => {
-        if (!open || !leadId) return
+        if (!active || !leadId) return
         let cancelled = false
         const load = async () => {
             setIsLoading(true)
@@ -78,7 +80,7 @@ export function LeadNotesModal({
         return () => {
             cancelled = true
         }
-    }, [open, leadId])
+    }, [active, leadId])
 
     const parentNotes = React.useMemo(
         () =>
@@ -103,19 +105,7 @@ export function LeadNotesModal({
     const summaryNote = leadNotes?.trim() || ""
 
     return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="flex max-h-[min(36rem,80vh)] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
-                <DialogHeader className="border-b px-5 py-4">
-                    <DialogTitle className="flex items-center gap-2 text-base">
-                        <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                        Notes
-                    </DialogTitle>
-                    <DialogDescription className="truncate">
-                        {leadName}
-                    </DialogDescription>
-                </DialogHeader>
-
-                <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        <>
                     {isLoading ? (
                         <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
                             <Loader2 className="h-6 w-6 animate-spin" />
@@ -184,6 +174,32 @@ export function LeadNotesModal({
                             })}
                         </div>
                     )}
+        </>
+    )
+}
+
+export function LeadNotesModal({
+    open,
+    onOpenChange,
+    leadId,
+    leadName,
+    leadNotes,
+}: LeadNotesModalProps) {
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className="flex max-h-[min(36rem,80vh)] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
+                <DialogHeader className="border-b px-5 py-4">
+                    <DialogTitle className="flex items-center gap-2 text-base">
+                        <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                        Notes
+                    </DialogTitle>
+                    <DialogDescription className="truncate">
+                        {leadName}
+                    </DialogDescription>
+                </DialogHeader>
+
+                <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+                    <LeadNotesPanel leadId={leadId} leadNotes={leadNotes} active={open} />
                 </div>
             </DialogContent>
         </Dialog>

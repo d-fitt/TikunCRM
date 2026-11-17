@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, Plus, StickyNote, Store } from "lucide-react"
+import { Loader2, Plus, Store } from "lucide-react"
 import { PartnerProgramService, type LeadDeliveryRow } from "@/services/partner-program-service"
 import {
     PartnerStoreService,
@@ -9,7 +9,8 @@ import {
     type StoreSendResult,
 } from "@/services/partner-store-service"
 import { LeadService, type Lead } from "@/services/lead-service"
-import { LeadNotesModal } from "@/components/leads/lead-notes-modal"
+import { LeadNotesPanel } from "@/components/leads/lead-notes-modal"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -32,28 +33,19 @@ function optInLabel(programType?: string | null) {
     return programType === "full_bdc" ? "Leads + BDC" : "Leads only"
 }
 
-function rangeLabel(store: PartnerStore) {
-    if (store.monthly_leads_min == null || store.monthly_leads_max == null) return null
-    return `${store.monthly_leads_min}–${store.monthly_leads_max} / month`
+function moneyLabel(raw: string) {
+    const cleaned = raw.replace(/[$,]/g, "").trim()
+    if (!cleaned) return ""
+    const amount = Number(cleaned)
+    if (Number.isNaN(amount)) return raw.trim()
+    if (amount === Math.trunc(amount)) return `$${Math.trunc(amount).toLocaleString("en-US")}`
+    return `$${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
-function storeMeta(store: PartnerStore, locked: boolean) {
-    const parts = [optInLabel(store.program_type)]
-    const active = store.leads_sent ?? 0
-    const month = store.leads_sent_this_month ?? 0
-    if (month !== active) parts.push(`${month} this month`)
-    const range = rangeLabel(store)
-    if (range) parts.push(range)
-    if (locked) parts.push("Already sent")
-    return parts.join(" · ")
-}
-
-function countTone(store: PartnerStore) {
-    const month = store.leads_sent_this_month ?? 0
-    if (store.monthly_leads_max != null && month > store.monthly_leads_max) {
-        return "bg-amber-100 text-amber-900"
-    }
-    return "bg-slate-100 text-slate-700"
+function yesNoLabel(value: YesNo) {
+    if (value === "yes") return "Yes"
+    if (value === "no") return "No"
+    return ""
 }
 
 function statusLabel(status: string) {
@@ -142,8 +134,21 @@ export function SendPartnerStoreButton({
     const [business, setBusiness] = React.useState<YesNo>("")
     const [hasSsn, setHasSsn] = React.useState<YesNo>("")
     const [hasDl, setHasDl] = React.useState<YesNo>("")
-    const [notesOpen, setNotesOpen] = React.useState(false)
     const alreadySent = React.useMemo(() => new Set(sentStoreIds), [sentStoreIds])
+    const freshCount = selected.filter((id) => !alreadySent.has(id)).length
+    const previewRows = [
+        { label: "Phone", value: formatUsPhone(lead?.customer?.phone) },
+        { label: "City", value: city.trim() },
+        { label: "State", value: state.trim() },
+        { label: "ZIP", value: postalCode.trim() },
+        { label: "Looking for", value: lookingFor.trim() },
+        { label: "Brand", value: brand.trim() },
+        { label: "Budget", value: moneyLabel(budget) },
+        { label: "Down payment", value: moneyLabel(downPayment) },
+        { label: "Has business", value: yesNoLabel(business) },
+        { label: "Has SSN", value: hasSsn === "yes" ? "Yes" : "" },
+        { label: "Has license", value: hasDl === "yes" ? "Yes" : "" },
+    ]
 
     async function openPicker(event: React.MouseEvent) {
         event.stopPropagation()
@@ -247,119 +252,145 @@ export function SendPartnerStoreButton({
                 </Button>
             )}
             <Dialog open={open} onOpenChange={setOpen}>
-                <DialogContent className="flex max-h-[min(86vh,760px)] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
-                    <DialogHeader className="border-b px-6 py-4">
+                <DialogContent className="flex h-[min(92vh,900px)] w-[min(1120px,calc(100vw-1.5rem))] max-w-none flex-col gap-0 overflow-hidden p-0">
+                    <DialogHeader className="border-b px-6 py-4 pr-12">
                         <DialogTitle>Send to partner store</DialogTitle>
                         <DialogDescription>
-                            Choose the stores. Filled details are saved on the lead and included in the email.
+                            Notes stay on the left. The preview on the right is exactly what the email will include.
                         </DialogDescription>
                     </DialogHeader>
-                    <div className="space-y-5 overflow-y-auto px-6 py-5">
-                        <div className="flex items-start justify-between gap-3 rounded-lg bg-muted/50 px-3 py-2.5">
-                            <div className="min-w-0">
-                                <p className="text-sm font-semibold">{leadName(lead)}</p>
-                                <p className="text-sm text-muted-foreground">{formatUsPhone(lead?.customer?.phone) || "No phone yet"}</p>
+                    <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] lg:grid-cols-[320px_minmax(0,1fr)] lg:grid-rows-1">
+                        <aside className="flex min-h-0 flex-col overflow-hidden border-b bg-muted/30 lg:border-b-0 lg:border-r">
+                            <div className="border-b px-4 py-3">
+                                <p className="text-sm font-semibold">Notes</p>
+                                <p className="text-xs text-muted-foreground">{leadName(lead)}</p>
                             </div>
-                            <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                className="shrink-0"
-                                onClick={(event) => {
-                                    event.stopPropagation()
-                                    setNotesOpen(true)
-                                }}
-                            >
-                                <StickyNote className="mr-1.5 h-3.5 w-3.5" />
-                                Notes
-                            </Button>
-                        </div>
-                        <div className="space-y-2">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Stores</p>
-                            <p className="text-xs text-muted-foreground">
-                                The number is leads still with that store. It goes up when you send and down when you remove one.
-                            </p>
-                            {stores.length === 0 && (
-                                <p className="text-sm text-muted-foreground">No active partner stores.</p>
-                            )}
-                            <div className="space-y-1.5">
-                                {stores.map((store) => {
-                                    const locked = alreadySent.has(store.id)
-                                    const checked = selected.includes(store.id)
-                                    return (
-                                        <label
-                                            key={store.id}
-                                            className={cn(
-                                                "flex items-center gap-3 rounded-lg border px-3 py-2.5",
-                                                locked ? "bg-muted/40 text-muted-foreground" : "cursor-pointer hover:bg-muted/40",
-                                                checked && !locked && "border-primary/40 bg-primary/5",
-                                            )}
-                                        >
-                                            <input
-                                                type="checkbox"
-                                                className="h-4 w-4"
-                                                checked={checked}
-                                                disabled={locked}
-                                                onChange={() => toggle(store.id)}
-                                            />
-                                            <span
-                                                className={cn(
-                                                    "flex h-8 min-w-8 shrink-0 items-center justify-center rounded-md px-1.5 text-sm font-semibold tabular-nums",
-                                                    countTone(store),
-                                                )}
-                                                title="Leads still sent to this store"
-                                            >
-                                                {store.leads_sent ?? 0}
-                                            </span>
-                                            <span className="min-w-0">
-                                                <span className="block text-sm font-medium">{store.name}</span>
-                                                <span className="block text-xs text-muted-foreground">
-                                                    {storeMeta(store, locked)}
-                                                </span>
-                                            </span>
-                                        </label>
-                                    )
-                                })}
+                            <div className="max-h-56 overflow-y-auto px-4 py-3 lg:max-h-none lg:min-h-0 lg:flex-1">
+                                <LeadNotesPanel leadId={open ? leadId : null} leadNotes={lead?.notes} active={open} />
                             </div>
-                        </div>
-                        <div className="space-y-3">
-                            <div>
-                                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Lead details</p>
-                                <p className="mt-1 text-xs text-muted-foreground">A blank field is left off the email.</p>
-                            </div>
-                            <div className="grid grid-cols-2 gap-3">
-                                <Field label="City">
-                                    <Input value={city} placeholder="Atlanta" onChange={(event) => setCity(event.target.value)} />
-                                </Field>
-                                <Field label="State">
-                                    <Input value={state} placeholder="GA" onChange={(event) => setState(event.target.value)} />
-                                </Field>
-                                <Field label="ZIP">
-                                    <Input value={postalCode} placeholder="30349" onChange={(event) => setPostalCode(event.target.value)} />
-                                </Field>
-                                <Field label="Down payment">
-                                    <Input inputMode="decimal" value={downPayment} placeholder="2000" onChange={(event) => setDownPayment(event.target.value)} />
-                                </Field>
-                                <Field label="Looking for">
-                                    <Input value={lookingFor} placeholder="Explorer" onChange={(event) => setLookingFor(event.target.value)} />
-                                </Field>
-                                <Field label="Brand">
-                                    <Input value={brand} placeholder="Ford" onChange={(event) => setBrand(event.target.value)} />
-                                </Field>
-                            </div>
-                            <Field label="Budget">
-                                <Input value={budget} placeholder="25000" onChange={(event) => setBudget(event.target.value)} />
-                            </Field>
-                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                                <Field label="Has business">
-                                    <YesNoToggle value={business} onChange={setBusiness} />
-                                </Field>
-                                <Field label="Has SSN">
-                                    <YesNoToggle value={hasSsn} onChange={setHasSsn} />
-                                </Field>
-                                <Field label="Has license">
-                                    <YesNoToggle value={hasDl} onChange={setHasDl} />
-                                </Field>
+                        </aside>
+                        <div className="min-h-0 overflow-y-auto px-6 py-5">
+                            <div className="space-y-6">
+                                <section className="overflow-hidden rounded-xl border">
+                                    <div className="bg-stone-900 px-5 py-4 text-white">
+                                        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-stone-400">Email preview</p>
+                                        <p className="mt-1 text-lg font-semibold">{leadName(lead)}</p>
+                                    </div>
+                                    <dl className="divide-y px-5">
+                                        {previewRows.map((row) => (
+                                            <div key={row.label} className="grid grid-cols-[132px_minmax(0,1fr)] items-baseline gap-3 py-2.5">
+                                                <dt className="text-sm text-muted-foreground">{row.label}</dt>
+                                                <dd className={cn("text-sm", row.value ? "font-medium" : "text-muted-foreground")}>
+                                                    {row.value || "Left off the email"}
+                                                </dd>
+                                            </div>
+                                        ))}
+                                    </dl>
+                                </section>
+
+                                <section className="space-y-2">
+                                    <div>
+                                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Stores</p>
+                                    </div>
+                                    {stores.length === 0 && (
+                                        <p className="text-sm text-muted-foreground">No active partner stores.</p>
+                                    )}
+                                    <div className="space-y-2">
+                                        {stores.map((store) => {
+                                            const locked = alreadySent.has(store.id)
+                                            const checked = selected.includes(store.id)
+                                            const month = store.leads_sent_this_month ?? 0
+                                            const over = store.monthly_leads_max != null && month > store.monthly_leads_max
+                                            const target = store.monthly_leads_min != null && store.monthly_leads_max != null
+                                                ? `${store.monthly_leads_min}–${store.monthly_leads_max} / month`
+                                                : null
+                                            return (
+                                                <div
+                                                    key={store.id}
+                                                    role="checkbox"
+                                                    aria-checked={checked}
+                                                    aria-disabled={locked}
+                                                    onClick={() => {
+                                                        if (!locked) toggle(store.id)
+                                                    }}
+                                                    className={cn(
+                                                        "flex items-center gap-3 rounded-xl border px-3 py-3",
+                                                        locked ? "bg-muted/40 text-muted-foreground" : "cursor-pointer hover:bg-muted/30",
+                                                        checked && !locked && "border-primary/50 bg-primary/5",
+                                                    )}
+                                                >
+                                                    <Checkbox
+                                                        checked={checked}
+                                                        disabled={locked}
+                                                        onClick={(event) => event.stopPropagation()}
+                                                        onCheckedChange={() => toggle(store.id)}
+                                                    />
+                                                    <span className="min-w-0 flex-1">
+                                                        <span className="block truncate text-sm font-medium">{store.name}</span>
+                                                        <span className="mt-0.5 block text-xs text-muted-foreground">
+                                                            {optInLabel(store.program_type)}
+                                                            {locked ? " · Already sent" : ""}
+                                                            {target ? ` · Target ${target}` : ""}
+                                                        </span>
+                                                    </span>
+                                                    <span className="flex shrink-0 items-stretch gap-4 border-l pl-4">
+                                                        <span className="min-w-[4.25rem] text-right">
+                                                            <span className="block text-base font-semibold tabular-nums leading-none">{store.leads_sent ?? 0}</span>
+                                                            <span className="mt-1 block text-[10px] uppercase tracking-wide text-muted-foreground">With store</span>
+                                                        </span>
+                                                        <span className="min-w-[4.25rem] text-right">
+                                                            <span className={cn("block text-base font-semibold tabular-nums leading-none", over && "text-amber-700")}>{month}</span>
+                                                            <span className={cn("mt-1 block text-[10px] uppercase tracking-wide text-muted-foreground", over && "text-amber-700")}>
+                                                                {over ? "Over target" : "This month"}
+                                                            </span>
+                                                        </span>
+                                                    </span>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                </section>
+
+                                <section className="space-y-3">
+                                    <div>
+                                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Edit the email</p>
+                                        <p className="mt-1 text-xs text-muted-foreground">Changes update the preview and are saved on the lead when you send.</p>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <Field label="City">
+                                            <Input value={city} placeholder="Atlanta" onChange={(event) => setCity(event.target.value)} />
+                                        </Field>
+                                        <Field label="State">
+                                            <Input value={state} placeholder="GA" onChange={(event) => setState(event.target.value)} />
+                                        </Field>
+                                        <Field label="ZIP">
+                                            <Input value={postalCode} placeholder="30349" onChange={(event) => setPostalCode(event.target.value)} />
+                                        </Field>
+                                        <Field label="Down payment">
+                                            <Input inputMode="decimal" value={downPayment} placeholder="2000" onChange={(event) => setDownPayment(event.target.value)} />
+                                        </Field>
+                                        <Field label="Looking for">
+                                            <Input value={lookingFor} placeholder="Explorer" onChange={(event) => setLookingFor(event.target.value)} />
+                                        </Field>
+                                        <Field label="Brand">
+                                            <Input value={brand} placeholder="Ford" onChange={(event) => setBrand(event.target.value)} />
+                                        </Field>
+                                    </div>
+                                    <Field label="Budget">
+                                        <Input value={budget} placeholder="25000" onChange={(event) => setBudget(event.target.value)} />
+                                    </Field>
+                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                                        <Field label="Has business">
+                                            <YesNoToggle value={business} onChange={setBusiness} />
+                                        </Field>
+                                        <Field label="Has SSN">
+                                            <YesNoToggle value={hasSsn} onChange={setHasSsn} />
+                                        </Field>
+                                        <Field label="Has license">
+                                            <YesNoToggle value={hasDl} onChange={setHasDl} />
+                                        </Field>
+                                    </div>
+                                </section>
                             </div>
                         </div>
                     </div>
@@ -367,20 +398,13 @@ export function SendPartnerStoreButton({
                         <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>
                             Cancel
                         </Button>
-                        <Button onClick={confirmSend} disabled={busy}>
+                        <Button onClick={confirmSend} disabled={busy || freshCount === 0}>
                             {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                            Send
+                            {freshCount > 0 ? `Send to ${freshCount} ${freshCount === 1 ? "store" : "stores"}` : "Choose a store"}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
-            <LeadNotesModal
-                open={notesOpen}
-                onOpenChange={setNotesOpen}
-                leadId={leadId}
-                leadName={leadName(lead)}
-                leadNotes={lead?.notes}
-            />
         </>
     )
 }
