@@ -230,6 +230,7 @@ class CampaignFilterOption(BaseModel):
     display_name: str
     match_pattern: str
     sync_source_name: Optional[str] = None
+    is_active: bool = True
 
 
 class LeadResponse(BaseModel):

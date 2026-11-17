@@ -245,8 +245,10 @@ export interface LeadListParams {
     intake?: "new" | "duplicate";
     /** Only leads with multiple campaign submissions (is_starred) */
     multi_campaign_only?: boolean;
-    /** Filter by campaign mapping (primary or lead_campaigns) */
+    /** Filter by one campaign mapping (primary or lead_campaigns) */
     campaign_mapping_id?: string;
+    /** Comma-separated campaign mapping ids (primary or lead_campaigns) */
+    campaign_mapping_ids?: string;
     down_min?: number;
     down_max?: number;
     has_license?: boolean;
@@ -263,6 +265,7 @@ export interface CampaignFilterOption {
     display_name: string;
     match_pattern: string;
     sync_source_name?: string | null;
+    is_active?: boolean;
 }
 
 /** Data for updating a lead - customer fields are at top level (not nested) */
@@ -501,7 +504,11 @@ export const LeadService = {
         if (options?.pool) params.append("pool", options.pool);
         if (options?.fresh_only === true) params.append("fresh_only", "true");
         if (options?.multi_campaign_only === true) params.append("multi_campaign_only", "true");
-        if (options?.campaign_mapping_id) params.append("campaign_mapping_id", options.campaign_mapping_id);
+        if (options?.campaign_mapping_ids) {
+            params.append("campaign_mapping_ids", options.campaign_mapping_ids);
+        } else if (options?.campaign_mapping_id) {
+            params.append("campaign_mapping_id", options.campaign_mapping_id);
+        }
         if (options?.assigned_to) params.append("assigned_to", options.assigned_to);
         if (options?.date_from) params.append("date_from", options.date_from);
         if (options?.date_to) params.append("date_to", options.date_to);

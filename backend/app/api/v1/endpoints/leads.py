@@ -763,6 +763,7 @@ def _build_leads_list_select(
     fresh_only: Optional[bool] = None,
     multi_campaign_only: Optional[bool] = None,
     campaign_mapping_id: Optional[UUID] = None,
+    campaign_mapping_ids: Optional[List[UUID]] = None,
     dealership_id: Optional[UUID] = None,
     down_min: Optional[float] = None,
     down_max: Optional[float] = None,
@@ -853,13 +854,20 @@ def _build_leads_list_select(
     if multi_campaign_only:
         query = query.where(Lead.is_starred.is_(True))
 
-    if campaign_mapping_id is not None:
+    selected_campaign_ids: List[UUID] = []
+    if campaign_mapping_ids:
+        for campaign_id in campaign_mapping_ids:
+            if campaign_id not in selected_campaign_ids:
+                selected_campaign_ids.append(campaign_id)
+    if campaign_mapping_id is not None and campaign_mapping_id not in selected_campaign_ids:
+        selected_campaign_ids.append(campaign_mapping_id)
+    if selected_campaign_ids:
         campaign_lead_subq = select(LeadCampaign.lead_id).where(
-            LeadCampaign.campaign_mapping_id == campaign_mapping_id
+            LeadCampaign.campaign_mapping_id.in_(selected_campaign_ids)
         )
         query = query.where(
             or_(
-                Lead.campaign_mapping_id == campaign_mapping_id,
+                Lead.campaign_mapping_id.in_(selected_campaign_ids),
                 Lead.id.in_(campaign_lead_subq),
             )
         )
@@ -923,6 +931,30 @@ def _apply_arrival_window(query, date_from: Optional[datetime], date_to: Optiona
     return query.where(or_(and_(*created_clauses), and_(*inbound_clauses)))
 
 
+def _parse_campaign_id_list(raw: Optional[str]) -> List[UUID]:
+    """Comma-separated campaign mapping ids from the leads filter."""
+    if not raw or not raw.strip():
+        return []
+    ids: List[UUID] = []
+    seen = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            campaign_id = UUID(part)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid campaign id: {part}",
+            )
+        if campaign_id in seen:
+            continue
+        seen.add(campaign_id)
+        ids.append(campaign_id)
+    return ids
+
+
 def _lead_list_order():
     """Newest arrival first: a duplicate that just came in sorts above its original created date."""
     return func.coalesce(Lead.last_inbound_at, Lead.created_at).desc()
@@ -947,6 +979,10 @@ async def list_leads(
     campaign_mapping_id: Optional[UUID] = Query(
         None,
         description="Leads tied to this campaign (primary campaign or lead_campaigns row)",
+    ),
+    campaign_mapping_ids: Optional[str] = Query(
+        None,
+        description="Comma-separated campaign mapping ids. Leads tied to any of them.",
     ),
     assigned_to: Optional[UUID] = Query(None, description="Filter by salesperson (admin/owner only). Show only leads assigned to this user."),
     bdc_agent_id: Optional[UUID] = Query(None, description="Filter by BDC agent. Show only leads assigned to this BDC agent."),
@@ -997,6 +1033,7 @@ async def list_leads(
         fresh_only=fresh_only,
         multi_campaign_only=multi_campaign_only,
         campaign_mapping_id=campaign_mapping_id,
+        campaign_mapping_ids=_parse_campaign_id_list(campaign_mapping_ids),
         dealership_id=dealership_id,
         down_min=down_min,
         down_max=down_max,
@@ -1217,6 +1254,7 @@ async def list_campaign_filter_options(
             sync_source_name=(
                 (m.sync_source.display_name or m.sync_source.name) if m.sync_source else None
             ),
+            is_active=bool(m.is_active),
         )
         for m in mappings
     ]
@@ -3972,6 +4010,9 @@ async def export_leads_csv(
     fresh_only: Optional[bool] = Query(None, description="Only untouched/fresh leads"),
     multi_campaign_only: Optional[bool] = Query(None, description="Only multi-campaign / starred leads"),
     campaign_mapping_id: Optional[UUID] = Query(None, description="Leads tied to this campaign"),
+    campaign_mapping_ids: Optional[str] = Query(
+        None, description="Comma-separated campaign mapping ids"
+    ),
     assigned_to: Optional[UUID] = Query(
         None, description="Filter by assignee (admin/owner/super only)"
     ),
@@ -4023,6 +4064,7 @@ async def export_leads_csv(
         fresh_only=fresh_only,
         multi_campaign_only=multi_campaign_only,
         campaign_mapping_id=campaign_mapping_id,
+        campaign_mapping_ids=_parse_campaign_id_list(campaign_mapping_ids),
         down_min=down_min,
         down_max=down_max,
         has_license=has_license,

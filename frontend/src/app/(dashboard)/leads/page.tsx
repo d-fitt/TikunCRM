@@ -30,6 +30,7 @@ import {
     Columns3,
     Flame,
     Store,
+    ChevronDown,
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -206,6 +207,21 @@ function withPartnerSends(lead: Lead, results: StoreSendResult[]): Lead {
     }
 }
 
+const CAMPAIGN_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function parseCampaignIds(raw: string | null | undefined): string[] {
+    if (!raw || raw === "all") return []
+    const seen = new Set<string>()
+    const ids: string[] = []
+    for (const part of raw.split(",")) {
+        const id = part.trim()
+        if (!CAMPAIGN_ID_RE.test(id) || seen.has(id)) continue
+        seen.add(id)
+        ids.push(id)
+    }
+    return ids
+}
+
 function PartnerStoreCell({
     lead,
     canSend,
@@ -313,9 +329,7 @@ export default function LeadsPage() {
     )
     const [displayView, setDisplayView] = React.useState<DisplayView>(viewParam === "pipeline" ? "pipeline" : "list")
     const [assignedTo, setAssignedTo] = React.useState(assignedToParam || "all")
-    const [campaignFilter, setCampaignFilter] = React.useState(
-        campaignParam && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(campaignParam) ? campaignParam : "all"
-    )
+    const [campaignFilter, setCampaignFilter] = React.useState<string[]>(() => parseCampaignIds(campaignParam))
     const [dealershipFilter, setDealershipFilter] = React.useState(
         dealershipIdParam && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(dealershipIdParam)
             ? dealershipIdParam
@@ -445,12 +459,7 @@ export default function LeadsPage() {
         if (urlAssignedTo) setAssignedTo(urlAssignedTo)
         else setAssignedTo("all")
 
-        const urlCampaign = searchParams.get("campaign")
-        if (urlCampaign && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(urlCampaign)) {
-            setCampaignFilter(urlCampaign)
-        } else {
-            setCampaignFilter("all")
-        }
+        setCampaignFilter(parseCampaignIds(searchParams.get("campaign")))
 
         const urlDealershipId = searchParams.get("dealership_id")
         if (
@@ -580,8 +589,39 @@ export default function LeadsPage() {
     }, [isDealershipLevel, isSuperAdmin, orgDealershipId])
 
     React.useEffect(() => {
-        LeadService.getCampaignFilterOptions().then(setCampaignOptions).catch(() => setCampaignOptions([]))
+        LeadService.getCampaignFilterOptions()
+            .then((options) => setCampaignOptions(options.filter((option) => option.is_active !== false)))
+            .catch(() => setCampaignOptions([]))
     }, [])
+
+    const activeCampaignOptions = campaignOptions
+
+    const applyCampaignFilter = React.useCallback((ids: string[]) => {
+        const allowed = new Set(activeCampaignOptions.map((option) => option.id))
+        const next = ids.filter((id, index) => allowed.has(id) && ids.indexOf(id) === index)
+        setCampaignFilter(next)
+        setPage(1)
+        const params = new URLSearchParams(searchParams.toString())
+        if (next.length > 0) params.set("campaign", next.join(","))
+        else params.delete("campaign")
+        params.delete("page")
+        router.replace(`/leads?${params.toString()}`)
+        filterStorage.setLeads({
+            filter: viewMode,
+            status,
+            source,
+            view: displayView,
+            assigned_to: assignedTo !== "all" ? assignedTo : undefined,
+            campaign: next.length > 0 ? next.join(",") : undefined,
+        })
+    }, [activeCampaignOptions, searchParams, router, viewMode, status, source, displayView, assignedTo])
+
+    React.useEffect(() => {
+        if (activeCampaignOptions.length === 0 || campaignFilter.length === 0) return
+        const allowed = new Set(activeCampaignOptions.map((option) => option.id))
+        if (campaignFilter.every((id) => allowed.has(id))) return
+        applyCampaignFilter(campaignFilter.filter((id) => allowed.has(id)))
+    }, [activeCampaignOptions, campaignFilter, applyCampaignFilter])
     
     // Assignment modal state
     const [assignModalOpen, setAssignModalOpen] = React.useState(false)
@@ -629,7 +669,7 @@ export default function LeadsPage() {
         if (source !== "all") f.source = source
         if (assignedTo !== "all") f.assigned_to = assignedTo
         if (bdcAgentFilter !== "all") f.bdc_agent_id = bdcAgentFilter
-        if (campaignFilter !== "all") f.campaign = campaignFilter
+        if (campaignFilter.length > 0) f.campaign = campaignFilter.join(",")
         if (!isOrgWide && dealershipFilter !== "all") f.dealership_id = dealershipFilter
         if (displayView === "pipeline") f.view = "pipeline"
         return f
@@ -674,7 +714,7 @@ export default function LeadsPage() {
         const params: LeadExportFilters = {}
         if (search) params.search = search
         if (source && source !== "all") params.source = source
-        if (campaignFilter !== "all") params.campaign_mapping_id = campaignFilter
+        if (campaignFilter.length > 0) params.campaign_mapping_ids = campaignFilter.join(",")
 
         if (viewMode === "unassigned") {
             params.pool = "unassigned"
@@ -803,7 +843,7 @@ export default function LeadsPage() {
             const baseParams: Record<string, unknown> = { page: 1, page_size: PIPELINE_PAGE_SIZE }
             if (search) baseParams.search = search
             if (source && source !== "all") baseParams.source = source
-            if (campaignFilter !== "all") baseParams.campaign_mapping_id = campaignFilter
+            if (campaignFilter.length > 0) baseParams.campaign_mapping_ids = campaignFilter.join(",")
             if (assignedTo && assignedTo !== "all") baseParams.assigned_to = assignedTo
             if (bdcAgentFilter && bdcAgentFilter !== "all") baseParams.bdc_agent_id = bdcAgentFilter
             if (!isOrgWide && dealershipFilter && dealershipFilter !== "all") baseParams.dealership_id = dealershipFilter
@@ -892,7 +932,7 @@ export default function LeadsPage() {
                 }
                 if (search) params.search = search
                 if (source && source !== "all") params.source = source
-                if (campaignFilter !== "all") params.campaign_mapping_id = campaignFilter
+                if (campaignFilter.length > 0) params.campaign_mapping_ids = campaignFilter.join(",")
                 if (assignedTo && assignedTo !== "all") params.assigned_to = assignedTo
                 if (bdcAgentFilter && bdcAgentFilter !== "all") params.bdc_agent_id = bdcAgentFilter
                 if (viewMode === "unassigned") params.pool = "unassigned"
@@ -1308,7 +1348,7 @@ export default function LeadsPage() {
                                 source,
                                 view: next,
                                 assigned_to: assignedTo !== "all" ? assignedTo : undefined,
-                                campaign: campaignFilter !== "all" ? campaignFilter : undefined,
+                                campaign: campaignFilter.length > 0 ? campaignFilter.join(",") : undefined,
                             })
                         }}
                     >
@@ -1354,7 +1394,7 @@ export default function LeadsPage() {
                                         source,
                                         view: displayView,
                                         assigned_to: assignedTo !== "all" ? assignedTo : undefined,
-                                        campaign: campaignFilter !== "all" ? campaignFilter : undefined,
+                                        campaign: campaignFilter.length > 0 ? campaignFilter.join(",") : undefined,
                                     })
                                 }}
                             >
@@ -1437,7 +1477,7 @@ export default function LeadsPage() {
                                     source: v,
                                     view: displayView,
                                     assigned_to: assignedTo !== "all" ? assignedTo : undefined,
-                                    campaign: campaignFilter !== "all" ? campaignFilter : undefined,
+                                    campaign: campaignFilter.length > 0 ? campaignFilter.join(",") : undefined,
                                 })
                             }}
                         >
@@ -1469,7 +1509,7 @@ export default function LeadsPage() {
                                         source,
                                         view: displayView,
                                         assigned_to: v !== "all" ? v : undefined,
-                                        campaign: campaignFilter !== "all" ? campaignFilter : undefined,
+                                        campaign: campaignFilter.length > 0 ? campaignFilter.join(",") : undefined,
                                     })
                                 }}
                             >
@@ -1507,39 +1547,71 @@ export default function LeadsPage() {
                                 </SelectContent>
                             </Select>
                         )}
-                        {campaignOptions.length > 0 && (
-                            <Select
-                                value={campaignFilter}
-                                onValueChange={(v) => {
-                                    setCampaignFilter(v)
-                                    setPage(1)
-                                    const params = new URLSearchParams(searchParams.toString())
-                                    if (v !== "all") params.set("campaign", v)
-                                    else params.delete("campaign")
-                                    params.delete("page")
-                                    router.replace(`/leads?${params.toString()}`)
-                                    filterStorage.setLeads({
-                                        filter: viewMode,
-                                        status,
-                                        source,
-                                        view: displayView,
-                                        assigned_to: assignedTo !== "all" ? assignedTo : undefined,
-                                        campaign: v !== "all" ? v : undefined,
-                                    })
-                                }}
-                            >
-                                <SelectTrigger className="w-[200px] min-w-[10rem] shrink-0">
-                                    <SelectValue placeholder="Campaign" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All campaigns</SelectItem>
-                                    {campaignOptions.map((c) => (
-                                        <SelectItem key={c.id} value={c.id} title={c.match_pattern}>
-                                            {c.display_name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                        {activeCampaignOptions.length > 0 && (
+                            <Popover>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        className="w-[220px] min-w-[10rem] shrink-0 justify-between px-3 font-normal"
+                                    >
+                                        <span className="truncate text-left">
+                                            {campaignFilter.length === 0
+                                                ? "All campaigns"
+                                                : campaignFilter.length === 1
+                                                  ? activeCampaignOptions.find((c) => c.id === campaignFilter[0])?.display_name || "1 campaign"
+                                                  : `${campaignFilter.length} campaigns`}
+                                        </span>
+                                        <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-[280px] p-1" align="start">
+                                    <div className="max-h-72 overflow-y-auto">
+                                        <div
+                                            role="button"
+                                            tabIndex={0}
+                                            className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+                                            onClick={() => applyCampaignFilter([])}
+                                            onKeyDown={(event) => {
+                                                if (event.key === "Enter" || event.key === " ") {
+                                                    event.preventDefault()
+                                                    applyCampaignFilter([])
+                                                }
+                                            }}
+                                        >
+                                            <Checkbox checked={campaignFilter.length === 0} tabIndex={-1} className="pointer-events-none" />
+                                            All campaigns
+                                        </div>
+                                        {activeCampaignOptions.map((c) => {
+                                            const checked = campaignFilter.includes(c.id)
+                                            const toggle = () => {
+                                                const next = checked
+                                                    ? campaignFilter.filter((id) => id !== c.id)
+                                                    : [...campaignFilter, c.id]
+                                                applyCampaignFilter(next)
+                                            }
+                                            return (
+                                                <div
+                                                    key={c.id}
+                                                    role="button"
+                                                    tabIndex={0}
+                                                    title={c.match_pattern}
+                                                    className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+                                                    onClick={toggle}
+                                                    onKeyDown={(event) => {
+                                                        if (event.key === "Enter" || event.key === " ") {
+                                                            event.preventDefault()
+                                                            toggle()
+                                                        }
+                                                    }}
+                                                >
+                                                    <Checkbox checked={checked} tabIndex={-1} className="pointer-events-none" />
+                                                    <span className="truncate">{c.display_name}</span>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                </PopoverContent>
+                            </Popover>
                         )}
                         <div className="flex shrink-0 items-center gap-2 rounded-md border px-2 py-1.5">
                             <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
