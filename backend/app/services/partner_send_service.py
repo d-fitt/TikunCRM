@@ -1,6 +1,7 @@
 """Send one lead to one or more partner stores. A person chooses the stores."""
 import logging
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 from uuid import UUID, uuid4
 
@@ -32,6 +33,18 @@ class SendError(ValueError):
 
 
 @dataclass
+class SendDetails:
+    """Optional details filled in at send time. Blank values are left unchanged."""
+    postal_code: Optional[str] = None
+    email: Optional[str] = None
+    down_payment: Optional[Decimal] = None
+    clear_down_payment: bool = False
+    is_business: Optional[bool] = None
+    clear_business: bool = False
+    interested_in: Optional[str] = None
+
+
+@dataclass
 class StoreSendResult:
     partner_store_id: UUID
     partner_store_name: str
@@ -43,11 +56,35 @@ class StoreSendResult:
     email_error: Optional[str] = None
 
 
+def _apply_send_details(lead: Lead, customer: Optional[Customer], details: Optional[SendDetails]) -> None:
+    """Apply only the fields the sender included. A blank value removes it from the email."""
+    if details is None:
+        return
+    if customer is not None and details.postal_code is not None:
+        customer.postal_code = details.postal_code.strip()[:20] or None
+    if customer is not None and details.email is not None:
+        email = details.email.strip()
+        if email and "@" not in email:
+            raise SendError("Enter a valid email or leave it blank.")
+        customer.email = email[:255] or None
+    if details.interested_in is not None:
+        lead.interested_in = details.interested_in.strip()[:255] or None
+    if details.down_payment is not None:
+        if details.down_payment < 0:
+            raise SendError("Down payment cannot be negative.")
+        lead.down_payment = details.down_payment
+    if details.clear_down_payment:
+        lead.down_payment = None
+    if details.is_business is not None or details.clear_business:
+        lead.is_business = None if details.clear_business else details.is_business
+
+
 async def send_lead_to_stores(
     db: AsyncSession,
     lead: Lead,
     store_ids: list[UUID],
     user: User,
+    details: Optional[SendDetails] = None,
 ) -> list[StoreSendResult]:
     wanted = list(dict.fromkeys(store_ids))
     if not wanted:
@@ -99,6 +136,7 @@ async def send_lead_to_stores(
     }
 
     customer = await db.get(Customer, lead.customer_id)
+    _apply_send_details(lead, customer, details)
     pending: list[tuple[StoreSendResult, LeadDelivery]] = []
     newly_sent: list[PartnerStore] = []
     now = utc_now()

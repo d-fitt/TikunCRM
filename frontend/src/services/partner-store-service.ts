@@ -269,9 +269,24 @@ export const PartnerStoreService = {
         return response.data
     },
 
-    async sendLead(leadId: string, partnerStoreIds: string[]): Promise<{ lead_id: string; results: StoreSendResult[] }> {
+    async sendLead(
+        leadId: string,
+        partnerStoreIds: string[],
+        details?: {
+            postal_code?: string
+            email?: string
+            down_payment?: number
+            is_business?: boolean
+            interested_in?: string
+        },
+    ): Promise<{ lead_id: string; results: StoreSendResult[] }> {
         const response = await apiClient.post(`/leads/${leadId}/send-to-partner-stores`, {
             partner_store_ids: partnerStoreIds,
+            postal_code: details?.postal_code || null,
+            email: details?.email || null,
+            down_payment: details?.down_payment ?? null,
+            is_business: details?.is_business ?? null,
+            interested_in: details?.interested_in || null,
         })
         return response.data
     },

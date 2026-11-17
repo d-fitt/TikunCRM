@@ -8,7 +8,10 @@ import {
     type PartnerStore,
     type StoreSendResult,
 } from "@/services/partner-store-service"
+import { LeadService, type Lead } from "@/services/lead-service"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
     Dialog,
     DialogContent,
@@ -35,6 +38,21 @@ function statusLabel(status: string) {
     return status.replace(/_/g, " ")
 }
 
+function formatUsPhone(raw?: string | null) {
+    const digits = (raw || "").replace(/\D/g, "")
+    const national = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits
+    if (national.length === 10) {
+        return `(${national.slice(0, 3)}) ${national.slice(3, 6)}-${national.slice(6)}`
+    }
+    return (raw || "").trim()
+}
+
+function leadName(lead: Lead | null) {
+    const customer = lead?.customer
+    const name = `${customer?.first_name || ""} ${customer?.last_name || ""}`.trim()
+    return name || "This lead"
+}
+
 export function SendPartnerStoreButton({
     leadId,
     sentStoreIds = [],
@@ -53,6 +71,12 @@ export function SendPartnerStoreButton({
     const [stores, setStores] = React.useState<PartnerStore[]>([])
     const [selected, setSelected] = React.useState<string[]>([])
     const [busy, setBusy] = React.useState(false)
+    const [lead, setLead] = React.useState<Lead | null>(null)
+    const [postalCode, setPostalCode] = React.useState("")
+    const [email, setEmail] = React.useState("")
+    const [downPayment, setDownPayment] = React.useState("")
+    const [business, setBusiness] = React.useState("")
+    const [lookingFor, setLookingFor] = React.useState("")
     const alreadySent = React.useMemo(() => new Set(sentStoreIds), [sentStoreIds])
 
     async function openPicker(event: React.MouseEvent) {
@@ -60,8 +84,17 @@ export function SendPartnerStoreButton({
         setOpen(true)
         setSelected(sentStoreIds)
         try {
-            const res = await PartnerStoreService.list({ active_only: true })
+            const [res, row] = await Promise.all([
+                PartnerStoreService.list({ active_only: true }),
+                LeadService.getLead(leadId),
+            ])
             setStores(res.items || [])
+            setLead(row)
+            setPostalCode(row.customer?.postal_code || "")
+            setEmail(row.customer?.email || "")
+            setDownPayment(row.down_payment != null ? String(row.down_payment) : "")
+            setBusiness(row.is_business == null ? "" : row.is_business ? "yes" : "no")
+            setLookingFor(row.interested_in || "")
         } catch {
             toast({ title: "Could not load partner stores", variant: "destructive" })
         }
@@ -80,7 +113,20 @@ export function SendPartnerStoreButton({
         }
         setBusy(true)
         try {
-            const result = await PartnerStoreService.sendLead(leadId, fresh)
+            const down = downPayment.trim()
+            const parsedDown = down ? Number(down.replace(/[$,]/g, "")) : undefined
+            if (parsedDown != null && Number.isNaN(parsedDown)) {
+                toast({ title: "Enter a valid down payment or leave it blank" })
+                setBusy(false)
+                return
+            }
+            const result = await PartnerStoreService.sendLead(leadId, fresh, {
+                postal_code: postalCode.trim() || undefined,
+                email: email.trim() || undefined,
+                down_payment: parsedDown,
+                is_business: business === "" ? undefined : business === "yes",
+                interested_in: lookingFor.trim() || undefined,
+            })
             const sent = result.results.filter((item) => item.status === "sent")
             const warning = result.results.find((item) => item.email_error)?.email_error
             toast({
@@ -132,7 +178,11 @@ export function SendPartnerStoreButton({
                             Pick one or more stores. Each store is emailed on its own.
                         </DialogDescription>
                     </DialogHeader>
-                    <div className="space-y-1 overflow-y-auto px-6 py-3">
+                    <div className="space-y-4 overflow-y-auto px-6 py-4">
+                        <div>
+                            <p className="text-sm font-medium">{leadName(lead)}</p>
+                            <p className="text-sm text-muted-foreground">{formatUsPhone(lead?.customer?.phone) || "No phone yet"}</p>
+                        </div>
                         {stores.length === 0 && (
                             <p className="text-sm text-muted-foreground">No active partner stores.</p>
                         )}
@@ -161,6 +211,43 @@ export function SendPartnerStoreButton({
                                 </label>
                             )
                         })}
+                        <div className="space-y-3 border-t pt-4">
+                            <div>
+                                <p className="text-sm font-medium">Add to the email</p>
+                                <p className="text-xs text-muted-foreground">Leave a field blank and it stays off the email.</p>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                    <Label htmlFor="send-zip">ZIP</Label>
+                                    <Input id="send-zip" value={postalCode} onChange={(event) => setPostalCode(event.target.value)} />
+                                </div>
+                                <div className="space-y-1">
+                                    <Label htmlFor="send-down">Down payment</Label>
+                                    <Input id="send-down" inputMode="decimal" value={downPayment} onChange={(event) => setDownPayment(event.target.value)} />
+                                </div>
+                            </div>
+                            <div className="space-y-1">
+                                <Label htmlFor="send-email">Email</Label>
+                                <Input id="send-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+                            </div>
+                            <div className="space-y-1">
+                                <Label htmlFor="send-business">Business</Label>
+                                <select
+                                    id="send-business"
+                                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                                    value={business}
+                                    onChange={(event) => setBusiness(event.target.value)}
+                                >
+                                    <option value="">Leave off the email</option>
+                                    <option value="yes">Yes</option>
+                                    <option value="no">No</option>
+                                </select>
+                            </div>
+                            <div className="space-y-1">
+                                <Label htmlFor="send-looking">Looking for</Label>
+                                <Input id="send-looking" value={lookingFor} onChange={(event) => setLookingFor(event.target.value)} />
+                            </div>
+                        </div>
                     </div>
                     <DialogFooter className="border-t px-6 py-4">
                         <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>

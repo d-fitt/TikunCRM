@@ -116,36 +116,28 @@ def build_partner_lead_email(
 ) -> tuple[str, str, str]:
     """Return subject, plain text, and HTML for one store."""
     name = _customer_name(customer)
-    phone = _clean(customer.phone if customer else None)
+    phone = _format_phone(customer.phone if customer else None)
     email = _clean(customer.email if customer else None)
     postal = _clean(customer.postal_code if customer else None)
-    city = _place(customer)
     interest = _clean(lead.interested_in)
-    brand = _clean(lead.interested_brand)
-    source = _source(lead)
-    down_payment = _meta_value(lead, "downpayment", "down_payment")
-    sender = f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email
-    when = (sent_at or datetime.now(_BUSINESS_TZ)).astimezone(_BUSINESS_TZ)
-    when_label = when.strftime("%b %-d, %Y, %-I:%M %p ET")
-    program = "Leads + BDC" if program_type == "full_bdc" else "Leads only"
+    down_payment = _down_payment(lead)
+    business = _business_label(lead.is_business)
     brand_name = (from_name or "Carvaminos").strip() or "Carvaminos"
     subject = f"New lead: {name} — {store.name}"
 
-    rows = [
-        ("Phone", phone or "—"),
-        ("Email", email or "—"),
-        ("ZIP", postal or "—"),
-        ("City", city or "—"),
-        ("Looking for", interest or "—"),
-        ("Brand", brand or "—"),
-    ]
-    if source:
-        rows.append(("Source", source))
+    rows = []
+    if phone:
+        rows.append(("Phone", phone))
+    if postal:
+        rows.append(("ZIP", postal))
+    if email:
+        rows.append(("Email", email))
     if down_payment:
         rows.append(("Down payment", down_payment))
-    rows.append(("Sent by", sender))
-    rows.append(("Sent", when_label))
-    rows.append(("Program", program))
+    if business:
+        rows.append(("Business", business))
+    if interest:
+        rows.append(("Looking for", interest))
 
     text_lines = [
         f"New lead for {store.name}",
@@ -368,6 +360,40 @@ def _customer_name(customer: Optional[Customer]) -> str:
 
 def _clean(value: Optional[str]) -> str:
     return (value or "").strip()
+
+
+def _format_phone(raw: Optional[str]) -> str:
+    digits = "".join(ch for ch in (raw or "") if ch.isdigit())
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    if len(digits) == 10:
+        return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+    return _clean(raw)
+
+
+def _down_payment(lead: Lead) -> str:
+    amount = getattr(lead, "down_payment", None)
+    if amount is None:
+        raw = _meta_value(lead, "downpayment", "down_payment")
+        if not raw:
+            return ""
+        cleaned = raw.replace("$", "").replace(",", "").strip()
+        try:
+            amount = float(cleaned)
+        except ValueError:
+            return raw
+    number = float(amount)
+    if number == int(number):
+        return f"${int(number):,}"
+    return f"${number:,.2f}"
+
+
+def _business_label(value: Optional[bool]) -> str:
+    if value is True:
+        return "Yes"
+    if value is False:
+        return "No"
+    return ""
 
 
 def _place(customer: Optional[Customer]) -> str:

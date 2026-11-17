@@ -16,7 +16,9 @@ from app.models.lead_delivery import LeadDelivery
 from app.models.partner_store import PartnerStore
 from app.models.user import User
 from app.services.partner_routing_service import return_delivery
-from app.services.partner_send_service import SendError, send_lead_to_stores
+from decimal import Decimal
+
+from app.services.partner_send_service import SendDetails, SendError, send_lead_to_stores
 
 router = APIRouter()
 
@@ -40,6 +42,11 @@ class DeliveryResponse(BaseModel):
 
 class SendToStoresRequest(BaseModel):
     partner_store_ids: List[UUID] = Field(default_factory=list)
+    postal_code: Optional[str] = Field(None, max_length=20)
+    email: Optional[str] = Field(None, max_length=255)
+    down_payment: Optional[Decimal] = None
+    is_business: Optional[bool] = None
+    interested_in: Optional[str] = Field(None, max_length=255)
 
 
 class StoreSendResponse(BaseModel):
@@ -132,7 +139,22 @@ async def send_lead_to_partner_stores(
     if not await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to):
         raise HTTPException(status_code=403, detail="Access denied")
     try:
-        results = await send_lead_to_stores(db, lead, body.partner_store_ids, current_user)
+        provided = body.model_fields_set
+        results = await send_lead_to_stores(
+            db,
+            lead,
+            body.partner_store_ids,
+            current_user,
+            SendDetails(
+                postal_code=(body.postal_code or "") if "postal_code" in provided else None,
+                email=(body.email or "") if "email" in provided else None,
+                down_payment=body.down_payment if "down_payment" in provided and body.down_payment is not None else None,
+                clear_down_payment="down_payment" in provided and body.down_payment is None,
+                is_business=body.is_business if "is_business" in provided else None,
+                clear_business="is_business" in provided and body.is_business is None,
+                interested_in=(body.interested_in or "") if "interested_in" in provided else None,
+            ),
+        )
     except SendError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return SendToStoresResponse(
