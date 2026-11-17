@@ -28,6 +28,10 @@ export interface PartnerStore {
     updated_at: string;
     program_type?: "leads_only" | "full_bdc" | null;
     program_status?: string | null;
+    /** Leads still with this store. Drops when a send is removed. */
+    leads_sent?: number;
+    /** Still-assigned leads sent since the start of this month. */
+    leads_sent_this_month?: number;
 }
 
 export interface PartnerStoreCreate {
@@ -124,6 +128,7 @@ export interface PartnerStoreDashboard {
     monthly_leads_min?: number | null
     monthly_leads_max?: number | null
     sent_this_month: number
+    leads_sent?: number
     range_position?: "below" | "in_range" | "above" | null
     recipient_emails: string[]
     campaigns: { campaign_mapping_id: string; label: string; type: string }[]
@@ -173,6 +178,8 @@ export interface PartnerStoreListParams {
     brand?: string;
     active_only?: boolean;
     search?: string;
+    /** Skip the in-memory list cache so send counts are current. */
+    fresh?: boolean;
 }
 
 /** In-memory cache for the common active-only list (avoids N duplicate requests). */
@@ -185,28 +192,37 @@ function invalidateActiveStoresCache() {
 }
 
 export const PartnerStoreService = {
+    forgetListCache() {
+        invalidateActiveStoresCache()
+    },
+
     async list(params: PartnerStoreListParams = {}): Promise<PartnerStoreListResponse> {
+        const { fresh, ...query } = params
         const isDefaultActive =
-            params.active_only === true &&
-            !params.brand &&
-            !params.search
+            query.active_only === true &&
+            !query.brand &&
+            !query.search
+        if (fresh) invalidateActiveStoresCache()
         if (isDefaultActive) {
             if (activeStoresCache) return activeStoresCache
             if (!activeStoresPromise) {
-                activeStoresPromise = apiClient
-                    .get(`${PREFIX}/`, { params })
+                const request = apiClient
+                    .get(`${PREFIX}/`, { params: query })
                     .then((response) => {
-                        activeStoresCache = response.data
-                        return activeStoresCache!
+                        if (activeStoresPromise === request) {
+                            activeStoresCache = response.data
+                        }
+                        return response.data as PartnerStoreListResponse
                     })
                     .catch((err) => {
-                        activeStoresPromise = null
+                        if (activeStoresPromise === request) activeStoresPromise = null
                         throw err
                     })
+                activeStoresPromise = request
             }
             return activeStoresPromise
         }
-        const response = await apiClient.get(`${PREFIX}/`, { params });
+        const response = await apiClient.get(`${PREFIX}/`, { params: query });
         return response.data;
     },
 
@@ -279,11 +295,14 @@ export const PartnerStoreService = {
             state?: string
             down_payment?: number
             is_business?: boolean | null
+            has_ssn_stip?: boolean | null
+            has_dl_stip?: boolean | null
             interested_in?: string
             interested_brand?: string
             budget_range?: string
         },
     ): Promise<{ lead_id: string; results: StoreSendResult[] }> {
+        invalidateActiveStoresCache()
         const response = await apiClient.post(`/leads/${leadId}/send-to-partner-stores`, {
             partner_store_ids: partnerStoreIds,
             postal_code: details?.postal_code || null,
@@ -292,6 +311,8 @@ export const PartnerStoreService = {
             state: details?.state || null,
             down_payment: details?.down_payment ?? null,
             is_business: details && "is_business" in details ? details.is_business : null,
+            has_ssn_stip: details && "has_ssn_stip" in details ? details.has_ssn_stip : null,
+            has_dl_stip: details && "has_dl_stip" in details ? details.has_dl_stip : null,
             interested_in: details?.interested_in || null,
             interested_brand: details?.interested_brand || null,
             budget_range: details?.budget_range || null,

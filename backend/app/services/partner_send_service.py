@@ -43,6 +43,8 @@ class SendDetails:
     clear_down_payment: bool = False
     is_business: Optional[bool] = None
     clear_business: bool = False
+    has_ssn_stip: Optional[bool] = None
+    has_dl_stip: Optional[bool] = None
     interested_in: Optional[str] = None
     interested_brand: Optional[str] = None
     budget_range: Optional[str] = None
@@ -89,6 +91,10 @@ def _apply_send_details(lead: Lead, customer: Optional[Customer], details: Optio
         lead.down_payment = None
     if details.is_business is not None or details.clear_business:
         lead.is_business = None if details.clear_business else details.is_business
+    if details.has_ssn_stip is not None:
+        lead.has_ssn_stip = bool(details.has_ssn_stip)
+    if details.has_dl_stip is not None:
+        lead.has_dl_stip = bool(details.has_dl_stip)
 
 
 async def send_lead_to_stores(

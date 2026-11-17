@@ -48,6 +48,8 @@ class SendToStoresRequest(BaseModel):
     state: Optional[str] = Field(None, max_length=100)
     down_payment: Optional[Decimal] = None
     is_business: Optional[bool] = None
+    has_ssn_stip: Optional[bool] = None
+    has_dl_stip: Optional[bool] = None
     interested_in: Optional[str] = Field(None, max_length=255)
     interested_brand: Optional[str] = Field(None, max_length=100)
     budget_range: Optional[str] = Field(None, max_length=100)
@@ -158,6 +160,8 @@ async def send_lead_to_partner_stores(
                 clear_down_payment="down_payment" in provided and body.down_payment is None,
                 is_business=body.is_business if "is_business" in provided else None,
                 clear_business="is_business" in provided and body.is_business is None,
+                has_ssn_stip=body.has_ssn_stip if "has_ssn_stip" in provided else None,
+                has_dl_stip=body.has_dl_stip if "has_dl_stip" in provided else None,
                 interested_in=(body.interested_in or "") if "interested_in" in provided else None,
                 interested_brand=(body.interested_brand or "") if "interested_brand" in provided else None,
                 budget_range=(body.budget_range or "") if "budget_range" in provided else None,

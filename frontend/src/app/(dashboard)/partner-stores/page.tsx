@@ -225,6 +225,7 @@ export default function PartnerStoresPage() {
                                     <TableHead className="hidden md:table-cell">Location</TableHead>
                                     <TableHead className="hidden md:table-cell">Contact</TableHead>
                                     <TableHead>Receives</TableHead>
+                                    <TableHead className="text-right">Leads sent</TableHead>
                                     <TableHead>Status</TableHead>
                                     {isManagerOrAbove && <TableHead className="text-right">Actions</TableHead>}
                                 </TableRow>
@@ -238,7 +239,7 @@ export default function PartnerStoresPage() {
                                             </Link>
                                             {store.monthly_leads_min != null && store.monthly_leads_max != null && (
                                                 <p className="text-xs text-muted-foreground">
-                                                    {store.monthly_leads_min}–{store.monthly_leads_max} leads / month
+                                                    Target {store.monthly_leads_min}–{store.monthly_leads_max} / month
                                                 </p>
                                             )}
                                         </TableCell>
@@ -272,6 +273,12 @@ export default function PartnerStoresPage() {
                                             <Badge variant="outline">
                                                 {store.program_type === "full_bdc" ? "Leads + BDC" : store.program_type === "leads_only" ? "Leads only" : "Not set"}
                                             </Badge>
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                            <span className="font-semibold tabular-nums">{store.leads_sent ?? 0}</span>
+                                            <p className="text-xs text-muted-foreground">
+                                                {store.leads_sent_this_month ?? 0} this month
+                                            </p>
                                         </TableCell>
                                         <TableCell>
                                             <Badge variant={store.is_active ? "default" : "secondary"}>

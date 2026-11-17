@@ -125,6 +125,8 @@ def build_partner_lead_email(
     budget = _clean(lead.budget_range)
     down_payment = _down_payment(lead)
     business = _business_label(lead.is_business)
+    has_ssn = "Yes" if lead.has_ssn_stip else ""
+    has_dl = "Yes" if lead.has_dl_stip else ""
     sender = f"{user.first_name or ''} {user.last_name or ''}".strip() or (user.email or "").strip()
     when = sent_at or datetime.now(_BUSINESS_TZ)
     if when.tzinfo is None:
@@ -153,6 +155,10 @@ def build_partner_lead_email(
         rows.append(("Down payment", down_payment))
     if business:
         rows.append(("Has business", business))
+    if has_ssn:
+        rows.append(("Has SSN", has_ssn))
+    if has_dl:
+        rows.append(("Has license", has_dl))
     if sender:
         rows.append(("Sent by", sender))
     rows.append(("Sent at", sent_time))

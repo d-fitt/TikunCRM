@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, Plus, Store } from "lucide-react"
+import { Loader2, Plus, StickyNote, Store } from "lucide-react"
 import { PartnerProgramService, type LeadDeliveryRow } from "@/services/partner-program-service"
 import {
     PartnerStoreService,
@@ -9,6 +9,7 @@ import {
     type StoreSendResult,
 } from "@/services/partner-store-service"
 import { LeadService, type Lead } from "@/services/lead-service"
+import { LeadNotesModal } from "@/components/leads/lead-notes-modal"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -25,6 +26,8 @@ import { cn } from "@/lib/utils"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 
+type YesNo = "" | "yes" | "no"
+
 function optInLabel(programType?: string | null) {
     return programType === "full_bdc" ? "Leads + BDC" : "Leads only"
 }
@@ -32,6 +35,25 @@ function optInLabel(programType?: string | null) {
 function rangeLabel(store: PartnerStore) {
     if (store.monthly_leads_min == null || store.monthly_leads_max == null) return null
     return `${store.monthly_leads_min}–${store.monthly_leads_max} / month`
+}
+
+function storeMeta(store: PartnerStore, locked: boolean) {
+    const parts = [optInLabel(store.program_type)]
+    const active = store.leads_sent ?? 0
+    const month = store.leads_sent_this_month ?? 0
+    if (month !== active) parts.push(`${month} this month`)
+    const range = rangeLabel(store)
+    if (range) parts.push(range)
+    if (locked) parts.push("Already sent")
+    return parts.join(" · ")
+}
+
+function countTone(store: PartnerStore) {
+    const month = store.leads_sent_this_month ?? 0
+    if (store.monthly_leads_max != null && month > store.monthly_leads_max) {
+        return "bg-amber-100 text-amber-900"
+    }
+    return "bg-slate-100 text-slate-700"
 }
 
 function statusLabel(status: string) {
@@ -63,6 +85,34 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     )
 }
 
+function YesNoToggle({
+    value,
+    onChange,
+}: {
+    value: YesNo
+    onChange: (value: YesNo) => void
+}) {
+    return (
+        <div className="flex gap-2">
+            {(["yes", "no"] as const).map((option) => (
+                <button
+                    key={option}
+                    type="button"
+                    onClick={() => onChange(value === option ? "" : option)}
+                    className={cn(
+                        "h-9 flex-1 rounded-md border text-sm font-medium",
+                        value === option
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-input text-muted-foreground hover:bg-muted/60",
+                    )}
+                >
+                    {option === "yes" ? "Yes" : "No"}
+                </button>
+            ))}
+        </div>
+    )
+}
+
 export function SendPartnerStoreButton({
     leadId,
     sentStoreIds = [],
@@ -89,7 +139,10 @@ export function SendPartnerStoreButton({
     const [lookingFor, setLookingFor] = React.useState("")
     const [brand, setBrand] = React.useState("")
     const [budget, setBudget] = React.useState("")
-    const [business, setBusiness] = React.useState<"" | "yes" | "no">("")
+    const [business, setBusiness] = React.useState<YesNo>("")
+    const [hasSsn, setHasSsn] = React.useState<YesNo>("")
+    const [hasDl, setHasDl] = React.useState<YesNo>("")
+    const [notesOpen, setNotesOpen] = React.useState(false)
     const alreadySent = React.useMemo(() => new Set(sentStoreIds), [sentStoreIds])
 
     async function openPicker(event: React.MouseEvent) {
@@ -98,7 +151,7 @@ export function SendPartnerStoreButton({
         setSelected(sentStoreIds)
         try {
             const [res, row] = await Promise.all([
-                PartnerStoreService.list({ active_only: true }),
+                PartnerStoreService.list({ active_only: true, fresh: true }),
                 LeadService.getLead(leadId),
             ])
             setStores(res.items || [])
@@ -111,6 +164,8 @@ export function SendPartnerStoreButton({
             setBrand(row.interested_brand || "")
             setBudget(row.budget_range || "")
             setBusiness(row.is_business == null ? "" : row.is_business ? "yes" : "no")
+            setHasSsn(row.has_ssn_stip ? "yes" : "no")
+            setHasDl(row.has_dl_stip ? "yes" : "no")
         } catch {
             toast({ title: "Could not load partner stores", variant: "destructive" })
         }
@@ -142,6 +197,8 @@ export function SendPartnerStoreButton({
                 state: state.trim(),
                 down_payment: parsedDown,
                 is_business: business === "" ? null : business === "yes",
+                has_ssn_stip: hasSsn === "" ? null : hasSsn === "yes",
+                has_dl_stip: hasDl === "" ? null : hasDl === "yes",
                 interested_in: lookingFor.trim(),
                 interested_brand: brand.trim(),
                 budget_range: budget.trim(),
@@ -198,12 +255,30 @@ export function SendPartnerStoreButton({
                         </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-5 overflow-y-auto px-6 py-5">
-                        <div className="rounded-lg bg-muted/50 px-3 py-2.5">
-                            <p className="text-sm font-semibold">{leadName(lead)}</p>
-                            <p className="text-sm text-muted-foreground">{formatUsPhone(lead?.customer?.phone) || "No phone yet"}</p>
+                        <div className="flex items-start justify-between gap-3 rounded-lg bg-muted/50 px-3 py-2.5">
+                            <div className="min-w-0">
+                                <p className="text-sm font-semibold">{leadName(lead)}</p>
+                                <p className="text-sm text-muted-foreground">{formatUsPhone(lead?.customer?.phone) || "No phone yet"}</p>
+                            </div>
+                            <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="shrink-0"
+                                onClick={(event) => {
+                                    event.stopPropagation()
+                                    setNotesOpen(true)
+                                }}
+                            >
+                                <StickyNote className="mr-1.5 h-3.5 w-3.5" />
+                                Notes
+                            </Button>
                         </div>
                         <div className="space-y-2">
                             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Stores</p>
+                            <p className="text-xs text-muted-foreground">
+                                The number is leads still with that store. It goes up when you send and down when you remove one.
+                            </p>
                             {stores.length === 0 && (
                                 <p className="text-sm text-muted-foreground">No active partner stores.</p>
                             )}
@@ -227,12 +302,19 @@ export function SendPartnerStoreButton({
                                                 disabled={locked}
                                                 onChange={() => toggle(store.id)}
                                             />
+                                            <span
+                                                className={cn(
+                                                    "flex h-8 min-w-8 shrink-0 items-center justify-center rounded-md px-1.5 text-sm font-semibold tabular-nums",
+                                                    countTone(store),
+                                                )}
+                                                title="Leads still sent to this store"
+                                            >
+                                                {store.leads_sent ?? 0}
+                                            </span>
                                             <span className="min-w-0">
                                                 <span className="block text-sm font-medium">{store.name}</span>
                                                 <span className="block text-xs text-muted-foreground">
-                                                    {optInLabel(store.program_type)}
-                                                    {rangeLabel(store) ? ` · ${rangeLabel(store)}` : ""}
-                                                    {locked ? " · Already sent" : ""}
+                                                    {storeMeta(store, locked)}
                                                 </span>
                                             </span>
                                         </label>
@@ -268,25 +350,17 @@ export function SendPartnerStoreButton({
                             <Field label="Budget">
                                 <Input value={budget} placeholder="25000" onChange={(event) => setBudget(event.target.value)} />
                             </Field>
-                            <Field label="Has business">
-                                <div className="flex gap-2">
-                                    {(["yes", "no"] as const).map((value) => (
-                                        <button
-                                            key={value}
-                                            type="button"
-                                            onClick={() => setBusiness((current) => (current === value ? "" : value))}
-                                            className={cn(
-                                                "h-9 flex-1 rounded-md border text-sm font-medium",
-                                                business === value
-                                                    ? "border-primary bg-primary/10 text-primary"
-                                                    : "border-input text-muted-foreground hover:bg-muted/60",
-                                            )}
-                                        >
-                                            {value === "yes" ? "Yes" : "No"}
-                                        </button>
-                                    ))}
-                                </div>
-                            </Field>
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                                <Field label="Has business">
+                                    <YesNoToggle value={business} onChange={setBusiness} />
+                                </Field>
+                                <Field label="Has SSN">
+                                    <YesNoToggle value={hasSsn} onChange={setHasSsn} />
+                                </Field>
+                                <Field label="Has license">
+                                    <YesNoToggle value={hasDl} onChange={setHasDl} />
+                                </Field>
+                            </div>
                         </div>
                     </div>
                     <DialogFooter className="border-t px-6 py-4">
@@ -300,6 +374,13 @@ export function SendPartnerStoreButton({
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+            <LeadNotesModal
+                open={notesOpen}
+                onOpenChange={setNotesOpen}
+                leadId={leadId}
+                leadName={leadName(lead)}
+                leadNotes={lead?.notes}
+            />
         </>
     )
 }

@@ -26,6 +26,32 @@ def _month_start() -> datetime:
     return datetime(local.year, local.month, 1, tzinfo=zone).astimezone(timezone.utc)
 
 
+async def active_send_counts(db: AsyncSession, store_ids: list[UUID]) -> dict[UUID, tuple[int, int]]:
+    """Leads still with each store: (active now, active sent this month).
+
+    Returned and dead deliveries are left out, so removing a lead lowers the count.
+    """
+    from app.models.lead_delivery import RELEASED_STATUSES
+
+    if not store_ids:
+        return {}
+    start = _month_start()
+    open_only = LeadDelivery.status.notin_(list(RELEASED_STATUSES))
+    rows = (
+        await db.execute(
+            select(
+                LeadDelivery.partner_store_id,
+                func.count(LeadDelivery.id),
+                func.count(LeadDelivery.id).filter(LeadDelivery.delivered_at >= start),
+            )
+            .where(LeadDelivery.partner_store_id.in_(store_ids), open_only)
+            .group_by(LeadDelivery.partner_store_id)
+        )
+    ).all()
+    counts = {store_id: (int(active), int(month)) for store_id, active, month in rows}
+    return {store_id: counts.get(store_id, (0, 0)) for store_id in store_ids}
+
+
 def range_position(sent: int, low: Optional[int], high: Optional[int]) -> Optional[str]:
     if low is None or high is None:
         return None
@@ -103,16 +129,11 @@ async def build_store_dashboard(db: AsyncSession, store: PartnerStore) -> dict:
                 {"url": url.url, "inventory_type": url.inventory_type}
             )
 
-    start = _month_start()
     base = LeadDelivery.partner_store_id == store.id
     total = (
         await db.execute(select(func.count(LeadDelivery.id)).where(base))
     ).scalar_one()
-    month_sent = (
-        await db.execute(
-            select(func.count(LeadDelivery.id)).where(base, LeadDelivery.delivered_at >= start)
-        )
-    ).scalar_one()
+    active_sent, month_sent = (await active_send_counts(db, [store.id])).get(store.id, (0, 0))
     status_rows = (
         await db.execute(
             select(LeadDelivery.status, func.count(LeadDelivery.id))
@@ -211,6 +232,7 @@ async def build_store_dashboard(db: AsyncSession, store: PartnerStore) -> dict:
         "monthly_leads_min": store.monthly_leads_min,
         "monthly_leads_max": store.monthly_leads_max,
         "sent_this_month": int(month_sent or 0),
+        "leads_sent": int(active_sent or 0),
         "range_position": range_position(
             int(month_sent or 0), store.monthly_leads_min, store.monthly_leads_max
         ),

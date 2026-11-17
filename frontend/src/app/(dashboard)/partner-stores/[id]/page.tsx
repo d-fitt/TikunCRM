@@ -99,7 +99,9 @@ export default function PartnerStoreDashboardPage() {
                     <CardHeader className="pb-2"><CardTitle className="text-sm font-medium">This month</CardTitle></CardHeader>
                     <CardContent>
                         <p className="text-2xl font-semibold">{monthLabel}</p>
-                        <p className="text-xs text-muted-foreground">{rangeWord(data.range_position)}</p>
+                        <p className="text-xs text-muted-foreground">
+                            {data.leads_sent ?? data.metrics.total_sent} still with this store · {rangeWord(data.range_position)}
+                        </p>
                     </CardContent>
                 </Card>
                 <Card>

@@ -83,6 +83,8 @@ class PartnerStoreResponse(BaseModel):
     updated_at: Any
     program_type: Optional[str] = None
     program_status: Optional[str] = None
+    leads_sent: int = 0
+    leads_sent_this_month: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -131,6 +133,9 @@ async def list_partner_stores(
             )
         ).scalars().all()
         programs = {row.partner_store_id: row for row in program_rows}
+    from app.services.partner_dashboard_service import active_send_counts
+
+    send_counts = await active_send_counts(db, [store.id for store in stores])
     items = []
     for store in stores:
         item = PartnerStoreResponse.model_validate(store)
@@ -138,6 +143,9 @@ async def list_partner_stores(
         if program is not None and program.status != "cancelled":
             item.program_type = program.program_type
             item.program_status = program.status
+        active, this_month = send_counts.get(store.id, (0, 0))
+        item.leads_sent = active
+        item.leads_sent_this_month = this_month
         items.append(item)
     return PartnerStoreListResponse(items=items, total=len(items))
 
@@ -170,7 +178,13 @@ async def get_partner_store(
     store = result.scalar_one_or_none()
     if not store:
         raise HTTPException(status_code=404, detail="Partner store not found")
-    return store
+    from app.services.partner_dashboard_service import active_send_counts
+
+    item = PartnerStoreResponse.model_validate(store)
+    active, this_month = (await active_send_counts(db, [store.id])).get(store.id, (0, 0))
+    item.leads_sent = active
+    item.leads_sent_this_month = this_month
+    return item
 
 
 def _store_payload(data: dict) -> dict:

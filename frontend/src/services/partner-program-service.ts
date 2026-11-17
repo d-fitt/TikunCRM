@@ -1,4 +1,5 @@
 import apiClient from "@/lib/api-client";
+import { PartnerStoreService } from "@/services/partner-store-service";
 
 const PREFIX = "/partner-stores";
 
@@ -100,6 +101,7 @@ export const PartnerProgramService = {
         return response.data;
     },
     async returnDelivery(leadId: string, deliveryId: string, note?: string) {
+        PartnerStoreService.forgetListCache()
         const response = await apiClient.post<LeadDeliveryRow[]>(
             `/leads/${leadId}/deliveries/${deliveryId}/return`,
             { note: note || null }
