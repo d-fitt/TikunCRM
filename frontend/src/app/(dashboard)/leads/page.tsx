@@ -1269,7 +1269,7 @@ export default function LeadsPage() {
                         setStatus("all")
                         setSource("all")
                         setAssignedTo("all")
-                        setCampaignFilter("all")
+                        setCampaignFilter([])
                         setDealershipFilter("all")
                         setHasSsnStip(false)
                         setHasDlStip(false)
