@@ -117,7 +117,6 @@ def build_partner_lead_email(
     """Return subject, plain text, and HTML for one store."""
     name = _customer_name(customer)
     phone = _format_phone(customer.phone if customer else None)
-    email = _clean(customer.email if customer else None)
     postal = _clean(customer.postal_code if customer else None)
     city = _clean(customer.city if customer else None)
     state = _clean(customer.state if customer else None)
@@ -138,8 +137,6 @@ def build_partner_lead_email(
     rows = []
     if phone:
         rows.append(("Phone", phone))
-    if email:
-        rows.append(("Email", email))
     if city:
         rows.append(("City", city))
     if state:

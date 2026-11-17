@@ -83,7 +83,6 @@ export function SendPartnerStoreButton({
     const [busy, setBusy] = React.useState(false)
     const [lead, setLead] = React.useState<Lead | null>(null)
     const [postalCode, setPostalCode] = React.useState("")
-    const [email, setEmail] = React.useState("")
     const [city, setCity] = React.useState("")
     const [state, setState] = React.useState("")
     const [downPayment, setDownPayment] = React.useState("")
@@ -105,7 +104,6 @@ export function SendPartnerStoreButton({
             setStores(res.items || [])
             setLead(row)
             setPostalCode(row.customer?.postal_code || "")
-            setEmail(row.customer?.email || "")
             setCity(row.customer?.city || "")
             setState(row.customer?.state || "")
             setDownPayment(row.down_payment != null ? String(row.down_payment) : "")
@@ -140,7 +138,6 @@ export function SendPartnerStoreButton({
             }
             const result = await PartnerStoreService.sendLead(leadId, fresh, {
                 postal_code: postalCode.trim(),
-                email: email.trim(),
                 city: city.trim(),
                 state: state.trim(),
                 down_payment: parsedDown,
@@ -248,9 +245,6 @@ export function SendPartnerStoreButton({
                                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Lead details</p>
                                 <p className="mt-1 text-xs text-muted-foreground">A blank field is left off the email.</p>
                             </div>
-                            <Field label="Email">
-                                <Input id="send-email" type="email" value={email} placeholder="name@email.com" onChange={(event) => setEmail(event.target.value)} />
-                            </Field>
                             <div className="grid grid-cols-2 gap-3">
                                 <Field label="City">
                                     <Input value={city} placeholder="Atlanta" onChange={(event) => setCity(event.target.value)} />
