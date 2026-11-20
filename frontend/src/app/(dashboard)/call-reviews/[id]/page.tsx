@@ -8,6 +8,7 @@ import {
     ArrowLeft,
     CalendarCheck,
     CalendarX,
+    ChevronDown,
     Lightbulb,
     Loader2,
     Play,
@@ -326,6 +327,158 @@ function ObservationList({
     )
 }
 
+/** One line of the at-a-glance card: short, clamped to two lines, full text on hover. */
+function GlanceLine({ text, tone, clamp = true }: { text: string; tone?: string; clamp?: boolean }) {
+    return (
+        <li className={cn("text-sm leading-snug", clamp && "line-clamp-2", tone)} title={text}>
+            {text}
+        </li>
+    )
+}
+
+function GlanceColumn({
+    title,
+    icon,
+    children,
+}: {
+    title: string
+    icon: React.ReactNode
+    children: React.ReactNode
+}) {
+    return (
+        <div className="space-y-1.5">
+            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {icon}
+                {title}
+            </p>
+            <ul className="space-y-1.5">{children}</ul>
+        </div>
+    )
+}
+
+/**
+ * The 15-second view: score, what happened in the CRM, one-line summary, and
+ * the top one or two points in each direction. Everything else is in the
+ * full breakdown below.
+ */
+function AtAGlance({
+    review,
+    correctedScore,
+}: {
+    review: CallReviewDetail
+    correctedScore: (key: string) => number | null | undefined
+}) {
+    const ev = review.evaluation
+    if (!ev) return null
+    const crm = review.crm_outcome
+    const score = ev.adjusted_overall_score ?? ev.overall_score
+    const missed = ev.missed_appointment_opportunities.length
+    const unresolved = ev.customer_objections.filter((o) => !o.resolved)
+    const workOn = ev.improvements.slice(0, 2)
+    const criteria = ev.category_scores.filter((c) => !c.not_applicable && c.score != null)
+
+    return (
+        <Card>
+            <CardContent className="space-y-4 p-5">
+                <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+                    <div className="flex items-baseline gap-1.5">
+                        <span className={cn("text-4xl font-bold tabular-nums", scoreTone(score))}>
+                            {score != null ? Math.round(score) : "—"}
+                        </span>
+                        <span className="text-sm text-muted-foreground">/ 100 call quality</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                        {crm?.appointment_booked ? (
+                            <>
+                                <CalendarCheck className="h-4 w-4 text-emerald-600" />
+                                Appointment booked
+                                {crm.appointment?.scheduled_at && (
+                                    <span className="font-normal text-muted-foreground">
+                                        · {formatCallTime(crm.appointment.scheduled_at, true)}
+                                    </span>
+                                )}
+                            </>
+                        ) : crm?.appointment_booked === false ? (
+                            <>
+                                <CalendarX className="h-4 w-4 text-muted-foreground" />
+                                No appointment booked
+                            </>
+                        ) : (
+                            <span className="font-normal text-muted-foreground">Not linked to a lead</span>
+                        )}
+                    </div>
+                    {review.manager_review.reviewed_at && (
+                        <Badge variant="secondary">
+                            <UserCheck className="mr-1 h-3 w-3" />
+                            Manager checked
+                        </Badge>
+                    )}
+                </div>
+
+                {ev.summary && <p className="text-sm">{ev.summary}</p>}
+
+                <div className="grid gap-4 sm:grid-cols-3">
+                    <GlanceColumn title="Did well" icon={<ThumbsUp className="h-3.5 w-3.5 text-emerald-600" />}>
+                        {ev.strengths.length === 0 ? (
+                            <GlanceLine text="Nothing specific noted." tone="text-muted-foreground" />
+                        ) : (
+                            ev.strengths.slice(0, 2).map((o, i) => <GlanceLine key={i} text={o.text} />)
+                        )}
+                    </GlanceColumn>
+                    <GlanceColumn title="Work on" icon={<TrendingUp className="h-3.5 w-3.5 text-amber-600" />}>
+                        {missed > 0 && (
+                            <GlanceLine
+                                text={`Missed ${missed === 1 ? "a chance" : `${missed} chances`} to ask for the appointment.`}
+                                tone="font-medium text-red-600"
+                            />
+                        )}
+                        {unresolved.length > 0 && (
+                            <GlanceLine text={`Objection left unresolved: ${unresolved[0].objection}`} />
+                        )}
+                        {workOn.slice(0, missed > 0 || unresolved.length > 0 ? 1 : 2).map((o, i) => (
+                            <GlanceLine key={i} text={o.text} />
+                        ))}
+                        {missed === 0 && unresolved.length === 0 && workOn.length === 0 && (
+                            <GlanceLine text="Nothing specific noted." tone="text-muted-foreground" />
+                        )}
+                    </GlanceColumn>
+                    <GlanceColumn title="Next call, try" icon={<Lightbulb className="h-3.5 w-3.5 text-primary" />}>
+                        {ev.coaching_suggestions.length === 0 ? (
+                            <GlanceLine text="No suggestions for this call." tone="text-muted-foreground" />
+                        ) : (
+                            <GlanceLine text={ev.coaching_suggestions[0].text} clamp={false} />
+                        )}
+                    </GlanceColumn>
+                </div>
+
+                {criteria.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5" aria-label="Scores by criterion">
+                        {criteria.map((c) => {
+                            const value = correctedScore(c.key) ?? c.score
+                            return (
+                                <span
+                                    key={c.key}
+                                    className="inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs"
+                                >
+                                    {c.name}
+                                    <span className={cn("font-semibold tabular-nums", scoreTone(value))}>{value}</span>
+                                </span>
+                            )
+                        })}
+                    </div>
+                )}
+
+                {review.manager_review.note && (
+                    <p className="rounded-md bg-muted px-3 py-2 text-sm">
+                        <span className="font-medium">Manager note: </span>
+                        {review.manager_review.note}
+                    </p>
+                )}
+            </CardContent>
+        </Card>
+    )
+}
+
 export default function CallReviewDetailPage() {
     const params = useParams<{ id: string }>()
     const reviewId = params.id
@@ -339,6 +492,7 @@ export default function CallReviewDetailPage() {
     const [audioError, setAudioError] = React.useState(false)
     const [currentTime, setCurrentTime] = React.useState(0)
     const [search, setSearch] = React.useState("")
+    const [showDetails, setShowDetails] = React.useState(false)
     const audioRef = React.useRef<HTMLAudioElement>(null)
     const objectUrlRef = React.useRef<string | null>(null)
     const lineRefs = React.useRef<Record<number, HTMLDivElement | null>>({})
@@ -523,6 +677,8 @@ export default function CallReviewDetailPage() {
                         {formatCallTime(review.call?.started_at, true)}
                         {review.call && ` · ${formatDuration(review.call.duration_seconds)}`}
                         {review.call?.direction && ` · ${review.call.direction === "inbound" ? "Inbound" : "Outbound"}`}
+                        {review.rep && ` · ${review.rep.name}`}
+                        {review.dealership && ` · ${review.dealership.name}`}
                     </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -580,390 +736,396 @@ export default function CallReviewDetailPage() {
                 </Alert>
             )}
 
-            {/* Who / where */}
-            <div className="grid gap-4 sm:grid-cols-3">
-                <InfoTile label="Customer" value={review.customer_name ?? "Unknown caller"} />
-                <InfoTile label="Representative" value={review.rep?.name ?? "—"} />
-                <InfoTile label="Dealership" value={review.dealership?.name ?? "—"} />
-            </div>
+            <AtAGlance review={review} correctedScore={(key) => feedbackCtx.get("category", key)?.corrected_score} />
 
-            {/* Score + outcome. Quality and outcome are shown apart on purpose. */}
             {ev && (
-                <div className="grid gap-4 lg:grid-cols-3">
-                    <Card>
-                        <CardHeader className="pb-2">
-                            <CardDescription>Call quality score</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="flex items-baseline gap-2">
-                                <span className={cn("text-5xl font-bold tabular-nums", scoreTone(shownScore))}>
-                                    {shownScore != null ? Math.round(shownScore) : "—"}
-                                </span>
-                                <span className="text-muted-foreground">/ 100</span>
-                            </div>
-                            {ev.adjusted_overall_score != null && (
-                                <p className="mt-1 text-sm">
-                                    Corrected by a manager. The AI scored it{" "}
-                                    {ev.overall_score != null ? Math.round(ev.overall_score) : "—"}.
-                                </p>
-                            )}
-                            <p className="mt-2 text-xs text-muted-foreground">
-                                How well the rep handled the conversation, judged by AI against scoring criteria
-                                version {ev.rubric_version ?? "—"}. Not a measure of whether the customer booked.
-                            </p>
-                        </CardContent>
-                    </Card>
-
-                    <Card className="lg:col-span-2">
-                        <CardHeader className="pb-2">
-                            <CardDescription>Outcome</CardDescription>
-                        </CardHeader>
-                        <CardContent className="grid gap-4 sm:grid-cols-2">
-                            <div>
-                                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                                    In the CRM
-                                </p>
-                                <div className="mt-1 flex items-center gap-2 font-medium">
-                                    {crm?.appointment_booked ? (
-                                        <>
-                                            <CalendarCheck className="h-4 w-4 text-emerald-600" />
-                                            Appointment booked
-                                        </>
-                                    ) : crm?.appointment_booked === false ? (
-                                        <>
-                                            <CalendarX className="h-4 w-4 text-muted-foreground" />
-                                            No appointment booked
-                                        </>
-                                    ) : (
-                                        "Unknown (call not linked to a lead)"
-                                    )}
-                                </div>
-                                {crm?.appointment?.scheduled_at && (
-                                    <p className="text-sm text-muted-foreground">
-                                        For {formatCallTime(crm.appointment.scheduled_at, true)} · status{" "}
-                                        {crm.appointment.status.replace(/_/g, " ")}
-                                    </p>
-                                )}
-                                {crm?.rep_logged_outcome && (
-                                    <p className="text-sm text-muted-foreground">
-                                        Rep logged: {crm.rep_logged_outcome.replace(/_/g, " ")}
-                                    </p>
-                                )}
-                            </div>
-                            <div>
-                                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                                    What the AI heard on the call
-                                </p>
-                                <p className="mt-1 font-medium">
-                                    {ev.ai_call_outcome ? AI_OUTCOME_LABELS[ev.ai_call_outcome] : "—"}
-                                </p>
-                                <p className="text-sm text-muted-foreground">
-                                    Based on the conversation only. The CRM record is the source of truth.
-                                </p>
-                            </div>
-                        </CardContent>
-                    </Card>
-                </div>
+                <Button
+                    variant="outline"
+                    className="w-full sm:w-auto"
+                    onClick={() => setShowDetails((v) => !v)}
+                    aria-expanded={showDetails}
+                    aria-controls="call-review-details"
+                >
+                    <ChevronDown className={cn("mr-2 h-4 w-4 transition-transform", showDetails && "rotate-180")} />
+                    {showDetails
+                        ? "Hide full breakdown"
+                        : review.can_manage
+                          ? "Full breakdown, transcript and manager review"
+                          : "Full breakdown and transcript"}
+                </Button>
             )}
 
-            {ev && (review.can_manage || mr.reviewed_at || mr.note) && (
-                <Card>
-                    <CardHeader className="pb-2">
-                        <CardTitle className="flex items-center gap-2 text-base">
-                            <UserCheck className="h-4 w-4" />
-                            Manager review
-                        </CardTitle>
-                        <CardDescription>
-                            {mr.reviewed_at
-                                ? `Checked ${formatCallTime(mr.reviewed_at, true)}${mr.reviewed_by ? ` by ${mr.reviewed_by}` : ""}.`
-                                : "No manager has checked this AI review yet."}
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                        {review.can_manage ? (
-                            <>
-                                <Textarea
-                                    rows={2}
-                                    maxLength={4000}
-                                    aria-label="Note for the representative"
-                                    placeholder="Optional note for the rep"
-                                    value={signOffNote ?? mr.note ?? ""}
-                                    onChange={(e) => setSignOffNote(e.target.value)}
-                                />
-                                <div className="flex flex-wrap gap-2">
-                                    <Button size="sm" onClick={() => handleSignOff(true)}>
-                                        {mr.reviewed_at ? "Save note" : "Mark as reviewed"}
-                                    </Button>
-                                    {mr.reviewed_at && (
-                                        <Button size="sm" variant="ghost" onClick={() => handleSignOff(false)}>
-                                            Undo reviewed
-                                        </Button>
-                                    )}
-                                </div>
-                            </>
-                        ) : (
-                            mr.note && <p className="text-sm">{mr.note}</p>
-                        )}
-                    </CardContent>
-                </Card>
-            )}
-
-            {ev?.summary && (
-                <Card>
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-base">Summary</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <p className="text-sm">{ev.summary}</p>
-                    </CardContent>
-                </Card>
-            )}
-
-            <div className="grid gap-6 xl:grid-cols-5">
-                {/* Left: AI feedback */}
-                <div className="space-y-6 xl:col-span-3">
+            {/* Everything below is the detail view. Without an evaluation yet, the transcript is all there is, so show it. */}
+            {(showDetails || !ev) && (
+                <div id="call-review-details" className="space-y-6">
+                    {/* Score + outcome. Quality and outcome are shown apart on purpose. */}
                     {ev && (
-                        <Card>
-                            <CardHeader className="pb-3">
-                                <CardTitle className="text-base">Score breakdown</CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-5">
-                                {ev.category_scores.map((c) => (
-                                    <div key={c.key} className="space-y-1.5">
-                                        <div className="flex items-baseline justify-between gap-3">
-                                            <span className="text-sm font-medium">
-                                                {c.name}{" "}
-                                                <span className="font-normal text-muted-foreground">
-                                                    · {c.weight}% of score
-                                                </span>
-                                            </span>
-                                            <span
-                                                className={cn(
-                                                    "text-sm font-semibold tabular-nums",
-                                                    scoreTone(c.not_applicable ? null : c.score)
-                                                )}
-                                            >
-                                                {c.not_applicable ? "Not applicable" : c.score}
-                                            </span>
-                                        </div>
-                                        <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                                            {!c.not_applicable && c.score != null && (
-                                                <div
-                                                    className={cn("h-full rounded-full", scoreBarTone(c.score))}
-                                                    style={{ width: `${c.score}%` }}
-                                                />
+                        <div className="grid gap-4 lg:grid-cols-3">
+                            <Card>
+                                <CardHeader className="pb-2">
+                                    <CardDescription>Call quality score</CardDescription>
+                                </CardHeader>
+                                <CardContent>
+                                    <div className="flex items-baseline gap-2">
+                                        <span className={cn("text-5xl font-bold tabular-nums", scoreTone(shownScore))}>
+                                            {shownScore != null ? Math.round(shownScore) : "—"}
+                                        </span>
+                                        <span className="text-muted-foreground">/ 100</span>
+                                    </div>
+                                    {ev.adjusted_overall_score != null && (
+                                        <p className="mt-1 text-sm">
+                                            Corrected by a manager. The AI scored it{" "}
+                                            {ev.overall_score != null ? Math.round(ev.overall_score) : "—"}.
+                                        </p>
+                                    )}
+                                    <p className="mt-2 text-xs text-muted-foreground">
+                                        How well the rep handled the conversation, judged by AI against scoring criteria
+                                        version {ev.rubric_version ?? "—"}. Not a measure of whether the customer booked.
+                                    </p>
+                                </CardContent>
+                            </Card>
+
+                            <Card className="lg:col-span-2">
+                                <CardHeader className="pb-2">
+                                    <CardDescription>Outcome</CardDescription>
+                                </CardHeader>
+                                <CardContent className="grid gap-4 sm:grid-cols-2">
+                                    <div>
+                                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                                            In the CRM
+                                        </p>
+                                        <div className="mt-1 flex items-center gap-2 font-medium">
+                                            {crm?.appointment_booked ? (
+                                                <>
+                                                    <CalendarCheck className="h-4 w-4 text-emerald-600" />
+                                                    Appointment booked
+                                                </>
+                                            ) : crm?.appointment_booked === false ? (
+                                                <>
+                                                    <CalendarX className="h-4 w-4 text-muted-foreground" />
+                                                    No appointment booked
+                                                </>
+                                            ) : (
+                                                "Unknown (call not linked to a lead)"
                                             )}
                                         </div>
-                                        {c.rationale && (
-                                            <p className="text-sm text-muted-foreground">{c.rationale}</p>
-                                        )}
-                                        {c.evidence.map((e, j) => (
-                                            <EvidenceQuote key={j} evidence={e} onJump={jumpTo} />
-                                        ))}
-                                        {feedbackCtx.get("category", c.key)?.corrected_score != null && (
-                                            <p className="text-sm font-medium">
-                                                <UserCheck className="mr-1 inline h-4 w-4" />
-                                                Manager corrected this to{" "}
-                                                {feedbackCtx.get("category", c.key)?.corrected_score}
+                                        {crm?.appointment?.scheduled_at && (
+                                            <p className="text-sm text-muted-foreground">
+                                                For {formatCallTime(crm.appointment.scheduled_at, true)} · status{" "}
+                                                {crm.appointment.status.replace(/_/g, " ")}
                                             </p>
                                         )}
-                                        <ScoreCorrection ctx={feedbackCtx} criterionKey={c.key} />
+                                        {crm?.rep_logged_outcome && (
+                                            <p className="text-sm text-muted-foreground">
+                                                Rep logged: {crm.rep_logged_outcome.replace(/_/g, " ")}
+                                            </p>
+                                        )}
                                     </div>
-                                ))}
+                                    <div>
+                                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                                            What the AI heard on the call
+                                        </p>
+                                        <p className="mt-1 font-medium">
+                                            {ev.ai_call_outcome ? AI_OUTCOME_LABELS[ev.ai_call_outcome] : "—"}
+                                        </p>
+                                        <p className="text-sm text-muted-foreground">
+                                            Based on the conversation only. The CRM record is the source of truth.
+                                        </p>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        </div>
+                    )}
+
+                    {ev && (review.can_manage || mr.reviewed_at || mr.note) && (
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="flex items-center gap-2 text-base">
+                                    <UserCheck className="h-4 w-4" />
+                                    Manager review
+                                </CardTitle>
+                                <CardDescription>
+                                    {mr.reviewed_at
+                                        ? `Checked ${formatCallTime(mr.reviewed_at, true)}${mr.reviewed_by ? ` by ${mr.reviewed_by}` : ""}.`
+                                        : "No manager has checked this AI review yet."}
+                                </CardDescription>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
+                                {review.can_manage ? (
+                                    <>
+                                        <Textarea
+                                            rows={2}
+                                            maxLength={4000}
+                                            aria-label="Note for the representative"
+                                            placeholder="Optional note for the rep"
+                                            value={signOffNote ?? mr.note ?? ""}
+                                            onChange={(e) => setSignOffNote(e.target.value)}
+                                        />
+                                        <div className="flex flex-wrap gap-2">
+                                            <Button size="sm" onClick={() => handleSignOff(true)}>
+                                                {mr.reviewed_at ? "Save note" : "Mark as reviewed"}
+                                            </Button>
+                                            {mr.reviewed_at && (
+                                                <Button size="sm" variant="ghost" onClick={() => handleSignOff(false)}>
+                                                    Undo reviewed
+                                                </Button>
+                                            )}
+                                        </div>
+                                    </>
+                                ) : (
+                                    mr.note && <p className="text-sm">{mr.note}</p>
+                                )}
                             </CardContent>
                         </Card>
                     )}
 
-                    {ev && (
-                        <>
-                            <ObservationList
-                                title="What went well"
-                                ctx={feedbackCtx}
-                                type="strength"
-                                icon={<ThumbsUp className="h-4 w-4 text-emerald-600" />}
-                                items={ev.strengths}
-                                emptyText="Nothing specific noted."
-                                onJump={jumpTo}
-                            />
-                            <ObservationList
-                                title="Areas to improve"
-                                ctx={feedbackCtx}
-                                type="improvement"
-                                icon={<TrendingUp className="h-4 w-4 text-amber-600" />}
-                                items={ev.improvements}
-                                emptyText="Nothing specific noted."
-                                onJump={jumpTo}
-                            />
-                            <ObservationList
-                                title="Missed appointment opportunities"
-                                ctx={feedbackCtx}
-                                type="missed_opportunity"
-                                description="Moments where the rep could have asked for a visit."
-                                icon={<CalendarX className="h-4 w-4 text-red-600" />}
-                                items={ev.missed_appointment_opportunities}
-                                emptyText="None found in this call."
-                                onJump={jumpTo}
-                            />
-                            <Card>
-                                <CardHeader className="pb-3">
-                                    <CardTitle className="text-base">Customer objections and concerns</CardTitle>
-                                </CardHeader>
-                                <CardContent>
-                                    {ev.customer_objections.length === 0 ? (
-                                        <p className="text-sm text-muted-foreground">
-                                            The customer raised no objections.
-                                        </p>
-                                    ) : (
-                                        <ul className="space-y-4">
-                                            {ev.customer_objections.map((o, i) => (
-                                                <li key={i} className="space-y-2">
-                                                    <div className="flex flex-wrap items-center gap-2">
-                                                        <span className="text-sm font-medium">{o.objection}</span>
-                                                        <Badge variant={o.resolved ? "secondary" : "outline"}>
-                                                            {o.resolved ? "Resolved" : "Not resolved"}
-                                                        </Badge>
-                                                    </div>
-                                                    {o.how_rep_responded && (
-                                                        <p className="text-sm text-muted-foreground">
-                                                            {o.how_rep_responded}
-                                                        </p>
-                                                    )}
-                                                    {o.evidence.map((e, j) => (
-                                                        <EvidenceQuote key={j} evidence={e} onJump={jumpTo} />
-                                                    ))}
-                                                    <FeedbackControls
-                                                        ctx={feedbackCtx}
-                                                        type="objection"
-                                                        itemKey={String(i)}
-                                                        {...ACCURACY}
-                                                    />
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    )}
-                                </CardContent>
-                            </Card>
-                            <ObservationList
-                                title="Coaching suggestions"
-                                ctx={feedbackCtx}
-                                type="coaching"
-                                labels={USEFULNESS}
-                                description="What to try on the next call."
-                                icon={<Lightbulb className="h-4 w-4 text-primary" />}
-                                items={ev.coaching_suggestions}
-                                emptyText="No suggestions for this call."
-                                onJump={jumpTo}
-                            />
-                            <p className="text-xs text-muted-foreground">
-                                AI-generated feedback · scoring criteria v{ev.rubric_version ?? "—"} · model{" "}
-                                {ev.llm_model} · quotes are checked against the transcript before being shown.
-                            </p>
-                        </>
-                    )}
-                </div>
-
-                {/* Right: recording + transcript */}
-                <div className="xl:col-span-2">
-                    <Card className="xl:sticky xl:top-4">
-                        <CardHeader className="space-y-3 pb-3">
-                            <CardTitle className="text-base">Recording and transcript</CardTitle>
-                            {audioUrl ? (
-                                <audio
-                                    ref={audioRef}
-                                    src={audioUrl}
-                                    controls
-                                    preload="metadata"
-                                    className="w-full"
-                                    onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-                                    onError={() => setAudioError(true)}
-                                />
-                            ) : audioError ? (
-                                <p className="text-sm text-muted-foreground">The recording could not be loaded.</p>
-                            ) : review.call?.has_recording ? (
-                                <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                                    <Loader2 className="h-4 w-4 animate-spin" /> Loading recording…
-                                </p>
-                            ) : (
-                                <p className="text-sm text-muted-foreground">No recording for this call.</p>
-                            )}
-                            {transcript.length > 0 && (
-                                <div className="relative">
-                                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                                    <Input
-                                        value={search}
-                                        onChange={(e) => setSearch(e.target.value)}
-                                        placeholder="Search transcript"
-                                        aria-label="Search transcript"
-                                        className="pl-8"
-                                    />
-                                    {query && (
-                                        <span className="absolute right-2.5 top-2.5 text-xs text-muted-foreground">
-                                            {matchCount} {matchCount === 1 ? "match" : "matches"}
-                                        </span>
-                                    )}
-                                </div>
-                            )}
-                        </CardHeader>
-                        <CardContent>
-                            {transcript.length === 0 ? (
-                                <p className="text-sm text-muted-foreground">
-                                    {inProgress ? "Transcript will appear here." : "No transcript available."}
-                                </p>
-                            ) : (
-                                <div className="max-h-[60vh] space-y-1 overflow-y-auto pr-1">
-                                    {transcript.map((line, i) => {
-                                        const isMatch = query !== "" && line.text.toLowerCase().includes(query)
-                                        if (query && !isMatch) return null
-                                        return (
-                                            <div
-                                                key={i}
-                                                ref={(el) => {
-                                                    lineRefs.current[i] = el
-                                                }}
-                                                role="button"
-                                                tabIndex={0}
-                                                onClick={() => jumpTo(line.start)}
-                                                onKeyDown={(e) => {
-                                                    if (e.key === "Enter" || e.key === " ") {
-                                                        e.preventDefault()
-                                                        jumpTo(line.start)
-                                                    }
-                                                }}
-                                                className={cn(
-                                                    "cursor-pointer rounded-md px-2 py-1.5 text-sm hover:bg-muted",
-                                                    i === activeLine && !query && "bg-primary/10"
-                                                )}
-                                            >
-                                                <div className="flex items-center gap-2 text-xs">
-                                                    <span className="font-mono text-muted-foreground">
-                                                        {formatDuration(line.start)}
+                    <div className="grid gap-6 xl:grid-cols-5">
+                        {/* Left: AI feedback */}
+                        <div className="space-y-6 xl:col-span-3">
+                            {ev && (
+                                <Card>
+                                    <CardHeader className="pb-3">
+                                        <CardTitle className="text-base">Score breakdown</CardTitle>
+                                    </CardHeader>
+                                    <CardContent className="space-y-5">
+                                        {ev.category_scores.map((c) => (
+                                            <div key={c.key} className="space-y-1.5">
+                                                <div className="flex items-baseline justify-between gap-3">
+                                                    <span className="text-sm font-medium">
+                                                        {c.name}{" "}
+                                                        <span className="font-normal text-muted-foreground">
+                                                            · {c.weight}% of score
+                                                        </span>
                                                     </span>
                                                     <span
                                                         className={cn(
-                                                            "font-semibold",
-                                                            line.speaker === "rep"
-                                                                ? "text-primary"
-                                                                : "text-foreground"
+                                                            "text-sm font-semibold tabular-nums",
+                                                            scoreTone(c.not_applicable ? null : c.score)
                                                         )}
                                                     >
-                                                        {speakerLabel(line.speaker)}
+                                                        {c.not_applicable ? "Not applicable" : c.score}
                                                     </span>
                                                 </div>
-                                                <p>{line.text}</p>
+                                                <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                                                    {!c.not_applicable && c.score != null && (
+                                                        <div
+                                                            className={cn("h-full rounded-full", scoreBarTone(c.score))}
+                                                            style={{ width: `${c.score}%` }}
+                                                        />
+                                                    )}
+                                                </div>
+                                                {c.rationale && (
+                                                    <p className="text-sm text-muted-foreground">{c.rationale}</p>
+                                                )}
+                                                {c.evidence.map((e, j) => (
+                                                    <EvidenceQuote key={j} evidence={e} onJump={jumpTo} />
+                                                ))}
+                                                {feedbackCtx.get("category", c.key)?.corrected_score != null && (
+                                                    <p className="text-sm font-medium">
+                                                        <UserCheck className="mr-1 inline h-4 w-4" />
+                                                        Manager corrected this to{" "}
+                                                        {feedbackCtx.get("category", c.key)?.corrected_score}
+                                                    </p>
+                                                )}
+                                                <ScoreCorrection ctx={feedbackCtx} criterionKey={c.key} />
                                             </div>
-                                        )
-                                    })}
-                                    {query && matchCount === 0 && (
-                                        <p className="px-2 py-4 text-sm text-muted-foreground">
-                                            Nothing in the transcript matches “{search.trim()}”.
-                                        </p>
-                                    )}
-                                </div>
+                                        ))}
+                                    </CardContent>
+                                </Card>
                             )}
-                        </CardContent>
-                    </Card>
+
+                            {ev && (
+                                <>
+                                    <ObservationList
+                                        title="What went well"
+                                        ctx={feedbackCtx}
+                                        type="strength"
+                                        icon={<ThumbsUp className="h-4 w-4 text-emerald-600" />}
+                                        items={ev.strengths}
+                                        emptyText="Nothing specific noted."
+                                        onJump={jumpTo}
+                                    />
+                                    <ObservationList
+                                        title="Areas to improve"
+                                        ctx={feedbackCtx}
+                                        type="improvement"
+                                        icon={<TrendingUp className="h-4 w-4 text-amber-600" />}
+                                        items={ev.improvements}
+                                        emptyText="Nothing specific noted."
+                                        onJump={jumpTo}
+                                    />
+                                    <ObservationList
+                                        title="Missed appointment opportunities"
+                                        ctx={feedbackCtx}
+                                        type="missed_opportunity"
+                                        description="Moments where the rep could have asked for a visit."
+                                        icon={<CalendarX className="h-4 w-4 text-red-600" />}
+                                        items={ev.missed_appointment_opportunities}
+                                        emptyText="None found in this call."
+                                        onJump={jumpTo}
+                                    />
+                                    <Card>
+                                        <CardHeader className="pb-3">
+                                            <CardTitle className="text-base">Customer objections and concerns</CardTitle>
+                                        </CardHeader>
+                                        <CardContent>
+                                            {ev.customer_objections.length === 0 ? (
+                                                <p className="text-sm text-muted-foreground">
+                                                    The customer raised no objections.
+                                                </p>
+                                            ) : (
+                                                <ul className="space-y-4">
+                                                    {ev.customer_objections.map((o, i) => (
+                                                        <li key={i} className="space-y-2">
+                                                            <div className="flex flex-wrap items-center gap-2">
+                                                                <span className="text-sm font-medium">{o.objection}</span>
+                                                                <Badge variant={o.resolved ? "secondary" : "outline"}>
+                                                                    {o.resolved ? "Resolved" : "Not resolved"}
+                                                                </Badge>
+                                                            </div>
+                                                            {o.how_rep_responded && (
+                                                                <p className="text-sm text-muted-foreground">
+                                                                    {o.how_rep_responded}
+                                                                </p>
+                                                            )}
+                                                            {o.evidence.map((e, j) => (
+                                                                <EvidenceQuote key={j} evidence={e} onJump={jumpTo} />
+                                                            ))}
+                                                            <FeedbackControls
+                                                                ctx={feedbackCtx}
+                                                                type="objection"
+                                                                itemKey={String(i)}
+                                                                {...ACCURACY}
+                                                            />
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            )}
+                                        </CardContent>
+                                    </Card>
+                                    <ObservationList
+                                        title="Coaching suggestions"
+                                        ctx={feedbackCtx}
+                                        type="coaching"
+                                        labels={USEFULNESS}
+                                        description="What to try on the next call."
+                                        icon={<Lightbulb className="h-4 w-4 text-primary" />}
+                                        items={ev.coaching_suggestions}
+                                        emptyText="No suggestions for this call."
+                                        onJump={jumpTo}
+                                    />
+                                    <p className="text-xs text-muted-foreground">
+                                        AI-generated feedback · scoring criteria v{ev.rubric_version ?? "—"} · model{" "}
+                                        {ev.llm_model} · quotes are checked against the transcript before being shown.
+                                    </p>
+                                </>
+                            )}
+                        </div>
+
+                        {/* Right: recording + transcript */}
+                        <div className="xl:col-span-2">
+                            <Card className="xl:sticky xl:top-4">
+                                <CardHeader className="space-y-3 pb-3">
+                                    <CardTitle className="text-base">Recording and transcript</CardTitle>
+                                    {audioUrl ? (
+                                        <audio
+                                            ref={audioRef}
+                                            src={audioUrl}
+                                            controls
+                                            preload="metadata"
+                                            className="w-full"
+                                            onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                                            onError={() => setAudioError(true)}
+                                        />
+                                    ) : audioError ? (
+                                        <p className="text-sm text-muted-foreground">The recording could not be loaded.</p>
+                                    ) : review.call?.has_recording ? (
+                                        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                                            <Loader2 className="h-4 w-4 animate-spin" /> Loading recording…
+                                        </p>
+                                    ) : (
+                                        <p className="text-sm text-muted-foreground">No recording for this call.</p>
+                                    )}
+                                    {transcript.length > 0 && (
+                                        <div className="relative">
+                                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                                            <Input
+                                                value={search}
+                                                onChange={(e) => setSearch(e.target.value)}
+                                                placeholder="Search transcript"
+                                                aria-label="Search transcript"
+                                                className="pl-8"
+                                            />
+                                            {query && (
+                                                <span className="absolute right-2.5 top-2.5 text-xs text-muted-foreground">
+                                                    {matchCount} {matchCount === 1 ? "match" : "matches"}
+                                                </span>
+                                            )}
+                                        </div>
+                                    )}
+                                </CardHeader>
+                                <CardContent>
+                                    {transcript.length === 0 ? (
+                                        <p className="text-sm text-muted-foreground">
+                                            {inProgress ? "Transcript will appear here." : "No transcript available."}
+                                        </p>
+                                    ) : (
+                                        <div className="max-h-[60vh] space-y-1 overflow-y-auto pr-1">
+                                            {transcript.map((line, i) => {
+                                                const isMatch = query !== "" && line.text.toLowerCase().includes(query)
+                                                if (query && !isMatch) return null
+                                                return (
+                                                    <div
+                                                        key={i}
+                                                        ref={(el) => {
+                                                            lineRefs.current[i] = el
+                                                        }}
+                                                        role="button"
+                                                        tabIndex={0}
+                                                        onClick={() => jumpTo(line.start)}
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === "Enter" || e.key === " ") {
+                                                                e.preventDefault()
+                                                                jumpTo(line.start)
+                                                            }
+                                                        }}
+                                                        className={cn(
+                                                            "cursor-pointer rounded-md px-2 py-1.5 text-sm hover:bg-muted",
+                                                            i === activeLine && !query && "bg-primary/10"
+                                                        )}
+                                                    >
+                                                        <div className="flex items-center gap-2 text-xs">
+                                                            <span className="font-mono text-muted-foreground">
+                                                                {formatDuration(line.start)}
+                                                            </span>
+                                                            <span
+                                                                className={cn(
+                                                                    "font-semibold",
+                                                                    line.speaker === "rep"
+                                                                        ? "text-primary"
+                                                                        : "text-foreground"
+                                                                )}
+                                                            >
+                                                                {speakerLabel(line.speaker)}
+                                                            </span>
+                                                        </div>
+                                                        <p>{line.text}</p>
+                                                    </div>
+                                                )
+                                            })}
+                                            {query && matchCount === 0 && (
+                                                <p className="px-2 py-4 text-sm text-muted-foreground">
+                                                    Nothing in the transcript matches “{search.trim()}”.
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
+                                </CardContent>
+                            </Card>
+                        </div>
+                    </div>
                 </div>
-            </div>
+            )}
         </div>
     )
 }
@@ -977,16 +1139,5 @@ function BackLink() {
             <ArrowLeft className="h-4 w-4" />
             All call reviews
         </Link>
-    )
-}
-
-function InfoTile({ label, value }: { label: string; value: string }) {
-    return (
-        <Card>
-            <CardContent className="p-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
-                <p className="mt-1 truncate font-medium">{value}</p>
-            </CardContent>
-        </Card>
     )
 }

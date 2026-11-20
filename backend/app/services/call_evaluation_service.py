@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the fixed prompt/guardrails below change, so evaluations made with
 # different instructions can be told apart.
-PROMPT_VERSION = "2"
+PROMPT_VERSION = "3"
 
 MAX_CRITERIA = 12
 MAX_NAME_LEN = 100
@@ -188,17 +188,18 @@ Hard rules:
 2. Do not criticise the rep for something the call gave no opportunity to do. If a rubric criterion had no opportunity to apply (for example, the customer raised no objections), set "not_applicable": true and "score": null for it.
 3. Every piece of evidence must be a short, EXACT, word-for-word quote copied from a single transcript line, with that line's start time in seconds. Do not paraphrase inside quotes. If a point is about something that did NOT happen (e.g. the rep never asked for an appointment), give an empty evidence list rather than a made-up quote.
 4. Judge the quality of the rep's conversation, not the result. A customer may decline despite an excellent call, and may book despite a poor one. "call_outcome" records only what was agreed during this conversation.
-5. Be specific and practical. Coaching suggestions should say what to say or do differently next time, in one or two sentences each.
+5. Be specific and practical. Coaching suggestions should say what to say or do differently next time, in one short sentence each.
 6. Do not include phone numbers, addresses, email addresses or payment details in your output, even if they appear in the transcript.
 7. Transcripts come from automatic speech recognition and may contain mis-heard words. Do not penalise the rep for obvious transcription errors.
+8. Keep it SHORT. The team reads this in about 15 seconds. Write every "text", "objection", "how_rep_responded" and "rationale" as one plain sentence of under 20 words. Put the most important item first in every list, and give at most 3 items per list.
 
 Scoring scale for each criterion (0-100): 90-100 excellent, 70-89 good, 50-69 mixed, 25-49 weak, 0-24 not done or done badly when there was a clear opportunity.
 
 Return a single JSON object with exactly these fields:
 {
-  "summary": "2-4 sentence neutral summary of the call",
+  "summary": "1-2 short sentences: what the call was about and how it ended",
   "category_scores": [
-    {"key": "<criterion key>", "not_applicable": false, "score": 0-100 or null, "rationale": "why, in 1-3 sentences", "evidence": [{"quote": "exact words", "timestamp_seconds": 12.5}]}
+    {"key": "<criterion key>", "not_applicable": false, "score": 0-100 or null, "rationale": "why, in one short sentence", "evidence": [{"quote": "exact words", "timestamp_seconds": 12.5}]}
   ],
   "strengths": [{"text": "...", "evidence": [...]}],
   "improvements": [{"text": "...", "evidence": [...]}],
