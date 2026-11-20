@@ -325,15 +325,28 @@ export interface RecurringRow {
     count: number;
     previous_count: number;
     by_rep: { name: string; count: number }[];
-    examples: { review_id: string; date: string | null; rep: string; text: string; confidence?: string | null }[];
+    examples: {
+        review_id: string;
+        date: string | null;
+        rep: string;
+        text: string;
+        /** hidden objections only */
+        confidence?: string | null;
+        /** stated objections only */
+        resolved?: boolean | null;
+    }[];
 }
 
+/** Running record across reviewed calls: four lists, each counted by kind, most common first. */
 export interface RecurringIssues {
     calls_reviewed: number;
     previous_calls_reviewed: number;
+    objections: RecurringRow[];
     hidden_objections: RecurringRow[];
-    fixes: RecurringRow[];
-    period: { start: string; end: string; days: number; truncated: boolean };
+    went_well: RecurringRow[];
+    went_badly: RecurringRow[];
+    /** start is null and all_time true for the all-time view */
+    period: { start: string | null; end: string; days: number; all_time: boolean; truncated: boolean };
 }
 
 export interface RubricTestResult {
@@ -422,6 +435,7 @@ export const CallReviewService = {
         return response.data;
     },
 
+    /** days = 0 for all time */
     async getRecurring(days: number): Promise<RecurringIssues> {
         const response = await apiClient.get(`${PREFIX}/recurring`, { params: { days } });
         return response.data;

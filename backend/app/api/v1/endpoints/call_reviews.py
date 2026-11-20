@@ -561,18 +561,22 @@ async def email_me_the_report(
 
 @router.get("/recurring")
 async def recurring_issues(
-    days: int = Query(30, ge=7, le=365),
+    days: int = Query(30, ge=0, le=3650, description="0 = all time"),
     rep_user_id: Optional[UUID] = None,
     dealership_id: Optional[UUID] = None,
     current_user: User = Depends(deps.require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Running list of hidden-objection guesses and "Fix this" items, counted by
-    kind, with last period's count and the most recent examples.
+    Running record across reviewed calls of the objections customers stated,
+    the AI's hidden-objection guesses, what went well and what didn't, each
+    counted by kind, with last period's count and the most recent examples.
     """
+    if 0 < days < 7:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Use 0 (all time) or 7+ days")
     end = utc_now()
-    data = await insights.get_recurring(db, end - timedelta(days=days), end, rep_user_id, dealership_id)
+    start = None if days == 0 else end - timedelta(days=days)
+    data = await insights.get_recurring(db, start, end, rep_user_id, dealership_id)
     data["period"]["days"] = days
     return data
 

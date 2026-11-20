@@ -175,7 +175,7 @@ const allSidebarItems: SidebarItem[] = [
         children: [
             { name: "Analytics", icon: BarChart3, href: "/analytics" },
             { name: "Call Intelligence", icon: PhoneCall, href: "/call-reviews/dashboard" },
-            { name: "Recurring Issues", icon: Repeat, href: "/call-reviews/recurring" },
+            { name: "Call Patterns", icon: Repeat, href: "/call-reviews/recurring" },
             { name: "Team Activity", icon: Activity, href: "/team-activity" },
             { name: "Sold Cars", icon: Car, href: "/sold-cars" },
             { name: "BDC Export", icon: QrCode, href: "/reports/bdc-export" },

@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the fixed prompt/guardrails below change, so evaluations made with
 # different instructions can be told apart.
-PROMPT_VERSION = "5"
+PROMPT_VERSION = "6"
 
 MAX_CRITERIA = 12
 MAX_NAME_LEN = 100
@@ -161,7 +161,7 @@ class Observation(BaseModel):
 
 
 class Improvement(Observation):
-    # Rubric criterion this is about, so recurring problems can be counted
+    # Rubric criterion this is about, so recurring strengths and problems can be counted
     criterion: Optional[str] = Field(default=None, max_length=80)
 
 
@@ -186,7 +186,7 @@ class HiddenObjection(BaseModel):
 class EvaluationOutput(BaseModel):
     summary: str = Field(min_length=1, max_length=2000)
     category_scores: List[CategoryResult]
-    strengths: List[Observation] = Field(default_factory=list)
+    strengths: List[Improvement] = Field(default_factory=list)
     improvements: List[Improvement] = Field(default_factory=list)
     missed_appointment_opportunities: List[Observation] = Field(default_factory=list)
     customer_objections: List[Objection] = Field(default_factory=list)
@@ -227,7 +227,7 @@ Return a single JSON object with exactly these fields:
   "category_scores": [
     {"key": "<criterion key>", "not_applicable": false, "score": 0-100 or null, "rationale": "why, in one short sentence", "evidence": [{"quote": "exact words", "timestamp_seconds": 12.5}]}
   ],
-  "strengths": [{"text": "...", "evidence": [...]}],
+  "strengths": [{"text": "...", "criterion": "<the rubric criterion key this is about>", "evidence": [...]}],
   "improvements": [{"text": "...", "criterion": "<the rubric criterion key this is about>", "evidence": [...]}],
   "missed_appointment_opportunities": [{"text": "moment where the rep could have asked for a visit and did not", "evidence": [...]}],
   "customer_objections": [{"objection": "...", "category": "<one of the objection categories below>", "how_rep_responded": "...", "resolved": true/false, "evidence": [...]}],
@@ -436,7 +436,7 @@ def parse_and_ground(
 
     result = {
         "summary": parsed.summary.strip(),
-        "strengths": _ground_items(parsed.strengths, transcript, stats),
+        "strengths": _with_known_criterion(_ground_items(parsed.strengths, transcript, stats), expected),
         "improvements": _with_known_criterion(_ground_items(parsed.improvements, transcript, stats), expected),
         "missed_appointment_opportunities": _ground_items(parsed.missed_appointment_opportunities, transcript, stats),
         "customer_objections": _ground_items(parsed.customer_objections, transcript, stats),

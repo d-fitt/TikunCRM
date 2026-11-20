@@ -12,7 +12,7 @@ visible, and each denominator is the population the rate actually applies to:
                              outcome is known (arrived or no-show); still-upcoming ones are excluded
 """
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from statistics import mean
 from typing import Any, Dict, Iterable, List, Optional
 from uuid import UUID
@@ -430,6 +430,18 @@ async def load_calls(
                     else result_json.get("hidden_objection")
                 ),
                 "missed_opportunities": len(result_json.get("missed_appointment_opportunities") or []),
+                # Items a manager marked wrong are dropped from the running lists
+                **{
+                    field: [
+                        item for i, item in enumerate(result_json.get(source) or [])
+                        if (ev.id, item_type.value, str(i)) not in rejected
+                    ]
+                    for field, source, item_type in (
+                        ("strengths", "strengths", FeedbackItemType.STRENGTH),
+                        ("improvements", "improvements", FeedbackItemType.IMPROVEMENT),
+                        ("missed_items", "missed_appointment_opportunities", FeedbackItemType.MISSED_OPPORTUNITY),
+                    )
+                },
                 "summary": result_json.get("summary") or "",
                 "top_fix": top_fix(
                     result_json, ev.category_scores or [], {(t, k) for e, t, k in rejected if e == ev.id}
@@ -504,33 +516,34 @@ def _recurring(
     pick,
 ) -> List[Dict[str, Any]]:
     """
-    Group calls by `pick(call) -> (key, label, text, extra) | None`. Each call
-    counts once. Returns rows with this period's count, last period's count,
-    a per-rep count and the most recent examples.
+    Group calls by `pick(call) -> [(key, label, text, extra), ...]`. A call is
+    counted once per kind, however many times that kind came up on it. Returns
+    rows with this period's count, last period's count, a per-rep count and the
+    most recent examples.
     """
     groups: Dict[str, Dict[str, Any]] = {}
     for call in calls:  # newest first
-        picked = pick(call)
-        if not picked:
-            continue
-        key, label, text, extra = picked
-        g = groups.setdefault(key, {"key": key, "label": label, "count": 0, "reps": defaultdict(int), "examples": []})
-        g["count"] += 1
-        g["reps"][rep_names.get(call.get("rep_user_id")) or "Unassigned"] += 1
-        if len(g["examples"]) < MAX_EXAMPLES:
-            started = call.get("started_at")
-            g["examples"].append({
-                "review_id": str(call["review_id"]),
-                "date": started.isoformat() if started else None,
-                "rep": rep_names.get(call.get("rep_user_id")) or "Unassigned",
-                "text": text,
-                **extra,
-            })
+        seen: set = set()
+        for key, label, text, extra in pick(call):
+            if key in seen:
+                continue
+            seen.add(key)
+            g = groups.setdefault(key, {"key": key, "label": label, "count": 0, "reps": defaultdict(int), "examples": []})
+            g["count"] += 1
+            g["reps"][rep_names.get(call.get("rep_user_id")) or "Unassigned"] += 1
+            if len(g["examples"]) < MAX_EXAMPLES:
+                started = call.get("started_at")
+                g["examples"].append({
+                    "review_id": str(call["review_id"]),
+                    "date": started.isoformat() if started else None,
+                    "rep": rep_names.get(call.get("rep_user_id")) or "Unassigned",
+                    "text": text,
+                    **extra,
+                })
     previous_counts: Dict[str, int] = defaultdict(int)
     for call in previous:
-        picked = pick(call)
-        if picked:
-            previous_counts[picked[0]] += 1
+        for key in {p[0] for p in pick(call)}:
+            previous_counts[key] += 1
 
     rows = []
     for g in groups.values():
@@ -546,19 +559,62 @@ def _recurring(
     return rows
 
 
+def _category(value: Any) -> str:
+    return value if value in OBJECTION_CATEGORIES else "other"
+
+
+def _criterion_names(call: Dict[str, Any]) -> Dict[str, str]:
+    return {c.get("key"): c.get("name") for c in call.get("category_scores") or []}
+
+
+def _pick_objections(call: Dict[str, Any]):
+    """Objections the customer actually said."""
+    return [
+        (_category(o.get("category")), OBJECTION_CATEGORIES[_category(o.get("category"))],
+         o.get("objection") or "", {"resolved": bool(o.get("resolved"))})
+        for o in call.get("objections") or []
+    ]
+
+
 def _pick_hidden(call: Dict[str, Any]):
+    """The AI's guess at the objection the customer did not say."""
     h = call.get("hidden_objection")
     if not h:
-        return None
-    category = h.get("category") if h.get("category") in OBJECTION_CATEGORIES else "other"
-    return category, OBJECTION_CATEGORIES[category], h.get("guess") or "", {"confidence": h.get("confidence")}
+        return []
+    c = _category(h.get("category"))
+    return [(c, OBJECTION_CATEGORIES[c], h.get("guess") or "", {"confidence": h.get("confidence")})]
 
 
-def _pick_fix(call: Dict[str, Any]):
-    f = call.get("top_fix")
-    if not f:
-        return None
-    return f["key"], f["label"], f["text"], {}
+def _pick_went_well(call: Dict[str, Any]):
+    names = _criterion_names(call)
+    out = []
+    for s in call.get("strengths") or []:
+        criterion = s.get("criterion")
+        if criterion in names:
+            out.append((f"criterion:{criterion}", f"Good at: {names[criterion]}", s.get("text") or "", {}))
+        else:
+            out.append(("other", "Other strengths", s.get("text") or "", {}))
+    return out
+
+
+def _pick_went_badly(call: Dict[str, Any]):
+    """Everything flagged on the call: missed asks, objections left open, and improvements."""
+    names = _criterion_names(call)
+    out = []
+    for m in call.get("missed_items") or []:
+        out.append((MISSED_ASK_KEY, "Missed the ask for an appointment", m.get("text") or "", {}))
+    for o in call.get("objections") or []:
+        if not o.get("resolved"):
+            c = _category(o.get("category"))
+            out.append((f"objection_left_open:{c}", f"Objection left open: {OBJECTION_CATEGORIES[c]}",
+                        o.get("objection") or "", {}))
+    for imp in call.get("improvements") or []:
+        criterion = imp.get("criterion")
+        if criterion in names:
+            out.append((f"criterion:{criterion}", f"Improve: {names[criterion]}", imp.get("text") or "", {}))
+        else:
+            out.append(("other", "Other improvements", imp.get("text") or "", {}))
+    return out
 
 
 def build_recurring(
@@ -567,25 +623,38 @@ def build_recurring(
     return {
         "calls_reviewed": len(calls),
         "previous_calls_reviewed": len(previous),
+        "objections": _recurring(calls, previous, rep_names, _pick_objections),
         "hidden_objections": _recurring(calls, previous, rep_names, _pick_hidden),
-        "fixes": _recurring(calls, previous, rep_names, _pick_fix),
+        "went_well": _recurring(calls, previous, rep_names, _pick_went_well),
+        "went_badly": _recurring(calls, previous, rep_names, _pick_went_badly),
     }
+
+
+ALL_TIME_START = datetime(2000, 1, 1, tzinfo=timezone.utc)
 
 
 async def get_recurring(
     db: AsyncSession,
-    start: datetime,
+    start: Optional[datetime],
     end: datetime,
     rep_user_id: Optional[UUID] = None,
     dealership_id: Optional[UUID] = None,
 ) -> Dict[str, Any]:
+    """`start=None` means all time, with nothing earlier to compare against."""
+    all_time = start is None
+    start = start or ALL_TIME_START
     calls = await load_calls(db, start, end, rep_user_id, dealership_id)
-    previous = await load_calls(db, start - (end - start), start, rep_user_id, dealership_id)
+    previous = [] if all_time else await load_calls(db, start - (end - start), start, rep_user_id, dealership_id)
     rep_ids = [i for i in {c["rep_user_id"] for c in calls} if i]
     rep_names: Dict[Any, str] = {}
     if rep_ids:
         result = await db.execute(select(User).where(User.id.in_(rep_ids)))
         rep_names = {u.id: u.full_name for u in result.scalars().all()}
     data = build_recurring(calls, previous, rep_names)
-    data["period"] = {"start": start.isoformat(), "end": end.isoformat(), "truncated": len(calls) >= MAX_CALLS}
+    data["period"] = {
+        "start": None if all_time else start.isoformat(),
+        "end": end.isoformat(),
+        "all_time": all_time,
+        "truncated": len(calls) >= MAX_CALLS,
+    }
     return data

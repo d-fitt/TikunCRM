@@ -365,7 +365,7 @@ export default function CallIntelligencePage() {
                     <Button size="sm" variant="outline" asChild>
                         <Link href="/call-reviews/recurring">
                             <Repeat className="mr-2 h-4 w-4" />
-                            Recurring issues
+                            Call patterns
                         </Link>
                     </Button>
                     <Button size="sm" variant="outline" onClick={emailReport} disabled={reportState === "sending"}>

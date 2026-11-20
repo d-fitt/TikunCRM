@@ -3,12 +3,23 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { AlertCircle, ChevronDown, Loader2, PhoneCall, Search, TrendingUp } from "lucide-react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+    AlertCircle,
+    ChevronDown,
+    Download,
+    Loader2,
+    MessageSquareWarning,
+    PhoneCall,
+    Search,
+    ThumbsUp,
+    TrendingUp,
+} from "lucide-react"
+import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { EmptyState } from "@/components/ui/empty-state"
 import { PageHeader } from "@/components/ui/page-header"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 import { CallReviewService, RecurringIssues, RecurringRow, apiErrorMessage } from "@/services/call-review-service"
 
@@ -17,25 +28,87 @@ const PERIODS = [
     { days: 30, label: "30 days" },
     { days: 90, label: "90 days" },
     { days: 365, label: "1 year" },
+    { days: 0, label: "All time" },
+]
+
+type ListKey = "objections" | "hidden_objections" | "went_well" | "went_badly"
+
+/** The four running lists, in the order they are shown. */
+const LISTS: {
+    key: ListKey
+    title: string
+    topLabel: string
+    description: string
+    icon: React.ElementType
+    /** Is a rise good news (things that went well) or bad news (problems)? */
+    upIsGood: boolean
+    bar: string
+    badge: string
+    emptyText: string
+}[] = [
+    {
+        key: "objections",
+        title: "Objections",
+        topLabel: "Most common objection",
+        description: "Objections customers actually said on the call. A call counts once per kind of objection.",
+        icon: MessageSquareWarning,
+        upIsGood: false,
+        bar: "bg-red-500",
+        badge: "bg-red-500/15 text-red-700 dark:text-red-400",
+        emptyText: "No objections recorded in this period.",
+    },
+    {
+        key: "hidden_objections",
+        title: "Hidden objections",
+        topLabel: "Most common hidden objection",
+        description:
+            "What the AI suspects customers were really worried about but didn't say. Guesses, not facts; ones a manager marked wrong are left out.",
+        icon: Search,
+        upIsGood: false,
+        bar: "bg-primary",
+        badge: "bg-primary/15 text-primary",
+        emptyText: "No guesses yet in this period. Calls reviewed before guessing was added have none until re-scored.",
+    },
+    {
+        key: "went_well",
+        title: "Went well",
+        topLabel: "Most common strength",
+        description: "What reps did well, grouped by scoring criterion. A call counts once per kind.",
+        icon: ThumbsUp,
+        upIsGood: true,
+        bar: "bg-emerald-500",
+        badge: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+        emptyText: "Nothing recorded in this period.",
+    },
+    {
+        key: "went_badly",
+        title: "Didn't go well",
+        topLabel: "Most common problem",
+        description:
+            "Every issue flagged on a call (missed asks, objections left open and things to improve), not just the one shown in Fix this. A call counts once per kind.",
+        icon: TrendingUp,
+        upIsGood: false,
+        bar: "bg-amber-500",
+        badge: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+        emptyText: "Nothing flagged in this period.",
+    },
 ]
 
 function fmtDate(iso: string | null): string {
     if (!iso) return "—"
-    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
 }
 
 /** "3 more than last period" in words, so the direction never relies on colour alone. */
-function Change({ now, before, previousCalls }: { now: number; before: number; previousCalls: number }) {
-    // With no reviewed calls last period there is nothing to compare against
-    if (previousCalls === 0) return <span className="text-xs text-muted-foreground">No calls reviewed last period</span>
+function Change({ now, before, upIsGood }: { now: number; before: number; upIsGood: boolean }) {
     const diff = now - before
     if (diff === 0) return <span className="text-xs text-muted-foreground">Same as last period</span>
+    const good = diff > 0 === upIsGood
     return (
         <span
             className={cn(
                 "text-xs font-medium",
-                // More of a problem is bad news; fewer is good news
-                diff > 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"
+                good ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
             )}
         >
             {diff > 0 ? "▲" : "▼"} {Math.abs(diff)} {diff > 0 ? "more" : "fewer"} than last period ({before})
@@ -43,20 +116,20 @@ function Change({ now, before, previousCalls }: { now: number; before: number; p
     )
 }
 
-function IssueRow({
+function Row({
     row,
     total,
-    previousCalls,
-    tone,
+    compare,
+    list,
 }: {
     row: RecurringRow
     total: number
-    previousCalls: number
-    tone: "hidden" | "fix"
+    compare: boolean
+    list: (typeof LISTS)[number]
 }) {
     const [open, setOpen] = React.useState(false)
     const share = total ? row.count / total : 0
-    const panelId = `issue-${tone}-${row.key}`
+    const panelId = `pattern-${list.key}-${row.key}`
     return (
         <li className="rounded-lg border">
             <button
@@ -66,28 +139,20 @@ function IssueRow({
                 aria-expanded={open}
                 aria-controls={panelId}
             >
-                <div
-                    className={cn(
-                        "flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-md",
-                        tone === "hidden" ? "bg-primary/10 text-primary" : "bg-amber-500/15 text-amber-700 dark:text-amber-400"
-                    )}
-                >
+                <div className={cn("flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-md", list.badge)}>
                     <span className="text-lg font-bold leading-none tabular-nums">{row.count}</span>
-                    <span className="text-[10px] uppercase tracking-wide">calls</span>
+                    <span className="text-[10px] uppercase tracking-wide">{row.count === 1 ? "call" : "calls"}</span>
                 </div>
                 <div className="min-w-0 flex-1 space-y-1.5">
                     <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                         <span className="font-medium">{row.label}</span>
-                        <Change now={row.count} before={row.previous_count} previousCalls={previousCalls} />
+                        {compare && <Change now={row.count} before={row.previous_count} upIsGood={list.upIsGood} />}
                     </div>
                     <div className="h-2 w-full rounded-sm bg-muted" title={`${row.count} of ${total} reviewed calls`}>
-                        <div
-                            className={cn("h-full rounded-r-[4px]", tone === "hidden" ? "bg-primary" : "bg-amber-500")}
-                            style={{ width: `${Math.max(share * 100, 1)}%` }}
-                        />
+                        <div className={cn("h-full rounded-r-[4px]", list.bar)} style={{ width: `${Math.max(share * 100, 1)}%` }} />
                     </div>
                     <p className="text-xs text-muted-foreground">
-                        {row.count} of {total} reviewed calls ·{" "}
+                        {row.count} of {total} reviewed calls ({Math.round(share * 100)}%) ·{" "}
                         {row.by_rep
                             .slice(0, 3)
                             .map((r) => `${r.name} ${r.count}`)
@@ -107,13 +172,18 @@ function IssueRow({
                                 href={`/call-reviews/${ex.review_id}`}
                                 className="flex flex-col gap-0.5 px-4 py-2.5 text-sm hover:bg-muted/50 sm:flex-row sm:gap-4"
                             >
-                                <span className="shrink-0 text-xs text-muted-foreground sm:w-36 sm:pt-0.5">
+                                <span className="shrink-0 text-xs text-muted-foreground sm:w-44 sm:pt-0.5">
                                     {fmtDate(ex.date)} · {ex.rep}
                                 </span>
                                 <span className="flex-1">
                                     {ex.text}
                                     {ex.confidence && (
                                         <span className="ml-1.5 text-xs text-muted-foreground">({ex.confidence} confidence)</span>
+                                    )}
+                                    {ex.resolved != null && (
+                                        <span className="ml-1.5 text-xs text-muted-foreground">
+                                            ({ex.resolved ? "resolved" : "left open"})
+                                        </span>
                                     )}
                                 </span>
                             </Link>
@@ -130,52 +200,39 @@ function IssueRow({
     )
 }
 
-function IssueList({
-    title,
-    description,
-    icon,
-    rows,
-    total,
-    previousCalls,
-    tone,
-    emptyText,
-}: {
-    title: string
-    description: string
-    icon: React.ReactNode
-    rows: RecurringRow[]
-    total: number
-    previousCalls: number
-    tone: "hidden" | "fix"
-    emptyText: string
-}) {
-    return (
-        <Card>
-            <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                    {icon}
-                    {title}
-                </CardTitle>
-                <CardDescription>{description}</CardDescription>
-            </CardHeader>
-            <CardContent>
-                {rows.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">{emptyText}</p>
-                ) : (
-                    <ul className="space-y-3">
-                        {rows.map((row) => (
-                            <IssueRow key={row.key} row={row} total={total} previousCalls={previousCalls} tone={tone} />
-                        ))}
-                    </ul>
-                )}
-            </CardContent>
-        </Card>
-    )
+/** Spreadsheet copy of all four lists, so the record can be kept or shared outside the CRM. */
+function downloadCsv(data: RecurringIssues, periodLabel: string) {
+    const cell = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`
+    const lines = [["List", "Kind", "Calls", "Share of reviewed calls", "Previous period", "By rep"].map(cell).join(",")]
+    for (const list of LISTS) {
+        for (const r of data[list.key]) {
+            lines.push(
+                [
+                    list.title,
+                    r.label,
+                    r.count,
+                    data.calls_reviewed ? `${Math.round((r.count / data.calls_reviewed) * 100)}%` : "",
+                    data.period.all_time ? "" : r.previous_count,
+                    r.by_rep.map((b) => `${b.name} ${b.count}`).join("; "),
+                ]
+                    .map(cell)
+                    .join(",")
+            )
+        }
+    }
+    const blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `call-patterns-${periodLabel.toLowerCase().replace(/\s+/g, "-")}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
 }
 
-export default function RecurringIssuesPage() {
+export default function CallPatternsPage() {
     const router = useRouter()
     const [days, setDays] = React.useState(30)
+    const [tab, setTab] = React.useState<ListKey>("objections")
     const [data, setData] = React.useState<RecurringIssues | null>(null)
     const [isLoading, setIsLoading] = React.useState(true)
     const [error, setError] = React.useState<string | null>(null)
@@ -190,7 +247,7 @@ export default function RecurringIssuesPage() {
                 setError(null)
             })
             .catch((err) => {
-                if (!cancelled) setError(apiErrorMessage(err, "Could not load recurring issues."))
+                if (!cancelled) setError(apiErrorMessage(err, "Could not load call patterns."))
             })
             .finally(() => {
                 if (!cancelled) setIsLoading(false)
@@ -200,24 +257,39 @@ export default function RecurringIssuesPage() {
         }
     }, [days])
 
+    const periodLabel = PERIODS.find((p) => p.days === days)?.label ?? `${days} days`
+    // Only compare with the previous period when there is one and it had calls
+    const compare = !!data && !data.period.all_time && data.previous_calls_reviewed > 0
+
     return (
         <div className="space-y-6">
             <PageHeader
-                title="Recurring issues"
-                description="A running count of the hidden objections the AI suspects and the “Fix this” points on reviewed calls. Each call counts once in each list."
+                title="Call patterns"
+                description="A running record across every reviewed call: what customers object to, what they don't say, what reps do well and what they don't. Most common first."
                 actions={
-                    <div className="flex flex-wrap gap-1" role="group" aria-label="Time period">
-                        {PERIODS.map((p) => (
-                            <Button
-                                key={p.days}
-                                size="sm"
-                                variant={days === p.days ? "default" : "outline"}
-                                aria-pressed={days === p.days}
-                                onClick={() => setDays(p.days)}
-                            >
-                                {p.label}
-                            </Button>
-                        ))}
+                    <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex flex-wrap gap-1" role="group" aria-label="Time period">
+                            {PERIODS.map((p) => (
+                                <Button
+                                    key={p.days}
+                                    size="sm"
+                                    variant={days === p.days ? "default" : "outline"}
+                                    aria-pressed={days === p.days}
+                                    onClick={() => setDays(p.days)}
+                                >
+                                    {p.label}
+                                </Button>
+                            ))}
+                        </div>
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={!data || data.calls_reviewed === 0}
+                            onClick={() => data && downloadCsv(data, periodLabel)}
+                        >
+                            <Download className="mr-2 h-4 w-4" />
+                            Download
+                        </Button>
                     </div>
                 }
             />
@@ -245,27 +317,74 @@ export default function RecurringIssuesPage() {
                     </CardContent>
                 </Card>
             ) : (
-                <div className={cn("grid gap-6 2xl:grid-cols-2", isLoading && "opacity-60")}>
-                    <IssueList
-                        title="Hidden objections"
-                        description="What the AI suspects customers were really worried about but didn't say. Guesses, not facts; ones a manager marked wrong are left out. Click a row to see the calls."
-                        icon={<Search className="h-4 w-4 text-primary" />}
-                        rows={data.hidden_objections}
-                        total={data.calls_reviewed}
-                        previousCalls={data.previous_calls_reviewed}
-                        tone="hidden"
-                        emptyText="No guesses yet in this period. Calls reviewed before guessing was added have none until re-scored."
-                    />
-                    <IssueList
-                        title="Fix this"
-                        description="The one thing to fix on each call, as shown on the call page, grouped by kind. Click a row to see the calls."
-                        icon={<TrendingUp className="h-4 w-4 text-amber-600" />}
-                        rows={data.fixes}
-                        total={data.calls_reviewed}
-                        previousCalls={data.previous_calls_reviewed}
-                        tone="fix"
-                        emptyText="Nothing flagged to fix in this period."
-                    />
+                <div className={cn("space-y-6", isLoading && "opacity-60")}>
+                    <p className="text-sm text-muted-foreground">
+                        Based on {data.calls_reviewed} reviewed {data.calls_reviewed === 1 ? "call" : "calls"}
+                        {data.period.all_time ? " in total" : ` in the last ${periodLabel}`}.
+                        {data.period.truncated && " Only the most recent 5,000 are included."}
+                    </p>
+
+                    {/* Top of each list at a glance; click to open that list */}
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                        {LISTS.map((list) => {
+                            const top = data[list.key][0]
+                            const Icon = list.icon
+                            return (
+                                <button
+                                    key={list.key}
+                                    type="button"
+                                    onClick={() => setTab(list.key)}
+                                    aria-pressed={tab === list.key}
+                                    className={cn(
+                                        "flex flex-col gap-2 rounded-lg border p-4 text-left transition-colors hover:bg-muted/50",
+                                        tab === list.key && "ring-2 ring-primary/40"
+                                    )}
+                                >
+                                    <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                        <span className={cn("flex h-6 w-6 items-center justify-center rounded-md", list.badge)}>
+                                            <Icon className="h-3.5 w-3.5" />
+                                        </span>
+                                        {list.topLabel}
+                                    </span>
+                                    {top ? (
+                                        <>
+                                            <span className="font-semibold leading-snug">{top.label}</span>
+                                            <span className="text-sm text-muted-foreground">
+                                                {top.count} of {data.calls_reviewed} calls
+                                            </span>
+                                        </>
+                                    ) : (
+                                        <span className="text-sm text-muted-foreground">None yet</span>
+                                    )}
+                                </button>
+                            )
+                        })}
+                    </div>
+
+                    <Tabs value={tab} onValueChange={(v) => setTab(v as ListKey)}>
+                        <TabsList className="h-auto flex-wrap">
+                            {LISTS.map((list) => (
+                                <TabsTrigger key={list.key} value={list.key}>
+                                    {list.title}
+                                    <span className="ml-1.5 text-xs text-muted-foreground">({data[list.key].length})</span>
+                                </TabsTrigger>
+                            ))}
+                        </TabsList>
+                        {LISTS.map((list) => (
+                            <TabsContent key={list.key} value={list.key} className="space-y-3">
+                                <p className="text-sm text-muted-foreground">{list.description} Click a row to see the calls.</p>
+                                {data[list.key].length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">{list.emptyText}</p>
+                                ) : (
+                                    <ul className="space-y-3">
+                                        {data[list.key].map((row) => (
+                                            <Row key={row.key} row={row} total={data.calls_reviewed} compare={compare} list={list} />
+                                        ))}
+                                    </ul>
+                                )}
+                            </TabsContent>
+                        ))}
+                    </Tabs>
                 </div>
             )}
         </div>

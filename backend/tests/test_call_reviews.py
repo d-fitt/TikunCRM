@@ -1417,9 +1417,15 @@ class TestRecurringApi:
         await reviews.process_review(db, review.id)
         return review
 
-    async def test_counts_examples_and_previous_period(self, api, db, fakes, monkeypatch):
-        missed = llm_output(missed_appointment_opportunities=[
-            {"text": "Could have offered an evening slot.", "evidence": []}])
+    async def test_four_lists_with_counts_examples_and_previous_period(self, api, db, fakes, monkeypatch):
+        missed = llm_output(
+            missed_appointment_opportunities=[{"text": "Could have offered an evening slot.", "evidence": []}],
+            customer_objections=[
+                {"objection": "Payment too high", "category": "price_or_payment", "resolved": False, "evidence": []},
+                {"objection": "Payment again", "category": "price_or_payment", "resolved": True, "evidence": []},
+            ],
+            strengths=[{"text": "Strong intro.", "criterion": "opening", "evidence": []}],
+        )
         first = await self._reviewed(db, 1, missed, monkeypatch)
         await self._reviewed(db, 2, missed, monkeypatch)
         await self._reviewed(db, 3, llm_output(), monkeypatch)
@@ -1427,29 +1433,43 @@ class TestRecurringApi:
 
         d = (await api.client.get("/call-reviews/recurring", params={"days": 30})).json()
         assert d["calls_reviewed"] == 3 and d["previous_calls_reviewed"] == 1
-        fixes = {f["key"]: f for f in d["fixes"]}
-        assert fixes["missed_the_ask"]["count"] == 2 and fixes["missed_the_ask"]["previous_count"] == 1
-        assert fixes["other"]["count"] == 1                           # "Did not ask about a trade-in", no criterion
-        assert [f["key"] for f in d["fixes"]] == ["missed_the_ask", "other"]   # most frequent first
-        ex = fixes["missed_the_ask"]["examples"]
-        assert len(ex) == 2 and ex[0]["review_id"] == str(first.id)  # newest first
-        assert ex[0]["text"] == "Could have offered an evening slot."
-        assert sum(r["count"] for r in fixes["missed_the_ask"]["by_rep"]) == 2
+        assert d["period"]["all_time"] is False
+
+        # Stated objections: a category counts once per call even if raised twice
+        assert [(o["key"], o["count"], o["previous_count"]) for o in d["objections"]] == [("price_or_payment", 2, 1)]
+        assert d["objections"][0]["examples"][0]["text"] == "Payment too high"
 
         hidden = d["hidden_objections"]
         assert hidden[0]["key"] == "credit_or_financing" and hidden[0]["count"] == 3 and hidden[0]["previous_count"] == 1
-        assert hidden[0]["examples"][0]["confidence"] == "medium"
 
-        # Marking the newest call's missed ask as wrong moves that call to its next fix
+        well = {w["key"]: (w["label"], w["count"]) for w in d["went_well"]}
+        assert well == {"criterion:opening": ("Good at: Opening", 2), "other": ("Other strengths", 1)}
+
+        bad = {b["key"]: b["count"] for b in d["went_badly"]}
+        # Every issue on a call is counted, not just the one shown in "Fix this"
+        assert bad == {"missed_the_ask": 2, "objection_left_open:price_or_payment": 2, "other": 3}
+        assert d["went_badly"][0]["key"] == "other"                   # most frequent first
+        ex = {b["key"]: b for b in d["went_badly"]}["missed_the_ask"]["examples"]
+        assert ex[0]["review_id"] == str(first.id) and ex[0]["text"] == "Could have offered an evening slot."
+
+        # A manager marking the missed ask wrong takes it out of the record
         r = await api.client.put(f"/call-reviews/{first.id}/feedback",
                                  json={"item_type": "missed_opportunity", "item_key": "0", "verdict": "inaccurate"})
-        assert r.json()["top_fix"]["key"] == "other"
+        assert r.json()["top_fix"]["key"] == "objection_left_open:price_or_payment"
         d = (await api.client.get("/call-reviews/recurring", params={"days": 30})).json()
-        fixes = {f["key"]: f["count"] for f in d["fixes"]}
-        assert fixes == {"missed_the_ask": 1, "other": 2}
+        assert {b["key"]: b["count"] for b in d["went_badly"]}["missed_the_ask"] == 1
 
         detail = (await api.client.get(f"/call-reviews/{first.id}")).json()
-        assert detail["evaluation"]["top_fix"]["key"] == "other"
+        assert detail["evaluation"]["top_fix"]["key"] == "objection_left_open:price_or_payment"
+
+    async def test_all_time(self, api, db, fakes, monkeypatch):
+        await self._reviewed(db, 1, llm_output(), monkeypatch)
+        await self._reviewed(db, 400, llm_output(), monkeypatch)
+        d = (await api.client.get("/call-reviews/recurring", params={"days": 0})).json()
+        assert d["calls_reviewed"] == 2 and d["previous_calls_reviewed"] == 0
+        assert d["period"]["all_time"] is True and d["period"]["start"] is None
+        assert d["hidden_objections"][0]["count"] == 2
+        assert (await api.client.get("/call-reviews/recurring", params={"days": 3})).status_code == 422
 
     async def test_recurring_is_for_managers(self, api):
         api.as_role(UserRole.SALESPERSON)
@@ -1457,4 +1477,17 @@ class TestRecurringApi:
 
     async def test_empty(self, api):
         d = (await api.client.get("/call-reviews/recurring", params={"days": 365})).json()
-        assert d["fixes"] == [] and d["hidden_objections"] == [] and d["period"]["days"] == 365
+        assert all(d[k] == [] for k in ("objections", "hidden_objections", "went_well", "went_badly"))
+        assert d["period"]["days"] == 365
+
+
+class TestStrengthCriterion:
+    def test_strengths_are_tagged_with_a_known_criterion(self):
+        raw = llm_output(strengths=[
+            {"text": "Offered two times.", "criterion": "appointment", "evidence": []},
+            {"text": "Friendly.", "criterion": "vibes", "evidence": []},
+        ])
+        out = evaluation.parse_and_ground(raw, TRANSCRIPT, CRITERIA)
+        assert [x["criterion"] for x in out["result"]["strengths"]] == ["appointment", None]
+        system = evaluation.build_messages(TRANSCRIPT, CRITERIA, None, None)[0]["content"]
+        assert '"strengths": [{"text": "...", "criterion":' in system
