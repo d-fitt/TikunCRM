@@ -14,6 +14,11 @@ export interface LeadBrief {
         phone?: string
         email?: string
     }
+    partner_store?: {
+        id: string
+        name: string
+        brand?: string | null
+    } | null
 }
 
 export interface UserBrief {

@@ -22,6 +22,7 @@ export interface LeadBrief {
         email?: string
         phone?: string
     }
+    partner_store?: PartnerStoreBrief | null
 }
 
 export interface DealershipBrief {
@@ -94,12 +95,30 @@ export interface AppointmentComplete {
     status?: AppointmentStatus
 }
 
+export interface AppointmentStoreCount {
+    partner_store_id?: string | null
+    name: string
+    brand?: string | null
+    count: number
+}
+
 export interface AppointmentListResponse {
     items: Appointment[]
     total: number
     page: number
     page_size: number
     total_pages: number
+    store_counts?: AppointmentStoreCount[]
+}
+
+/** Store on the appointment, or the lead's store when the appointment was booked before one was saved. */
+export function appointmentStoreLabel(apt: Appointment): string | null {
+    const store = apt.partner_store || apt.lead?.partner_store
+    if (!store?.name) return null
+    if (store.brand && !store.name.toLowerCase().includes(store.brand.toLowerCase())) {
+        return `${store.name} · ${store.brand}`
+    }
+    return store.name
 }
 
 export interface AppointmentStats {

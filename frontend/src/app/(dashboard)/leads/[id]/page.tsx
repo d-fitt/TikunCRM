@@ -115,7 +115,7 @@ import { EligibilityPanel } from "@/components/eligibility/eligibility-panel"
 import { TrustScoreBadge } from "@/components/eligibility/trust-score-badge"
 import { GuestFormModal } from "@/components/guests/guest-form-modal"
 import { LeadCreditAppForm } from "@/components/credit-app/lead-credit-app-form"
-import { AppointmentService, Appointment, AppointmentStatus, getAppointmentStatusLabel, getAppointmentStatusColor, isAppointmentStatusTerminal, getLinkableAppointmentsForCheckIn } from "@/services/appointment-service"
+import { AppointmentService, Appointment, AppointmentStatus, getAppointmentStatusLabel, getAppointmentStatusColor, isAppointmentStatusTerminal, getLinkableAppointmentsForCheckIn, appointmentStoreLabel } from "@/services/appointment-service"
 import { FollowUpService, FollowUp, FOLLOW_UP_STATUS_INFO } from "@/services/follow-up-service"
 import { StipsService, StipsCategory, StipDocument } from "@/services/stips-service"
 import { useLeadUpdateEvents, useActivityEvents, useWebSocketEvent } from "@/hooks/use-websocket"
@@ -4095,6 +4095,7 @@ export default function LeadDetailsPage() {
                                                     <TableHeader>
                                                         <TableRow>
                                                             <TableHead>Title</TableHead>
+                                                            <TableHead>Store</TableHead>
                                                             <TableHead>Date & time</TableHead>
                                                             <TableHead>Status</TableHead>
                                                             <TableHead className="text-right">Actions</TableHead>
@@ -4104,6 +4105,9 @@ export default function LeadDetailsPage() {
                                                         {appointmentsToday.map((apt) => (
                                                             <TableRow key={apt.id}>
                                                                 <TableCell className="font-medium">{apt.title}</TableCell>
+                                                                <TableCell className="text-sm text-muted-foreground">
+                                                                    {appointmentStoreLabel(apt) || "—"}
+                                                                </TableCell>
                                                                 <TableCell>
                                                                     <DealershipTime
                                                                         date={apt.scheduled_at}
@@ -4198,6 +4202,7 @@ export default function LeadDetailsPage() {
                                                     <TableHeader>
                                                         <TableRow>
                                                             <TableHead>Title</TableHead>
+                                                            <TableHead>Store</TableHead>
                                                             <TableHead>Date & time</TableHead>
                                                             <TableHead>Status</TableHead>
                                                             <TableHead className="text-right">Actions</TableHead>
@@ -4207,6 +4212,9 @@ export default function LeadDetailsPage() {
                                                         {appointmentsUpcoming.map((apt) => (
                                                             <TableRow key={apt.id}>
                                                                 <TableCell className="font-medium">{apt.title}</TableCell>
+                                                                <TableCell className="text-sm text-muted-foreground">
+                                                                    {appointmentStoreLabel(apt) || "—"}
+                                                                </TableCell>
                                                                 <TableCell>
                                                                     <DealershipTime
                                                                         date={apt.scheduled_at}
@@ -4301,6 +4309,7 @@ export default function LeadDetailsPage() {
                                                     <TableHeader>
                                                         <TableRow>
                                                             <TableHead>Title</TableHead>
+                                                            <TableHead>Store</TableHead>
                                                             <TableHead>Date & time</TableHead>
                                                             <TableHead>Status</TableHead>
                                                             <TableHead className="text-right">Actions</TableHead>
@@ -4310,6 +4319,9 @@ export default function LeadDetailsPage() {
                                                         {appointmentsOverdue.map((apt) => (
                                                             <TableRow key={apt.id}>
                                                                 <TableCell className="font-medium">{apt.title}</TableCell>
+                                                                <TableCell className="text-sm text-muted-foreground">
+                                                                    {appointmentStoreLabel(apt) || "—"}
+                                                                </TableCell>
                                                                 <TableCell>
                                                                     <DealershipTime
                                                                         date={apt.scheduled_at}
@@ -4402,6 +4414,7 @@ export default function LeadDetailsPage() {
                                                     <TableHeader>
                                                         <TableRow>
                                                             <TableHead>Title</TableHead>
+                                                            <TableHead>Store</TableHead>
                                                             <TableHead>Date & time</TableHead>
                                                             <TableHead>Status</TableHead>
                                                             <TableHead className="text-right">Actions</TableHead>
@@ -4411,6 +4424,9 @@ export default function LeadDetailsPage() {
                                                         {appointmentsPast.map((apt) => (
                                                             <TableRow key={apt.id}>
                                                                 <TableCell className="font-medium">{apt.title}</TableCell>
+                                                                <TableCell className="text-sm text-muted-foreground">
+                                                                    {appointmentStoreLabel(apt) || "—"}
+                                                                </TableCell>
                                                                 <TableCell>
                                                                     <DealershipTime
                                                                         date={apt.scheduled_at}

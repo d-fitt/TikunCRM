@@ -30,6 +30,7 @@ from app.core.timezone import utc_now
 from app.models.appointment import Appointment, AppointmentStatus
 from app.models.customer import Customer
 from app.models.dealership import Dealership
+from app.models.partner_store import PartnerStore
 from app.models.eligibility import EligibilityAssessment
 from app.models.guest import Guest
 from app.models.lead import Lead, LeadSource
@@ -78,7 +79,7 @@ PDF_TABLE_HEADERS = [
     "Lead",
     "Phone",
     "Stage",
-    "Dealership",
+    "Store",
     "BDC",
     "Sales",
     "Status",
@@ -100,6 +101,7 @@ EXPORT_HEADERS = [
     "Source",
     "Lead Created",
     "Dealership",
+    "Partner Store",
     "BDC Agent",
     "Salesperson",
     "Active",
@@ -157,6 +159,7 @@ class BdcReportRow:
     source: str
     lead_created: str
     dealership: str
+    partner_store: str
     bdc_agent: str
     salesperson: str
     is_active: bool
@@ -365,6 +368,14 @@ class BdcReportService:
             for d in dr.scalars().all():
                 dealership_names[d.id] = d.name or ""
 
+        partner_store_ids = {lead.partner_store_id for lead in leads if lead.partner_store_id}
+        partner_store_names: Dict[UUID, str] = {}
+        if partner_store_ids:
+            store_rows = await db.execute(
+                select(PartnerStore).where(PartnerStore.id.in_(partner_store_ids))
+            )
+            partner_store_names = {store.id: store.name or "" for store in store_rows.scalars().all()}
+
         appt_result = await db.execute(
             select(Appointment)
             .where(Appointment.lead_id.in_(lead_ids))
@@ -459,6 +470,11 @@ class BdcReportService:
                     source=source_display,
                     lead_created=lead.created_at.isoformat() if lead.created_at else "",
                     dealership=dealership_names.get(lead.dealership_id, "") if lead.dealership_id else "",
+                    partner_store=(
+                        partner_store_names.get(lead.partner_store_id, "")
+                        if lead.partner_store_id
+                        else ""
+                    ),
                     bdc_agent=bdc_user.full_name if bdc_user else "",
                     salesperson=sp_user.full_name if sp_user else "",
                     is_active=bool(lead.is_active),
@@ -801,6 +817,7 @@ class BdcReportService:
                 row.source,
                 row.lead_created,
                 row.dealership,
+                row.partner_store,
                 row.bdc_agent,
                 row.salesperson,
                 "Yes" if row.is_active else "No",
@@ -1169,7 +1186,7 @@ class BdcReportService:
                 BdcReportService._pdf_cell(row.full_name, body_cell),
                 BdcReportService._pdf_cell(row.phone, body_cell),
                 BdcReportService._pdf_cell(row.stage, body_cell),
-                BdcReportService._pdf_cell(row.dealership, body_cell),
+                BdcReportService._pdf_cell(row.partner_store, body_cell),
                 BdcReportService._pdf_cell(row.bdc_agent, body_cell),
                 BdcReportService._pdf_cell(row.salesperson, body_cell),
                 BdcReportService._pdf_cell(row.latest_appt_status, body_cell),
@@ -1247,6 +1264,7 @@ class BdcReportService:
             "source": row.source,
             "lead_created": row.lead_created,
             "dealership": row.dealership,
+            "partner_store": row.partner_store,
             "bdc_agent": row.bdc_agent,
             "salesperson": row.salesperson,
             "is_active": row.is_active,

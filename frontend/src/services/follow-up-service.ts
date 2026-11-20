@@ -30,6 +30,11 @@ export interface FollowUp {
             color?: string;
         };
         source: string;
+        partner_store?: {
+            id: string;
+            name: string;
+            brand?: string | null;
+        } | null;
     };
     assigned_to_user?: {
         id: string;

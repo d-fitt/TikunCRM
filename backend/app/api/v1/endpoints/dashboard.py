@@ -21,6 +21,7 @@ from app.models.lead import Lead, LeadSource
 from app.models.lead_stage import LeadStage
 from app.services.lead_stage_service import LeadStageService
 from app.models.dealership import Dealership
+from app.models.partner_store import PartnerStore
 from app.models.user import User
 from app.models.activity import Activity
 from app.models.follow_up import FollowUp, FollowUpStatus
@@ -554,7 +555,7 @@ async def get_bdc_stats(
             dealerships=[],
         )
 
-    cache_key = f"dash:bdc:{current_user.id}:{_scope_cache_key(accessible_ids)}"
+    cache_key = f"dash:bdc:stores:{current_user.id}:{_scope_cache_key(accessible_ids)}"
     cached = await cache_get(cache_key)
     if cached is not None:
         return BdcStats(**cached)
@@ -637,33 +638,26 @@ async def get_bdc_stats(
     ) = [n or 0 for n in counts]
     conversion_rate = (converted_leads / total_leads * 100) if total_leads > 0 else 0
 
-    if accessible_ids is None:
-        dealer_rows = await db.execute(
-            select(Dealership.id, Dealership.name)
-            .where(Dealership.is_active == True)
-            .order_by(Dealership.name)
-        )
-    else:
-        dealer_rows = await db.execute(
-            select(Dealership.id, Dealership.name)
-            .where(Dealership.id.in_(accessible_ids))
-            .order_by(Dealership.name)
-        )
-    dealers = {did: dname for did, dname in dealer_rows.fetchall()}
-    dealer_ids = list(dealers.keys())
+    store_rows = await db.execute(
+        select(PartnerStore.id, PartnerStore.name)
+        .where(PartnerStore.is_active.is_(True))
+        .order_by(PartnerStore.name)
+    )
+    stores = {store_id: store_name for store_id, store_name in store_rows.fetchall()}
+    store_ids = list(stores.keys())
 
     lead_agg_map: dict = {}
     overdue_map: dict = {}
     today_fu_map: dict = {}
 
-    if dealer_ids:
-        lead_agg_clauses = [Lead.dealership_id.in_(dealer_ids)]
+    if store_ids:
+        lead_agg_clauses = [Lead.partner_store_id.in_(store_ids)]
         if lead_scope is not None:
             lead_agg_clauses.append(lead_scope)
 
         lead_agg_result = await db.execute(
             select(
-                Lead.dealership_id,
+                Lead.partner_store_id,
                 func.count().label("total"),
                 func.count().filter(Lead.assigned_to.is_(None)).label("unassigned"),
                 func.count().filter(
@@ -671,46 +665,46 @@ async def get_bdc_stats(
                 ).label("fresh"),
             )
             .where(and_(*lead_agg_clauses))
-            .group_by(Lead.dealership_id)
+            .group_by(Lead.partner_store_id)
         )
-        lead_agg_map = {row.dealership_id: row for row in lead_agg_result.all()}
+        lead_agg_map = {row.partner_store_id: row for row in lead_agg_result.all()}
 
         fu_clauses = [
             FollowUp.status == FollowUpStatus.PENDING,
-            Lead.dealership_id.in_(dealer_ids),
+            Lead.partner_store_id.in_(store_ids),
         ]
         if lead_scope is not None:
             fu_clauses.append(lead_scope)
 
         fu_overdue_result = await db.execute(
-            select(Lead.dealership_id, func.count().label("cnt"))
+            select(Lead.partner_store_id, func.count().label("cnt"))
             .select_from(FollowUp)
             .join(Lead, FollowUp.lead_id == Lead.id)
             .where(and_(*fu_clauses, FollowUp.scheduled_at < now))
-            .group_by(Lead.dealership_id)
+            .group_by(Lead.partner_store_id)
         )
-        overdue_map = {row.dealership_id: row.cnt for row in fu_overdue_result.all()}
+        overdue_map = {row.partner_store_id: row.cnt for row in fu_overdue_result.all()}
 
         fu_today_result = await db.execute(
-            select(Lead.dealership_id, func.count().label("cnt"))
+            select(Lead.partner_store_id, func.count().label("cnt"))
             .select_from(FollowUp)
             .join(Lead, FollowUp.lead_id == Lead.id)
             .where(and_(*fu_clauses, func.date(FollowUp.scheduled_at) == today))
-            .group_by(Lead.dealership_id)
+            .group_by(Lead.partner_store_id)
         )
-        today_fu_map = {row.dealership_id: row.cnt for row in fu_today_result.all()}
+        today_fu_map = {row.partner_store_id: row.cnt for row in fu_today_result.all()}
 
     breakdown = []
-    for did, dname in sorted(dealers.items(), key=lambda item: item[1]):
-        agg = lead_agg_map.get(did)
+    for store_id, store_name in sorted(stores.items(), key=lambda item: item[1]):
+        agg = lead_agg_map.get(store_id)
         breakdown.append(
             BdcDealershipBreakdown(
-                id=did,
-                name=dname,
+                id=store_id,
+                name=store_name,
                 total_leads=agg.total if agg else 0,
                 unassigned_leads=agg.unassigned if agg else 0,
-                overdue_follow_ups=overdue_map.get(did, 0),
-                todays_follow_ups=today_fu_map.get(did, 0),
+                overdue_follow_ups=overdue_map.get(store_id, 0),
+                todays_follow_ups=today_fu_map.get(store_id, 0),
                 fresh_leads=agg.fresh if agg else 0,
             )
         )

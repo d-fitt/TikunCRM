@@ -18,6 +18,7 @@ from app.models.lead import Lead
 from app.models.customer import Customer
 from app.services.lead_stage_service import LeadStageService
 from app.models.appointment import Appointment, AppointmentStatus
+from app.models.partner_store import PartnerStore
 from app.models.showroom_visit import ShowroomVisit, ShowroomOutcome
 from app.models.activity import ActivityType
 from app.services.activity import ActivityService
@@ -198,6 +199,31 @@ async def enrich_visits(db: AsyncSession, visits: list) -> list:
         ).unique().scalars().all()
         leads_by_id = {lead.id: lead for lead in lead_rows}
 
+    appointment_ids = list({v.appointment_id for v in visits if v.appointment_id})
+    appointments_by_id = {}
+    if appointment_ids:
+        appointment_rows = (
+            await db.execute(select(Appointment).where(Appointment.id.in_(appointment_ids)))
+        ).scalars().all()
+        appointments_by_id = {appointment.id: appointment for appointment in appointment_rows}
+
+    store_ids = {
+        lead.partner_store_id
+        for lead in leads_by_id.values()
+        if lead.partner_store_id
+    }
+    store_ids.update(
+        appointment.partner_store_id
+        for appointment in appointments_by_id.values()
+        if appointment.partner_store_id
+    )
+    stores_by_id = {}
+    if store_ids:
+        store_rows = (
+            await db.execute(select(PartnerStore).where(PartnerStore.id.in_(store_ids)))
+        ).scalars().all()
+        stores_by_id = {store.id: store for store in store_rows}
+
     users_by_id = {}
     if user_ids:
         user_rows = (
@@ -211,6 +237,13 @@ async def enrich_visits(db: AsyncSession, visits: list) -> list:
         lead = leads_by_id.get(visit.lead_id)
         if lead:
             customer = lead.customer
+            appointment = appointments_by_id.get(visit.appointment_id) if visit.appointment_id else None
+            store_id = None
+            if appointment and appointment.partner_store_id:
+                store_id = appointment.partner_store_id
+            elif lead.partner_store_id:
+                store_id = lead.partner_store_id
+            store = stores_by_id.get(store_id) if store_id else None
             response["lead"] = {
                 "id": lead.id,
                 "customer": {
@@ -220,6 +253,11 @@ async def enrich_visits(db: AsyncSession, visits: list) -> list:
                     "phone": customer.phone if customer else None,
                     "email": customer.email if customer else None,
                 } if customer else None,
+                "partner_store": {
+                    "id": store.id,
+                    "name": store.name,
+                    "brand": store.brand,
+                } if store else None,
             }
         checked_in = users_by_id.get(visit.checked_in_by) if visit.checked_in_by else None
         if checked_in:

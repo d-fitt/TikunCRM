@@ -12,7 +12,6 @@ import {
     UserPlus,
     ClipboardList,
     CalendarClock,
-    Building2,
     ArrowUpRight,
     Sparkles,
     Phone,
@@ -140,7 +139,7 @@ function DealershipRow({ d, maxUnassigned }: { d: BdcDealershipBreakdown; maxUna
     return (
         <TableRow>
             <TableCell>
-                <Link href="/leads" className="font-medium hover:text-primary hover:underline">
+                <Link href={`/partner-stores/${d.id}`} className="font-medium hover:text-primary hover:underline">
                     {d.name}
                 </Link>
                 <div className="mt-2 h-1.5 max-w-[180px] rounded-full bg-muted overflow-hidden">
@@ -461,8 +460,8 @@ export function BdcDashboard() {
                                                                 with {apt.lead.customer.full_name || `${apt.lead.customer.first_name || ""} ${apt.lead.customer.last_name || ""}`.trim()}
                                                             </p>
                                                         )}
-                                                        {apt.dealership?.name && (
-                                                            <p className="text-xs text-muted-foreground truncate">{apt.dealership.name}</p>
+                                                        {(apt.partner_store?.name || apt.lead?.partner_store?.name) && (
+                                                            <p className="text-xs text-muted-foreground truncate">{apt.partner_store?.name || apt.lead?.partner_store?.name}</p>
                                                         )}
                                                     </div>
                                                 </div>
@@ -510,8 +509,8 @@ export function BdcDashboard() {
                                                     </div>
                                                     <div className="min-w-0">
                                                         <p className="font-medium text-sm truncate">{apt.title}</p>
-                                                        {apt.dealership?.name && (
-                                                            <p className="text-xs text-muted-foreground truncate">{apt.dealership.name}</p>
+                                                        {(apt.partner_store?.name || apt.lead?.partner_store?.name) && (
+                                                            <p className="text-xs text-muted-foreground truncate">{apt.partner_store?.name || apt.lead?.partner_store?.name}</p>
                                                         )}
                                                     </div>
                                                 </div>
@@ -581,8 +580,8 @@ export function BdcDashboard() {
                                                     <p className="text-xs text-emerald-600 dark:text-emerald-400">
                                                         {formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
                                                     </p>
-                                                    {lead.dealership?.name && (
-                                                        <p className="text-xs text-emerald-600/80">{lead.dealership.name}</p>
+                                                    {lead.partner_store?.name && (
+                                                        <p className="text-xs text-emerald-600/80">{lead.partner_store.name}</p>
                                                     )}
                                                 </div>
                                             </div>
@@ -742,10 +741,10 @@ export function BdcDashboard() {
                                     <div className="min-w-0">
                                         <p className="font-medium text-sm">{getLeadFullName(lead)}</p>
                                         <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
-                                            {lead.dealership?.name && (
+                                            {lead.partner_store?.name && (
                                                 <span className="inline-flex items-center gap-0.5">
-                                                    <Building2 className="h-3 w-3" />
-                                                    {lead.dealership.name}
+                                                    <Store className="h-3 w-3" />
+                                                    {lead.partner_store.name}
                                                 </span>
                                             )}
                                             {getLeadPhone(lead) && (
@@ -853,9 +852,9 @@ export function BdcDashboard() {
                                                     </span>
                                                     <div>
                                                         <p className="font-medium text-sm truncate">{appt.title}</p>
-                                                        {appt.dealership?.name && (
+                                                        {(appt.partner_store?.name || appt.lead?.partner_store?.name) && (
                                                             <p className="text-xs text-muted-foreground truncate">
-                                                                {appt.dealership.name}
+                                                                {appt.partner_store?.name || appt.lead?.partner_store?.name}
                                                             </p>
                                                         )}
                                                     </div>
@@ -886,6 +885,11 @@ export function BdcDashboard() {
                                                         })}
                                                     </p>
                                                     <p className="font-medium text-sm">{appt.title}</p>
+                                                    {(appt.partner_store?.name || appt.lead?.partner_store?.name) && (
+                                                        <p className="text-xs text-muted-foreground truncate">
+                                                            {appt.partner_store?.name || appt.lead?.partner_store?.name}
+                                                        </p>
+                                                    )}
                                                 </div>
                                                 <span className="text-sm font-semibold text-primary tabular-nums">
                                                     {formatDateInTimezone(appt.scheduled_at, timezone, {
@@ -907,18 +911,18 @@ export function BdcDashboard() {
                 <Card>
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2 text-lg">
-                            <Building2 className="h-5 w-5 text-muted-foreground" />
-                            By dealership
+                            <Store className="h-5 w-5 text-muted-foreground" />
+                            By partner store
                         </CardTitle>
                         <p className="text-sm font-normal text-muted-foreground">
-                            Click any number to open a filtered list for that store.
+                            Leads currently connected to each store, plus follow-ups still open for those leads.
                         </p>
                     </CardHeader>
                     <CardContent className="overflow-x-auto">
                         <Table>
                             <TableHeader>
                                 <TableRow>
-                                    <TableHead>Dealership</TableHead>
+                                    <TableHead>Partner store</TableHead>
                                     <TableHead className="text-right">Total</TableHead>
                                     <TableHead className="text-right">Unassigned</TableHead>
                                     <TableHead className="text-right">Fresh</TableHead>

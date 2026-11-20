@@ -47,7 +47,9 @@ import {
     getAppointmentTypeLabel,
     getAppointmentStatusLabel,
     getAppointmentStatusColor,
-    isAppointmentStatusTerminal
+    isAppointmentStatusTerminal,
+    appointmentStoreLabel,
+    type AppointmentStoreCount,
 } from "@/services/appointment-service"
 import { LeadService, Lead, getLeadFullName } from "@/services/lead-service"
 import { TeamService, UserBrief } from "@/services/team-service"
@@ -929,6 +931,7 @@ export default function AppointmentsPage() {
         [getTimezone, dealershipTimezone]
     )
     const [stats, setStats] = React.useState<AppointmentStats | null>(null)
+    const [storeCounts, setStoreCounts] = React.useState<AppointmentStoreCount[]>([])
     const [loading, setLoading] = React.useState(true)
     const [page, setPage] = React.useState(1)
     const [totalPages, setTotalPages] = React.useState(1)
@@ -1135,6 +1138,7 @@ export default function AppointmentsPage() {
             
             setAppointments(appointmentsRes.items)
             setTotalPages(appointmentsRes.total_pages)
+            setStoreCounts(appointmentsRes.store_counts || [])
             setStats(statsRes)
         } catch (err) {
             console.error("Failed to load appointments:", err)
@@ -1653,6 +1657,43 @@ export default function AppointmentsPage() {
                             </Button>
                         )}
                     </div>
+
+                    {storeCounts.length > 0 && (
+                        <div className="flex items-center gap-2 flex-wrap border-t pt-3">
+                            <span className="text-xs font-medium text-muted-foreground">By store</span>
+                            {storeCounts.map((row) => {
+                                const selected = row.partner_store_id
+                                    ? storeFilter === row.partner_store_id
+                                    : false
+                                const label = row.brand && !row.name.toLowerCase().includes(row.brand.toLowerCase())
+                                    ? `${row.name} · ${row.brand}`
+                                    : row.name
+                                return (
+                                    <button
+                                        key={row.partner_store_id || "no-store"}
+                                        type="button"
+                                        disabled={!row.partner_store_id}
+                                        onClick={() => {
+                                            if (!row.partner_store_id) return
+                                            setStoreFilter(selected ? "" : row.partner_store_id)
+                                            setPage(1)
+                                        }}
+                                        className={cn(
+                                            "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors",
+                                            selected
+                                                ? "border-primary bg-primary/10 text-foreground"
+                                                : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground",
+                                            !row.partner_store_id && "cursor-default"
+                                        )}
+                                    >
+                                        <Store className="h-3.5 w-3.5" />
+                                        <span>{label}</span>
+                                        <span className="font-semibold tabular-nums text-foreground">{row.count}</span>
+                                    </button>
+                                )
+                            })}
+                        </div>
+                    )}
                     
                     {/* Custom Date Range Section */}
                     {dateRangePreset === "custom" && (
@@ -1982,6 +2023,12 @@ export default function AppointmentsPage() {
                                                     <div className="flex items-center gap-1">
                                                         <Phone className="h-4 w-4" />
                                                         <span>{appointment.lead.customer.phone}</span>
+                                                    </div>
+                                                )}
+                                                {appointmentStoreLabel(appointment) && (
+                                                    <div className="flex items-center gap-1">
+                                                        <Store className="h-4 w-4" />
+                                                        <span>{appointmentStoreLabel(appointment)}</span>
                                                     </div>
                                                 )}
                                             </div>

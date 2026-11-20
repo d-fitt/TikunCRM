@@ -33,10 +33,21 @@ class CustomerBrief(BaseModel):
     email: Optional[str] = None
 
 
+class PartnerStoreBrief(BaseModel):
+    """Partner store the visit's customer is connected to."""
+    id: UUID
+    name: str
+    brand: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class LeadBrief(BaseModel):
     """Brief lead info for showroom responses (id + customer details)"""
     id: UUID
     customer: Optional[CustomerBrief] = None
+    partner_store: Optional[PartnerStoreBrief] = None
 
     class Config:
         from_attributes = True

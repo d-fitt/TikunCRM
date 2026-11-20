@@ -327,6 +327,8 @@ class LeadBrief(BaseModel):
     source: str
     source_display: Optional[str] = None
     is_active: bool = True
+    partner_store_id: Optional[UUID] = None
+    partner_store: Optional[PartnerStoreBrief] = None
 
     class Config:
         from_attributes = True

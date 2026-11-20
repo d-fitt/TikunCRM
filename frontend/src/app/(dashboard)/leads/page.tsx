@@ -1857,7 +1857,6 @@ export default function LeadsPage() {
                             {showCol("source") && <TableHead>Source</TableHead>}
                             {showCol("heat") && <TableHead>Heat</TableHead>}
                             {showCol("partner_store") && <TableHead className="min-w-[13.5rem]">Partner store</TableHead>}
-                            {isBdc && <TableHead>Dealership</TableHead>}
                             {showCol("assigned_to") && <TableHead>Assigned To</TableHead>}
                             {showCol("notes") && <TableHead className="max-w-[140px]">Notes</TableHead>}
                             {showCol("last_action") && <TableHead className="max-w-[180px]">Last action</TableHead>}
@@ -1868,7 +1867,7 @@ export default function LeadsPage() {
                     <TableBody>
                         {isLoading ? (
                             <TableRow className="border-0 hover:bg-transparent">
-                                <TableCell colSpan={visibleColumns.length + (isBdc ? 3 : 2)} className="py-0">
+                                <TableCell colSpan={visibleColumns.length + 2} className="py-0">
                                     <div className="flex flex-col items-center justify-center py-16">
                                         <Loader2 className="h-10 w-10 text-primary animate-spin" />
                                         <p className="mt-4 text-sm font-medium text-muted-foreground">Loading leads...</p>
@@ -2080,33 +2079,9 @@ export default function LeadsPage() {
                                         />
                                     </TableCell>
                                     )}
-                                    {isBdc && (
-                                        <TableCell>
-                                            {lead.dealership ? (
-                                                <div className="flex items-center gap-1.5">
-                                                    <Building2 className="h-3 w-3 text-muted-foreground" />
-                                                    <span className="text-xs font-medium">{lead.dealership.name}</span>
-                                                </div>
-                                            ) : (
-                                                <Badge variant="outline" className="text-amber-600 border-amber-300">
-                                                    No Dealership
-                                                </Badge>
-                                            )}
-                                        </TableCell>
-                                    )}
                                     {showCol("assigned_to") && (
                                     <TableCell>
                                         <div className="space-y-1">
-                                            {!isBdc && lead.dealership ? (
-                                                <div className="flex items-center gap-1.5">
-                                                    <Building2 className="h-3 w-3 text-muted-foreground" />
-                                                    <span className="text-xs font-medium">{lead.dealership.name}</span>
-                                                </div>
-                                            ) : !isBdc ? (
-                                                <Badge variant="outline" className="text-amber-600 border-amber-300">
-                                                    No Dealership
-                                                </Badge>
-                                            ) : null}
                                             {lead.assigned_to_user ? (
                                                 <div className="flex items-center gap-1.5">
                                                     <UserPlus className="h-3 w-3 text-muted-foreground" />
@@ -2114,9 +2089,9 @@ export default function LeadsPage() {
                                                         {lead.assigned_to_user.first_name} {lead.assigned_to_user.last_name}
                                                     </span>
                                                 </div>
-                                            ) : lead.dealership ? (
+                                            ) : (
                                                 <span className="text-xs text-amber-600">Not assigned to salesperson</span>
-                                            ) : null}
+                                            )}
                                         </div>
                                     </TableCell>
                                     )}

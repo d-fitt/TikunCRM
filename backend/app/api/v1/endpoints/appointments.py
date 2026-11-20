@@ -33,6 +33,7 @@ from app.schemas.appointment import (
     AppointmentResponse,
     AppointmentListResponse,
     AppointmentStats,
+    AppointmentStoreCount,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,11 +42,65 @@ router = APIRouter()
 
 _APPOINTMENT_LOAD_OPTIONS = (
     selectinload(Appointment.lead).selectinload(Lead.customer),
+    selectinload(Appointment.lead).selectinload(Lead.partner_store),
     selectinload(Appointment.dealership),
     selectinload(Appointment.partner_store),
     selectinload(Appointment.scheduled_by_user),
     selectinload(Appointment.assigned_to_user),
 )
+
+
+def _apply_appointment_list_filters(
+    stmt,
+    *,
+    status_filter,
+    appointment_type,
+    lead_id,
+    assigned_to,
+    date_from,
+    date_to,
+    today_only,
+    upcoming_only,
+    overdue_only,
+):
+    """Shared filters for the appointment list, its count, and per-store totals."""
+    if status_filter:
+        stmt = stmt.where(Appointment.status == status_filter)
+    if appointment_type:
+        stmt = stmt.where(Appointment.appointment_type == appointment_type)
+    if lead_id:
+        stmt = stmt.where(Appointment.lead_id == lead_id)
+    if assigned_to:
+        stmt = stmt.where(Appointment.assigned_to == assigned_to)
+    if date_from:
+        stmt = stmt.where(Appointment.scheduled_at >= date_from)
+    if date_to:
+        stmt = stmt.where(Appointment.scheduled_at <= date_to)
+
+    now = utc_now()
+    if today_only:
+        start_of_day, end_of_day = get_date_range_for_today()
+        stmt = stmt.where(
+            and_(
+                Appointment.scheduled_at >= start_of_day,
+                Appointment.scheduled_at < end_of_day,
+            )
+        )
+    if upcoming_only:
+        stmt = stmt.where(
+            and_(
+                Appointment.scheduled_at > now,
+                Appointment.status.in_([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED]),
+            )
+        )
+    if overdue_only:
+        stmt = stmt.where(
+            and_(
+                Appointment.scheduled_at < now,
+                Appointment.status.in_([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED]),
+            )
+        )
+    return stmt
 
 
 def get_date_range_for_today():
@@ -308,34 +363,35 @@ async def list_appointments(
     query = select(Appointment).options(*_APPOINTMENT_LOAD_OPTIONS)
     count_query = select(func.count(Appointment.id))
     
+    store_key = func.coalesce(Appointment.partner_store_id, Lead.partner_store_id)
+    store_count_query = (
+        select(store_key.label("store_id"), func.count(Appointment.id))
+        .select_from(Appointment)
+        .outerjoin(Lead, Appointment.lead_id == Lead.id)
+        .group_by(store_key)
+    )
+
     query, count_query = await _scope_appointment_queries(
         query, count_query, db, current_user
     )
+    store_count_query, _ = await _scope_appointment_queries(
+        store_count_query, store_count_query, db, current_user
+    )
 
-    # Apply filters
-    if status_filter:
-        query = query.where(Appointment.status == status_filter)
-        count_query = count_query.where(Appointment.status == status_filter)
-    
-    if appointment_type:
-        query = query.where(Appointment.appointment_type == appointment_type)
-        count_query = count_query.where(Appointment.appointment_type == appointment_type)
-    
-    if lead_id:
-        query = query.where(Appointment.lead_id == lead_id)
-        count_query = count_query.where(Appointment.lead_id == lead_id)
-    
-    if assigned_to:
-        query = query.where(Appointment.assigned_to == assigned_to)
-        count_query = count_query.where(Appointment.assigned_to == assigned_to)
-    
-    if date_from:
-        query = query.where(Appointment.scheduled_at >= date_from)
-        count_query = count_query.where(Appointment.scheduled_at >= date_from)
-    
-    if date_to:
-        query = query.where(Appointment.scheduled_at <= date_to)
-        count_query = count_query.where(Appointment.scheduled_at <= date_to)
+    filter_kwargs = dict(
+        status_filter=status_filter,
+        appointment_type=appointment_type,
+        lead_id=lead_id,
+        assigned_to=assigned_to,
+        date_from=date_from,
+        date_to=date_to,
+        today_only=today_only,
+        upcoming_only=upcoming_only,
+        overdue_only=overdue_only,
+    )
+    query = _apply_appointment_list_filters(query, **filter_kwargs)
+    count_query = _apply_appointment_list_filters(count_query, **filter_kwargs)
+    store_count_query = _apply_appointment_list_filters(store_count_query, **filter_kwargs)
 
     if partner_store_id:
         query = query.outerjoin(Lead, Appointment.lead_id == Lead.id)
@@ -346,51 +402,6 @@ async def list_appointments(
         )
         query = query.where(store_match)
         count_query = count_query.where(store_match)
-    
-    now = utc_now()
-    
-    if today_only:
-        start_of_day, end_of_day = get_date_range_for_today()
-        query = query.where(
-            and_(
-                Appointment.scheduled_at >= start_of_day,
-                Appointment.scheduled_at < end_of_day
-            )
-        )
-        count_query = count_query.where(
-            and_(
-                Appointment.scheduled_at >= start_of_day,
-                Appointment.scheduled_at < end_of_day
-            )
-        )
-    
-    if upcoming_only:
-        query = query.where(
-            and_(
-                Appointment.scheduled_at > now,
-                Appointment.status.in_([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED])
-            )
-        )
-        count_query = count_query.where(
-            and_(
-                Appointment.scheduled_at > now,
-                Appointment.status.in_([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED])
-            )
-        )
-    
-    if overdue_only:
-        query = query.where(
-            and_(
-                Appointment.scheduled_at < now,
-                Appointment.status.in_([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED])
-            )
-        )
-        count_query = count_query.where(
-            and_(
-                Appointment.scheduled_at < now,
-                Appointment.status.in_([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED])
-            )
-        )
     
     # Get total count
     total_result = await db.execute(count_query)
@@ -403,6 +414,51 @@ async def list_appointments(
     # Execute query
     result = await db.execute(query)
     appointments = result.scalars().all()
+
+    count_rows = (await db.execute(store_count_query)).all()
+    counts_by_store = {row.store_id: row[1] for row in count_rows}
+    active_stores = (
+        await db.execute(
+            select(PartnerStore)
+            .where(PartnerStore.is_active.is_(True))
+            .order_by(PartnerStore.name)
+        )
+    ).scalars().all()
+
+    seen_store_ids = set()
+    store_counts: list[AppointmentStoreCount] = []
+    for store in active_stores:
+        seen_store_ids.add(store.id)
+        store_counts.append(
+            AppointmentStoreCount(
+                partner_store_id=store.id,
+                name=store.name,
+                brand=store.brand,
+                count=counts_by_store.get(store.id, 0),
+            )
+        )
+
+    missing_ids = [store_id for store_id in counts_by_store if store_id and store_id not in seen_store_ids]
+    if missing_ids:
+        extra_stores = (
+            await db.execute(select(PartnerStore).where(PartnerStore.id.in_(missing_ids)))
+        ).scalars().all()
+        for store in extra_stores:
+            store_counts.append(
+                AppointmentStoreCount(
+                    partner_store_id=store.id,
+                    name=store.name,
+                    brand=store.brand,
+                    count=counts_by_store.get(store.id, 0),
+                )
+            )
+
+    unassigned_count = counts_by_store.get(None, 0)
+    if unassigned_count:
+        store_counts.append(
+            AppointmentStoreCount(partner_store_id=None, name="No store", count=unassigned_count)
+        )
+    store_counts.sort(key=lambda row: (-row.count, row.name.lower()))
     
     total_pages = (total + page_size - 1) // page_size
     
@@ -411,7 +467,8 @@ async def list_appointments(
         total=total,
         page=page,
         page_size=page_size,
-        total_pages=total_pages
+        total_pages=total_pages,
+        store_counts=store_counts,
     )
 
 

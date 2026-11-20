@@ -19,6 +19,7 @@ import {
     Trash2,
     ChevronLeft,
     ChevronRight,
+    Store,
 } from "lucide-react"
 import Link from "next/link"
 import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subDays } from "date-fns"
@@ -750,6 +751,12 @@ export default function FollowUpsPage() {
                                                                 <div className="flex items-center gap-1">
                                                                     <Phone className="h-4 w-4" />
                                                                     <span>{followUp.lead.customer.phone}</span>
+                                                                </div>
+                                                            )}
+                                                            {followUp.lead?.partner_store?.name && (
+                                                                <div className="flex items-center gap-1">
+                                                                    <Store className="h-4 w-4" />
+                                                                    <span>{followUp.lead.partner_store.name}</span>
                                                                 </div>
                                                             )}
                                                             {followUp.lead?.customer?.email && (

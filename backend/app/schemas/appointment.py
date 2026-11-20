@@ -82,19 +82,6 @@ class CustomerBrief(BaseModel):
         from_attributes = True
 
 
-class LeadBrief(BaseModel):
-    """Brief lead info for appointments (contact details come from lead.customer)."""
-    id: UUID
-    first_name: str
-    last_name: Optional[str] = None
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    customer: Optional[CustomerBrief] = None
-
-    class Config:
-        from_attributes = True
-
-
 class DealershipBrief(BaseModel):
     """Brief dealership info"""
     id: UUID
@@ -109,6 +96,20 @@ class PartnerStoreBrief(BaseModel):
     id: UUID
     name: str
     brand: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class LeadBrief(BaseModel):
+    """Brief lead info for appointments (contact details come from lead.customer)."""
+    id: UUID
+    first_name: str
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    customer: Optional[CustomerBrief] = None
+    partner_store: Optional[PartnerStoreBrief] = None
 
     class Config:
         from_attributes = True
@@ -140,6 +141,14 @@ class AppointmentResponse(AppointmentBase):
         from_attributes = True
 
 
+class AppointmentStoreCount(BaseModel):
+    """How many appointments in the current filter belong to one partner store."""
+    partner_store_id: Optional[UUID] = None
+    name: str
+    brand: Optional[str] = None
+    count: int
+
+
 class AppointmentListResponse(BaseModel):
     """Paginated list of appointments"""
     items: List[AppointmentResponse]
@@ -147,6 +156,7 @@ class AppointmentListResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+    store_counts: List[AppointmentStoreCount] = []
 
 
 class AppointmentStats(BaseModel):

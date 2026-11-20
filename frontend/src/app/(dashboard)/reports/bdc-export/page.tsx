@@ -689,6 +689,7 @@ export default function BdcExportReportPage() {
                             <TableRow>
                                 <TableHead>Name</TableHead>
                                 {allDealerships && <TableHead>Dealership</TableHead>}
+                                <TableHead>Partner store</TableHead>
                                 <TableHead>Phone</TableHead>
                                 <TableHead>Stage</TableHead>
                                 <TableHead>BDC</TableHead>
@@ -702,7 +703,7 @@ export default function BdcExportReportPage() {
                         <TableBody>
                             {loading ? (
                                 <TableRow>
-                                    <TableCell colSpan={allDealerships ? 10 : 9} className="h-32 text-center">
+                                    <TableCell colSpan={allDealerships ? 11 : 10} className="h-32 text-center">
                                         <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
                                     </TableCell>
                                 </TableRow>
@@ -722,6 +723,7 @@ export default function BdcExportReportPage() {
                                         {allDealerships && (
                                             <TableCell className="text-sm">{row.dealership || "—"}</TableCell>
                                         )}
+                                        <TableCell className="text-sm">{row.partner_store || "—"}</TableCell>
                                         <TableCell className="text-sm">{row.phone || "—"}</TableCell>
                                         <TableCell><Badge variant="outline" className="text-[10px]">{row.stage || "—"}</Badge></TableCell>
                                         <TableCell className="text-sm">{row.bdc_agent || "—"}</TableCell>

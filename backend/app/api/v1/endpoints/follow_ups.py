@@ -196,7 +196,7 @@ async def list_follow_ups(
     
     # Build main query with all filters for pagination
     query = select(FollowUp).options(
-        selectinload(FollowUp.lead),
+        selectinload(FollowUp.lead).selectinload(Lead.partner_store),
         selectinload(FollowUp.assigned_to_user)
     )
 
@@ -356,7 +356,7 @@ async def schedule_follow_up(
     # Re-fetch with relationships loaded
     result = await db.execute(
         select(FollowUp)
-        .options(selectinload(FollowUp.lead), selectinload(FollowUp.assigned_to_user))
+        .options(selectinload(FollowUp.lead).selectinload(Lead.partner_store), selectinload(FollowUp.assigned_to_user))
         .where(FollowUp.id == follow_up.id)
     )
     follow_up = result.scalar_one()
@@ -403,7 +403,7 @@ async def complete_follow_up(
     """
     result = await db.execute(
         select(FollowUp)
-        .options(selectinload(FollowUp.lead), selectinload(FollowUp.assigned_to_user))
+        .options(selectinload(FollowUp.lead).selectinload(Lead.partner_store), selectinload(FollowUp.assigned_to_user))
         .where(FollowUp.id == follow_up_id)
     )
     follow_up = result.scalar_one_or_none()
@@ -485,7 +485,7 @@ async def update_follow_up(
     """
     result = await db.execute(
         select(FollowUp)
-        .options(selectinload(FollowUp.lead), selectinload(FollowUp.assigned_to_user))
+        .options(selectinload(FollowUp.lead).selectinload(Lead.partner_store), selectinload(FollowUp.assigned_to_user))
         .where(FollowUp.id == follow_up_id)
     )
     follow_up = result.scalar_one_or_none()
@@ -557,7 +557,7 @@ async def update_follow_up(
     # Re-fetch with relationships loaded
     result = await db.execute(
         select(FollowUp)
-        .options(selectinload(FollowUp.lead), selectinload(FollowUp.assigned_to_user))
+        .options(selectinload(FollowUp.lead).selectinload(Lead.partner_store), selectinload(FollowUp.assigned_to_user))
         .where(FollowUp.id == follow_up.id)
     )
     follow_up = result.scalar_one()
