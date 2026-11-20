@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the fixed prompt/guardrails below change, so evaluations made with
 # different instructions can be told apart.
-PROMPT_VERSION = "4"
+PROMPT_VERSION = "5"
 
 MAX_CRITERIA = 12
 MAX_NAME_LEN = 100
@@ -160,6 +160,11 @@ class Observation(BaseModel):
     evidence: List[Evidence] = Field(default_factory=list)
 
 
+class Improvement(Observation):
+    # Rubric criterion this is about, so recurring problems can be counted
+    criterion: Optional[str] = Field(default=None, max_length=80)
+
+
 class Objection(BaseModel):
     objection: str = Field(min_length=1, max_length=500)
     category: str = "other"
@@ -182,7 +187,7 @@ class EvaluationOutput(BaseModel):
     summary: str = Field(min_length=1, max_length=2000)
     category_scores: List[CategoryResult]
     strengths: List[Observation] = Field(default_factory=list)
-    improvements: List[Observation] = Field(default_factory=list)
+    improvements: List[Improvement] = Field(default_factory=list)
     missed_appointment_opportunities: List[Observation] = Field(default_factory=list)
     customer_objections: List[Objection] = Field(default_factory=list)
     coaching_suggestions: List[Observation] = Field(default_factory=list)
@@ -223,7 +228,7 @@ Return a single JSON object with exactly these fields:
     {"key": "<criterion key>", "not_applicable": false, "score": 0-100 or null, "rationale": "why, in one short sentence", "evidence": [{"quote": "exact words", "timestamp_seconds": 12.5}]}
   ],
   "strengths": [{"text": "...", "evidence": [...]}],
-  "improvements": [{"text": "...", "evidence": [...]}],
+  "improvements": [{"text": "...", "criterion": "<the rubric criterion key this is about>", "evidence": [...]}],
   "missed_appointment_opportunities": [{"text": "moment where the rep could have asked for a visit and did not", "evidence": [...]}],
   "customer_objections": [{"objection": "...", "category": "<one of the objection categories below>", "how_rep_responded": "...", "resolved": true/false, "evidence": [...]}],
   "coaching_suggestions": [{"text": "...", "evidence": [...]}],
@@ -335,6 +340,14 @@ def _ground_items(items: List[Any], transcript: List[Dict[str, Any]], stats: Dic
     return out
 
 
+def _with_known_criterion(items: List[Dict[str, Any]], keys: List[str]) -> List[Dict[str, Any]]:
+    """Keep an improvement's criterion only if it is a key of the rubric used."""
+    for item in items:
+        if item.get("criterion") not in keys:
+            item["criterion"] = None
+    return items
+
+
 def _ground_hidden_objection(
     hidden: Optional["HiddenObjection"], transcript: List[Dict[str, Any]], stats: Dict[str, int]
 ) -> Optional[Dict[str, Any]]:
@@ -424,7 +437,7 @@ def parse_and_ground(
     result = {
         "summary": parsed.summary.strip(),
         "strengths": _ground_items(parsed.strengths, transcript, stats),
-        "improvements": _ground_items(parsed.improvements, transcript, stats),
+        "improvements": _with_known_criterion(_ground_items(parsed.improvements, transcript, stats), expected),
         "missed_appointment_opportunities": _ground_items(parsed.missed_appointment_opportunities, transcript, stats),
         "customer_objections": _ground_items(parsed.customer_objections, transcript, stats),
         "coaching_suggestions": _ground_items(parsed.coaching_suggestions, transcript, stats),

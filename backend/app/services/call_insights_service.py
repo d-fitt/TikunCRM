@@ -162,6 +162,39 @@ def _objection_breakdown(calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+MISSED_ASK_KEY = "missed_the_ask"
+
+
+def top_fix(result: Dict[str, Any], category_scores: List[Dict[str, Any]], rejected: Iterable[tuple] = ()) -> Optional[Dict[str, Any]]:
+    """
+    The single thing shown in a call's "Fix this" tile, and the group it is
+    counted under in Recurring issues. Priority: a missed chance to ask for the
+    appointment, then an objection left unresolved, then the first improvement.
+    Items a manager marked as not accurate are skipped. `rejected` holds
+    (item_type, item_key) pairs.
+    """
+    rejected = set(rejected)
+    for i, m in enumerate(result.get("missed_appointment_opportunities") or []):
+        if (FeedbackItemType.MISSED_OPPORTUNITY.value, str(i)) not in rejected:
+            return {"key": MISSED_ASK_KEY, "label": "Missed the ask for an appointment",
+                    "tag": "Missed the ask", "text": m.get("text") or ""}
+    for i, o in enumerate(result.get("customer_objections") or []):
+        if not o.get("resolved") and (FeedbackItemType.OBJECTION.value, str(i)) not in rejected:
+            category = o.get("category") if o.get("category") in OBJECTION_CATEGORIES else "other"
+            return {"key": f"objection_left_open:{category}",
+                    "label": f"Objection left open: {OBJECTION_CATEGORIES[category]}",
+                    "tag": "Objection left open", "text": o.get("objection") or ""}
+    names = {c.get("key"): c.get("name") for c in category_scores or []}
+    for i, imp in enumerate(result.get("improvements") or []):
+        if (FeedbackItemType.IMPROVEMENT.value, str(i)) not in rejected:
+            criterion = imp.get("criterion")
+            if criterion in names:
+                return {"key": f"criterion:{criterion}", "label": f"Improve: {names[criterion]}", "tag": None,
+                        "text": imp.get("text") or ""}
+            return {"key": "other", "label": "Other improvements", "tag": None, "text": imp.get("text") or ""}
+    return None
+
+
 def _hidden_objection_breakdown(calls: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     The AI's guesses at unstated objections. Kept apart from stated objections:
@@ -359,16 +392,13 @@ async def load_calls(
         for a in appt_result.scalars().all():
             appointments[a.lead_id].append(a)
 
-    # Objections (stated, and guessed hidden ones) a manager marked as wrong are left out of the counts
+    # Items a manager marked as wrong are left out of the counts
     rejected: set = set()
     fb_result = await db.execute(
         select(
             CallEvaluationFeedback.evaluation_id, CallEvaluationFeedback.item_type, CallEvaluationFeedback.item_key
         ).where(
             CallEvaluationFeedback.evaluation_id.in_([e.id for _, e, _ in rows]),
-            CallEvaluationFeedback.item_type.in_(
-                [FeedbackItemType.OBJECTION.value, FeedbackItemType.HIDDEN_OBJECTION.value]
-            ),
             CallEvaluationFeedback.verdict == FeedbackVerdict.INACCURATE.value,
         )
     )
@@ -401,6 +431,9 @@ async def load_calls(
                 ),
                 "missed_opportunities": len(result_json.get("missed_appointment_opportunities") or []),
                 "summary": result_json.get("summary") or "",
+                "top_fix": top_fix(
+                    result_json, ev.category_scores or [], {(t, k) for e, t, k in rejected if e == ev.id}
+                ),
                 "ai_call_outcome": ev.ai_call_outcome,
                 "appointment": (
                     {"id": str(appt.id), "status": _status_value(appt.status), "scheduled_at": appt.scheduled_at}
@@ -457,3 +490,102 @@ async def gather(
     ]
     data["period"] = {"start": start.isoformat(), "end": end.isoformat(), "truncated": len(calls) >= MAX_CALLS}
     return data, calls, rep_names
+
+
+# -------------------------------------------------------- recurring issues ----
+
+MAX_EXAMPLES = 25
+
+
+def _recurring(
+    calls: List[Dict[str, Any]],
+    previous: List[Dict[str, Any]],
+    rep_names: Dict[Any, str],
+    pick,
+) -> List[Dict[str, Any]]:
+    """
+    Group calls by `pick(call) -> (key, label, text, extra) | None`. Each call
+    counts once. Returns rows with this period's count, last period's count,
+    a per-rep count and the most recent examples.
+    """
+    groups: Dict[str, Dict[str, Any]] = {}
+    for call in calls:  # newest first
+        picked = pick(call)
+        if not picked:
+            continue
+        key, label, text, extra = picked
+        g = groups.setdefault(key, {"key": key, "label": label, "count": 0, "reps": defaultdict(int), "examples": []})
+        g["count"] += 1
+        g["reps"][rep_names.get(call.get("rep_user_id")) or "Unassigned"] += 1
+        if len(g["examples"]) < MAX_EXAMPLES:
+            started = call.get("started_at")
+            g["examples"].append({
+                "review_id": str(call["review_id"]),
+                "date": started.isoformat() if started else None,
+                "rep": rep_names.get(call.get("rep_user_id")) or "Unassigned",
+                "text": text,
+                **extra,
+            })
+    previous_counts: Dict[str, int] = defaultdict(int)
+    for call in previous:
+        picked = pick(call)
+        if picked:
+            previous_counts[picked[0]] += 1
+
+    rows = []
+    for g in groups.values():
+        rows.append({
+            "key": g["key"],
+            "label": g["label"],
+            "count": g["count"],
+            "previous_count": previous_counts.get(g["key"], 0),
+            "by_rep": sorted(({"name": n, "count": c} for n, c in g["reps"].items()), key=lambda r: (-r["count"], r["name"])),
+            "examples": g["examples"],
+        })
+    rows.sort(key=lambda r: (-r["count"], r["label"]))
+    return rows
+
+
+def _pick_hidden(call: Dict[str, Any]):
+    h = call.get("hidden_objection")
+    if not h:
+        return None
+    category = h.get("category") if h.get("category") in OBJECTION_CATEGORIES else "other"
+    return category, OBJECTION_CATEGORIES[category], h.get("guess") or "", {"confidence": h.get("confidence")}
+
+
+def _pick_fix(call: Dict[str, Any]):
+    f = call.get("top_fix")
+    if not f:
+        return None
+    return f["key"], f["label"], f["text"], {}
+
+
+def build_recurring(
+    calls: List[Dict[str, Any]], previous: List[Dict[str, Any]], rep_names: Dict[Any, str]
+) -> Dict[str, Any]:
+    return {
+        "calls_reviewed": len(calls),
+        "previous_calls_reviewed": len(previous),
+        "hidden_objections": _recurring(calls, previous, rep_names, _pick_hidden),
+        "fixes": _recurring(calls, previous, rep_names, _pick_fix),
+    }
+
+
+async def get_recurring(
+    db: AsyncSession,
+    start: datetime,
+    end: datetime,
+    rep_user_id: Optional[UUID] = None,
+    dealership_id: Optional[UUID] = None,
+) -> Dict[str, Any]:
+    calls = await load_calls(db, start, end, rep_user_id, dealership_id)
+    previous = await load_calls(db, start - (end - start), start, rep_user_id, dealership_id)
+    rep_ids = [i for i in {c["rep_user_id"] for c in calls} if i]
+    rep_names: Dict[Any, str] = {}
+    if rep_ids:
+        result = await db.execute(select(User).where(User.id.in_(rep_ids)))
+        rep_names = {u.id: u.full_name for u in result.scalars().all()}
+    data = build_recurring(calls, previous, rep_names)
+    data["period"] = {"start": start.isoformat(), "end": end.isoformat(), "truncated": len(calls) >= MAX_CALLS}
+    return data

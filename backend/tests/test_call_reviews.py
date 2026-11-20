@@ -1358,3 +1358,103 @@ class TestHiddenObjectionFeedbackAndDashboard:
         built, _ = _built()
         text = json.dumps(built["sheet"], default=str)
         assert "suspected_hidden_objections_AI_GUESSES_NOT_FACTS" in text
+
+
+# ------------------------------------------------------- recurring issues ----
+
+class TestImprovementCriterion:
+    def test_criterion_kept_only_when_it_is_a_rubric_key(self):
+        raw = llm_output(improvements=[
+            {"text": "Ask for the visit sooner.", "criterion": "appointment", "evidence": []},
+            {"text": "Made-up criterion.", "criterion": "charisma", "evidence": []},
+            {"text": "No criterion given.", "evidence": []},
+        ])
+        out = evaluation.parse_and_ground(raw, TRANSCRIPT, CRITERIA)
+        assert [i["criterion"] for i in out["result"]["improvements"]] == ["appointment", None, None]
+
+    def test_prompt_asks_for_the_criterion(self):
+        system = evaluation.build_messages(TRANSCRIPT, CRITERIA, None, None)[0]["content"]
+        assert '"criterion": "<the rubric criterion key this is about>"' in system
+
+
+SCORES = [{"key": "appointment", "name": "Appointment attempt"}]
+
+
+class TestTopFix:
+    def test_priority_missed_ask_then_open_objection_then_improvement(self):
+        result = {
+            "missed_appointment_opportunities": [{"text": "Could have offered Saturday."}],
+            "customer_objections": [{"objection": "Payment too high", "category": "price_or_payment", "resolved": False}],
+            "improvements": [{"text": "Ask sooner.", "criterion": "appointment"}],
+        }
+        assert insights.top_fix(result, SCORES)["key"] == "missed_the_ask"
+        # A manager said the missed ask was wrong: next in line is the open objection
+        f = insights.top_fix(result, SCORES, {("missed_opportunity", "0")})
+        assert f["key"] == "objection_left_open:price_or_payment" and f["text"] == "Payment too high"
+        f = insights.top_fix(result, SCORES, {("missed_opportunity", "0"), ("objection", "0")})
+        assert f == {"key": "criterion:appointment", "label": "Improve: Appointment attempt", "tag": None, "text": "Ask sooner."}
+
+    def test_resolved_objections_and_unknown_criteria(self):
+        result = {
+            "customer_objections": [{"objection": "Busy", "category": "timing_or_too_busy", "resolved": True}],
+            "improvements": [{"text": "Something.", "criterion": None}],
+        }
+        assert insights.top_fix(result, SCORES)["key"] == "other"
+        assert insights.top_fix({}, SCORES) is None
+
+
+class TestRecurringApi:
+    async def _reviewed(self, db, days_ago, output=None, monkeypatch=None):
+        if output is not None:
+            async def fake(messages):
+                return output
+            monkeypatch.setattr(evaluation, "_call_llm", fake)
+        now = utc_now()
+        call = await _add_call(db, started_at=now - timedelta(days=days_ago),
+                               ended_at=now - timedelta(days=days_ago) + timedelta(minutes=3))
+        review = await reviews.get_or_create_review(db, call)
+        await db.commit()
+        await reviews.process_review(db, review.id)
+        return review
+
+    async def test_counts_examples_and_previous_period(self, api, db, fakes, monkeypatch):
+        missed = llm_output(missed_appointment_opportunities=[
+            {"text": "Could have offered an evening slot.", "evidence": []}])
+        first = await self._reviewed(db, 1, missed, monkeypatch)
+        await self._reviewed(db, 2, missed, monkeypatch)
+        await self._reviewed(db, 3, llm_output(), monkeypatch)
+        await self._reviewed(db, 40, missed, monkeypatch)            # previous 30-day period
+
+        d = (await api.client.get("/call-reviews/recurring", params={"days": 30})).json()
+        assert d["calls_reviewed"] == 3 and d["previous_calls_reviewed"] == 1
+        fixes = {f["key"]: f for f in d["fixes"]}
+        assert fixes["missed_the_ask"]["count"] == 2 and fixes["missed_the_ask"]["previous_count"] == 1
+        assert fixes["other"]["count"] == 1                           # "Did not ask about a trade-in", no criterion
+        assert [f["key"] for f in d["fixes"]] == ["missed_the_ask", "other"]   # most frequent first
+        ex = fixes["missed_the_ask"]["examples"]
+        assert len(ex) == 2 and ex[0]["review_id"] == str(first.id)  # newest first
+        assert ex[0]["text"] == "Could have offered an evening slot."
+        assert sum(r["count"] for r in fixes["missed_the_ask"]["by_rep"]) == 2
+
+        hidden = d["hidden_objections"]
+        assert hidden[0]["key"] == "credit_or_financing" and hidden[0]["count"] == 3 and hidden[0]["previous_count"] == 1
+        assert hidden[0]["examples"][0]["confidence"] == "medium"
+
+        # Marking the newest call's missed ask as wrong moves that call to its next fix
+        r = await api.client.put(f"/call-reviews/{first.id}/feedback",
+                                 json={"item_type": "missed_opportunity", "item_key": "0", "verdict": "inaccurate"})
+        assert r.json()["top_fix"]["key"] == "other"
+        d = (await api.client.get("/call-reviews/recurring", params={"days": 30})).json()
+        fixes = {f["key"]: f["count"] for f in d["fixes"]}
+        assert fixes == {"missed_the_ask": 1, "other": 2}
+
+        detail = (await api.client.get(f"/call-reviews/{first.id}")).json()
+        assert detail["evaluation"]["top_fix"]["key"] == "other"
+
+    async def test_recurring_is_for_managers(self, api):
+        api.as_role(UserRole.SALESPERSON)
+        assert (await api.client.get("/call-reviews/recurring")).status_code == 403
+
+    async def test_empty(self, api):
+        d = (await api.client.get("/call-reviews/recurring", params={"days": 365})).json()
+        assert d["fixes"] == [] and d["hidden_objections"] == [] and d["period"]["days"] == 365

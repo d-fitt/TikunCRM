@@ -2,7 +2,8 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { AlertCircle, Loader2, Mail, PhoneCall, Target } from "lucide-react"
+import Link from "next/link"
+import { AlertCircle, Loader2, Mail, PhoneCall, Repeat, Target } from "lucide-react"
 import { AskAboutCalls } from "@/components/call-reviews/ask-about-calls"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -361,6 +362,12 @@ export default function CallIntelligencePage() {
                 description="How the team is doing on calls: AI quality scores next to what actually happened in the CRM."
                 actions={
                     <div className="flex flex-wrap items-center gap-3">
+                    <Button size="sm" variant="outline" asChild>
+                        <Link href="/call-reviews/recurring">
+                            <Repeat className="mr-2 h-4 w-4" />
+                            Recurring issues
+                        </Link>
+                    </Button>
                     <Button size="sm" variant="outline" onClick={emailReport} disabled={reportState === "sending"}>
                         {reportState === "sending" ? (
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />

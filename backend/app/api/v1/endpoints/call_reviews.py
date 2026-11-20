@@ -374,6 +374,11 @@ def _feedback_dict(f: CallEvaluationFeedback) -> Dict[str, Any]:
     }
 
 
+def _top_fix(ev: CallEvaluation, feedback: List[CallEvaluationFeedback]) -> Optional[Dict[str, Any]]:
+    rejected = {(f.item_type, f.item_key) for f in feedback if f.verdict == FeedbackVerdict.INACCURATE.value}
+    return insights.top_fix(ev.result or {}, ev.category_scores or [], rejected)
+
+
 async def _feedback_for(db: AsyncSession, evaluation_id: Any) -> List[CallEvaluationFeedback]:
     result = await db.execute(
         select(CallEvaluationFeedback)
@@ -554,6 +559,24 @@ async def email_me_the_report(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+@router.get("/recurring")
+async def recurring_issues(
+    days: int = Query(30, ge=7, le=365),
+    rep_user_id: Optional[UUID] = None,
+    dealership_id: Optional[UUID] = None,
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Running list of hidden-objection guesses and "Fix this" items, counted by
+    kind, with last period's count and the most recent examples.
+    """
+    end = utc_now()
+    data = await insights.get_recurring(db, end - timedelta(days=days), end, rep_user_id, dealership_id)
+    data["period"]["days"] = days
+    return data
+
+
 @router.get("/unreviewed-calls")
 async def list_unreviewed_calls(
     limit: int = Query(25, ge=1, le=100),
@@ -706,6 +729,7 @@ async def save_feedback(
         "feedback": [_feedback_dict(f) for f in feedback],
         "overall_score": ev.overall_score,
         "adjusted_overall_score": ev.adjusted_overall_score,
+        "top_fix": _top_fix(ev, feedback),
     }
 
 
@@ -783,6 +807,8 @@ async def get_call_review(
                 "prompt_version": ev.prompt_version,
                 "created_at": ev.created_at.isoformat() if ev.created_at else None,
                 **(ev.result or {}),
+                # What the "Fix this" tile shows; the same rule Recurring issues counts by
+                "top_fix": _top_fix(ev, feedback),
             }
             if ev
             else None

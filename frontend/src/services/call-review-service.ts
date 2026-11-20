@@ -102,6 +102,15 @@ export interface HiddenObjection {
     supported: boolean;
 }
 
+/** What the "Fix this" tile shows, and the group Recurring issues counts it under. */
+export interface TopFix {
+    key: string;
+    label: string;
+    /** Short reason tag, e.g. "Missed the ask"; null for a plain improvement */
+    tag: string | null;
+    text: string;
+}
+
 export type FeedbackVerdict = "accurate" | "inaccurate" | "useful" | "not_useful";
 
 export interface ItemFeedback {
@@ -124,6 +133,7 @@ export interface FeedbackResult {
     feedback: ItemFeedback[];
     overall_score: number | null;
     adjusted_overall_score: number | null;
+    top_fix: TopFix | null;
 }
 
 export interface ManagerReview {
@@ -151,6 +161,7 @@ export interface CallEvaluation {
     coaching_suggestions: Observation[];
     /** Missing on calls reviewed before this was added; null on non-sales calls */
     hidden_objection?: HiddenObjection | null;
+    top_fix?: TopFix | null;
 }
 
 export interface TranscriptLine {
@@ -308,6 +319,23 @@ export interface CallQuestionAnswer {
     unverified_figures: string[];
 }
 
+export interface RecurringRow {
+    key: string;
+    label: string;
+    count: number;
+    previous_count: number;
+    by_rep: { name: string; count: number }[];
+    examples: { review_id: string; date: string | null; rep: string; text: string; confidence?: string | null }[];
+}
+
+export interface RecurringIssues {
+    calls_reviewed: number;
+    previous_calls_reviewed: number;
+    hidden_objections: RecurringRow[];
+    fixes: RecurringRow[];
+    period: { start: string; end: string; days: number; truncated: boolean };
+}
+
 export interface RubricTestResult {
     review_id: string;
     call_started_at: string | null;
@@ -391,6 +419,11 @@ export const CallReviewService = {
 
     async emailReportToMe(): Promise<{ sent_to: string; calls_reviewed: number }> {
         const response = await apiClient.post(`${PREFIX}/report/send-me`);
+        return response.data;
+    },
+
+    async getRecurring(days: number): Promise<RecurringIssues> {
+        const response = await apiClient.get(`${PREFIX}/recurring`, { params: { days } });
         return response.data;
     },
 

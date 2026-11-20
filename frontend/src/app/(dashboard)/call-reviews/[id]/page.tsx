@@ -408,9 +408,12 @@ function AtAGlance({ review, hiddenMarkedWrong }: { review: CallReviewDetail; hi
     const hidden = ev.hidden_objection
     const isSalesCall = ev.ai_call_outcome !== "not_a_sales_conversation"
 
-    // The single most important thing to fix: a missed ask beats an unresolved objection beats anything else
+    // The single most important thing to fix. The server picks it (skipping items a manager marked
+    // wrong) so the tile matches Recurring issues; the local rule is only a fallback.
     const missed = ev.missed_appointment_opportunities[0]
-    const fix = missed
+    const fix = ev.top_fix !== undefined
+        ? ev.top_fix
+        : missed
         ? { text: missed.text, tag: "Missed the ask" }
         : unresolved
           ? { text: unresolved.objection, tag: "Objection left open" }
@@ -636,6 +639,7 @@ export default function CallReviewDetailPage() {
                                   evaluation: {
                                       ...r.evaluation,
                                       adjusted_overall_score: result.adjusted_overall_score,
+                                      top_fix: result.top_fix,
                                   },
                               }
                             : r

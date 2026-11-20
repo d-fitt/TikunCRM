@@ -37,6 +37,7 @@ import {
     QrCode,
     Timer,
     PhoneCall,
+    Repeat,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
@@ -174,6 +175,7 @@ const allSidebarItems: SidebarItem[] = [
         children: [
             { name: "Analytics", icon: BarChart3, href: "/analytics" },
             { name: "Call Intelligence", icon: PhoneCall, href: "/call-reviews/dashboard" },
+            { name: "Recurring Issues", icon: Repeat, href: "/call-reviews/recurring" },
             { name: "Team Activity", icon: Activity, href: "/team-activity" },
             { name: "Sold Cars", icon: Car, href: "/sold-cars" },
             { name: "BDC Export", icon: QrCode, href: "/reports/bdc-export" },
