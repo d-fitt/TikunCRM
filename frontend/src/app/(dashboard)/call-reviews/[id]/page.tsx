@@ -327,108 +327,68 @@ function ObservationList({
     )
 }
 
-/** One line of the at-a-glance card: short, clamped to two lines, full text on hover. */
-function GlanceLine({ text, tone, clamp = true }: { text: string; tone?: string; clamp?: boolean }) {
-    return (
-        <li className={cn("text-sm leading-snug", clamp && "line-clamp-2", tone)} title={text}>
-            {text}
-        </li>
-    )
-}
+const CONFIDENCE_LABEL: Record<string, string> = { low: "low confidence", medium: "medium confidence", high: "high confidence" }
 
-function GlanceColumn({
-    title,
+/** One labelled line of the at-a-glance card. */
+function GlanceRow({
+    label,
     icon,
     children,
 }: {
-    title: string
+    label: string
     icon: React.ReactNode
     children: React.ReactNode
 }) {
     return (
-        <div className="space-y-1.5">
-            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="grid gap-0.5 sm:grid-cols-[11rem_1fr] sm:gap-3">
+            <dt className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground sm:pt-0.5">
                 {icon}
-                {title}
-            </p>
-            <ul className="space-y-1.5">{children}</ul>
+                {label}
+            </dt>
+            <dd className="text-sm leading-snug">{children}</dd>
         </div>
     )
 }
 
 /**
- * The 15-second view: score, what happened in the CRM, one-line summary, and
- * the top one or two points in each direction. Everything else is in the
- * full breakdown below.
+ * The 15-second view: score, whether an appointment was booked, and three
+ * lines: the best thing, the one thing to fix, and the AI's guess at the
+ * objection the customer did not say. Everything else is in the breakdown.
  */
-const CONFIDENCE_LABEL: Record<string, string> = { low: "low confidence", medium: "medium confidence", high: "high confidence" }
-
-/** The AI's guess at the unstated objection, always labelled as a guess. */
-function HiddenObjectionLine({
-    hidden,
-    markedWrong,
-}: {
-    hidden: NonNullable<CallReviewDetail["evaluation"]>["hidden_objection"]
-    markedWrong: boolean
-}) {
-    if (!hidden) return null
-    return (
-        <div className={cn("space-y-1 rounded-md border border-dashed px-3 py-2", markedWrong && "opacity-60")}>
-            <p className="flex flex-wrap items-center gap-x-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                <Search className="h-3.5 w-3.5" />
-                Real objection? · AI&apos;s guess, {CONFIDENCE_LABEL[hidden.confidence] ?? hidden.confidence}
-                {!hidden.supported && <span className="font-normal normal-case">(no clear clues: a hunch)</span>}
-            </p>
-            <p className={cn("text-sm font-medium", markedWrong && "line-through")}>{hidden.guess}</p>
-            {markedWrong && <p className="text-xs">A manager marked this guess as wrong.</p>}
-            {hidden.how_to_uncover && !markedWrong && (
-                <p className="text-sm text-muted-foreground">
-                    <span className="font-medium text-foreground">Ask: </span>
-                    {hidden.how_to_uncover}
-                </p>
-            )}
-        </div>
-    )
-}
-
-function AtAGlance({
-    review,
-    correctedScore,
-    hiddenMarkedWrong,
-}: {
-    review: CallReviewDetail
-    correctedScore: (key: string) => number | null | undefined
-    hiddenMarkedWrong: boolean
-}) {
+function AtAGlance({ review, hiddenMarkedWrong }: { review: CallReviewDetail; hiddenMarkedWrong: boolean }) {
     const ev = review.evaluation
     if (!ev) return null
     const crm = review.crm_outcome
     const score = ev.adjusted_overall_score ?? ev.overall_score
-    const missed = ev.missed_appointment_opportunities.length
-    const unresolved = ev.customer_objections.filter((o) => !o.resolved)
-    const workOn = ev.improvements.slice(0, 2)
-    const criteria = ev.category_scores.filter((c) => !c.not_applicable && c.score != null)
+    const unresolved = ev.customer_objections.find((o) => !o.resolved)
+    const hidden = ev.hidden_objection
+    const isSalesCall = ev.ai_call_outcome !== "not_a_sales_conversation"
+
+    // The single most important thing to fix: a missed ask beats an unresolved objection beats anything else
+    const missed = ev.missed_appointment_opportunities[0]
+    const fix = missed
+        ? { text: missed.text, urgent: true }
+        : unresolved
+          ? { text: `Left unresolved: ${unresolved.objection}`, urgent: false }
+          : ev.improvements[0]
+            ? { text: ev.improvements[0].text, urgent: false }
+            : null
 
     return (
         <Card>
             <CardContent className="space-y-4 p-5">
-                <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+                <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
                     <div className="flex items-baseline gap-1.5">
                         <span className={cn("text-4xl font-bold tabular-nums", scoreTone(score))}>
                             {score != null ? Math.round(score) : "—"}
                         </span>
-                        <span className="text-sm text-muted-foreground">/ 100 call quality</span>
+                        <span className="text-sm text-muted-foreground">/ 100</span>
                     </div>
                     <div className="flex items-center gap-2 text-sm font-medium">
                         {crm?.appointment_booked ? (
                             <>
                                 <CalendarCheck className="h-4 w-4 text-emerald-600" />
                                 Appointment booked
-                                {crm.appointment?.scheduled_at && (
-                                    <span className="font-normal text-muted-foreground">
-                                        · {formatCallTime(crm.appointment.scheduled_at, true)}
-                                    </span>
-                                )}
                             </>
                         ) : crm?.appointment_booked === false ? (
                             <>
@@ -447,60 +407,54 @@ function AtAGlance({
                     )}
                 </div>
 
-                {ev.summary && <p className="text-sm">{ev.summary}</p>}
-
-                <div className="grid gap-4 sm:grid-cols-3">
-                    <GlanceColumn title="Did well" icon={<ThumbsUp className="h-3.5 w-3.5 text-emerald-600" />}>
-                        {ev.strengths.length === 0 ? (
-                            <GlanceLine text="Nothing specific noted." tone="text-muted-foreground" />
+                <dl className="space-y-3">
+                    <GlanceRow label="Did well" icon={<ThumbsUp className="h-3.5 w-3.5 text-emerald-600" />}>
+                        {ev.strengths[0] ? (
+                            <span className="line-clamp-2" title={ev.strengths[0].text}>
+                                {ev.strengths[0].text}
+                            </span>
                         ) : (
-                            ev.strengths.slice(0, 2).map((o, i) => <GlanceLine key={i} text={o.text} />)
+                            <span className="text-muted-foreground">Nothing specific noted.</span>
                         )}
-                    </GlanceColumn>
-                    <GlanceColumn title="Work on" icon={<TrendingUp className="h-3.5 w-3.5 text-amber-600" />}>
-                        {missed > 0 && (
-                            <GlanceLine
-                                text={`Missed ${missed === 1 ? "a chance" : `${missed} chances`} to ask for the appointment.`}
-                                tone="font-medium text-red-600"
-                            />
-                        )}
-                        {unresolved.length > 0 && (
-                            <GlanceLine text={`Objection left unresolved: ${unresolved[0].objection}`} />
-                        )}
-                        {workOn.slice(0, missed > 0 || unresolved.length > 0 ? 1 : 2).map((o, i) => (
-                            <GlanceLine key={i} text={o.text} />
-                        ))}
-                        {missed === 0 && unresolved.length === 0 && workOn.length === 0 && (
-                            <GlanceLine text="Nothing specific noted." tone="text-muted-foreground" />
-                        )}
-                    </GlanceColumn>
-                    <GlanceColumn title="Next call, try" icon={<Lightbulb className="h-3.5 w-3.5 text-primary" />}>
-                        {ev.coaching_suggestions.length === 0 ? (
-                            <GlanceLine text="No suggestions for this call." tone="text-muted-foreground" />
+                    </GlanceRow>
+
+                    <GlanceRow label="Fix this" icon={<TrendingUp className="h-3.5 w-3.5 text-amber-600" />}>
+                        {fix ? (
+                            <span className={cn("line-clamp-2", fix.urgent && "font-medium text-red-600")} title={fix.text}>
+                                {fix.text}
+                            </span>
                         ) : (
-                            <GlanceLine text={ev.coaching_suggestions[0].text} clamp={false} />
+                            <span className="text-muted-foreground">Nothing to fix on this call.</span>
                         )}
-                    </GlanceColumn>
-                </div>
+                    </GlanceRow>
 
-                <HiddenObjectionLine hidden={ev.hidden_objection} markedWrong={hiddenMarkedWrong} />
-
-                {criteria.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5" aria-label="Scores by criterion">
-                        {criteria.map((c) => {
-                            const value = correctedScore(c.key) ?? c.score
-                            return (
-                                <span
-                                    key={c.key}
-                                    className="inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs"
-                                >
-                                    {c.name}
-                                    <span className={cn("font-semibold tabular-nums", scoreTone(value))}>{value}</span>
+                    {(hidden || isSalesCall) && (
+                        <GlanceRow label="Hidden objection" icon={<Search className="h-3.5 w-3.5" />}>
+                            {hidden ? (
+                                <span className={cn("block space-y-0.5", hiddenMarkedWrong && "opacity-60")}>
+                                    <span className={cn("block font-medium", hiddenMarkedWrong && "line-through")}>
+                                        {hidden.guess}
+                                    </span>
+                                    {hidden.how_to_uncover && !hiddenMarkedWrong && (
+                                        <span className="block">
+                                            <span className="text-muted-foreground">Ask: </span>
+                                            {hidden.how_to_uncover}
+                                        </span>
+                                    )}
+                                    <span className="block text-xs text-muted-foreground">
+                                        {hiddenMarkedWrong
+                                            ? "A manager marked this guess as wrong."
+                                            : `AI's guess, ${CONFIDENCE_LABEL[hidden.confidence] ?? hidden.confidence}${hidden.supported ? "" : " (no clear clues)"}`}
+                                    </span>
                                 </span>
-                            )
-                        })}
-                    </div>
-                )}
+                            ) : (
+                                <span className="text-muted-foreground">
+                                    No guess yet. Re-score this call to get one.
+                                </span>
+                            )}
+                        </GlanceRow>
+                    )}
+                </dl>
 
                 {review.manager_review.note && (
                     <p className="rounded-md bg-muted px-3 py-2 text-sm">
@@ -772,7 +726,6 @@ export default function CallReviewDetailPage() {
 
             <AtAGlance
                 review={review}
-                correctedScore={(key) => feedbackCtx.get("category", key)?.corrected_score}
                 hiddenMarkedWrong={feedbackCtx.get("hidden_objection", "0")?.verdict === "inaccurate"}
             />
 
@@ -796,6 +749,17 @@ export default function CallReviewDetailPage() {
             {/* Everything below is the detail view. Without an evaluation yet, the transcript is all there is, so show it. */}
             {(showDetails || !ev) && (
                 <div id="call-review-details" className="space-y-6">
+                    {ev?.summary && (
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-base">Summary</CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <p className="text-sm">{ev.summary}</p>
+                            </CardContent>
+                        </Card>
+                    )}
+
                     {/* Score + outcome. Quality and outcome are shown apart on purpose. */}
                     {ev && (
                         <div className="grid gap-4 lg:grid-cols-3">
