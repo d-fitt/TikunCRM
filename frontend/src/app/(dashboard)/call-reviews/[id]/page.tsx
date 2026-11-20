@@ -329,30 +329,74 @@ function ObservationList({
 
 const CONFIDENCE_LABEL: Record<string, string> = { low: "low confidence", medium: "medium confidence", high: "high confidence" }
 
-/** One labelled line of the at-a-glance card. */
-function GlanceRow({
+/** Plain-word verdict for the score, using the same bands as the score colours. */
+function scoreVerdict(score: number | null): string {
+    if (score == null) return "Not scored"
+    if (score >= 80) return "Strong call"
+    if (score >= 60) return "Decent call"
+    return "Needs work"
+}
+
+/** Score as a ring that fills to the score, number in the middle. */
+function ScoreRing({ score }: { score: number | null }) {
+    const r = 26
+    const circumference = 2 * Math.PI * r
+    const filled = score == null ? 0 : (Math.max(0, Math.min(100, score)) / 100) * circumference
+    return (
+        <div className={cn("relative h-16 w-16 shrink-0", scoreTone(score))}>
+            <svg viewBox="0 0 64 64" className="h-16 w-16 -rotate-90" aria-hidden="true">
+                <circle cx="32" cy="32" r={r} fill="none" strokeWidth="6" className="stroke-muted" />
+                <circle
+                    cx="32"
+                    cy="32"
+                    r={r}
+                    fill="none"
+                    strokeWidth="6"
+                    strokeLinecap="round"
+                    stroke="currentColor"
+                    strokeDasharray={`${filled} ${circumference}`}
+                />
+            </svg>
+            <span className="absolute inset-0 flex items-center justify-center text-xl font-bold tabular-nums">
+                {score != null ? Math.round(score) : "—"}
+            </span>
+        </div>
+    )
+}
+
+const TILE_TONES = {
+    good: { tile: "border-emerald-500/25 bg-emerald-500/5", badge: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },
+    fix: { tile: "border-amber-500/25 bg-amber-500/5", badge: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
+    hidden: { tile: "border-primary/25 bg-primary/5", badge: "bg-primary/15 text-primary" },
+} as const
+
+/** One of the three coloured tiles on the at-a-glance card. */
+function GlanceTile({
+    tone,
     label,
     icon,
     children,
 }: {
+    tone: keyof typeof TILE_TONES
     label: string
     icon: React.ReactNode
     children: React.ReactNode
 }) {
+    const t = TILE_TONES[tone]
     return (
-        <div className="grid gap-0.5 sm:grid-cols-[11rem_1fr] sm:gap-3">
-            <dt className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground sm:pt-0.5">
-                {icon}
-                {label}
-            </dt>
-            <dd className="text-sm leading-snug">{children}</dd>
+        <div className={cn("flex flex-col gap-2.5 rounded-lg border p-4", t.tile)}>
+            <div className="flex items-center gap-2">
+                <span className={cn("flex h-7 w-7 items-center justify-center rounded-md", t.badge)}>{icon}</span>
+                <span className="text-sm font-semibold">{label}</span>
+            </div>
+            <div className="text-sm leading-relaxed">{children}</div>
         </div>
     )
 }
 
 /**
  * The 15-second view: score, whether an appointment was booked, and three
- * lines: the best thing, the one thing to fix, and the AI's guess at the
+ * tiles: the best thing, the one thing to fix, and the AI's guess at the
  * objection the customer did not say. Everything else is in the breakdown.
  */
 function AtAGlance({ review, hiddenMarkedWrong }: { review: CallReviewDetail; hiddenMarkedWrong: boolean }) {
@@ -367,94 +411,101 @@ function AtAGlance({ review, hiddenMarkedWrong }: { review: CallReviewDetail; hi
     // The single most important thing to fix: a missed ask beats an unresolved objection beats anything else
     const missed = ev.missed_appointment_opportunities[0]
     const fix = missed
-        ? { text: missed.text, urgent: true }
+        ? { text: missed.text, tag: "Missed the ask" }
         : unresolved
-          ? { text: `Left unresolved: ${unresolved.objection}`, urgent: false }
+          ? { text: unresolved.objection, tag: "Objection left open" }
           : ev.improvements[0]
-            ? { text: ev.improvements[0].text, urgent: false }
+            ? { text: ev.improvements[0].text, tag: null }
             : null
 
     return (
         <Card>
-            <CardContent className="space-y-4 p-5">
-                <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-                    <div className="flex items-baseline gap-1.5">
-                        <span className={cn("text-4xl font-bold tabular-nums", scoreTone(score))}>
-                            {score != null ? Math.round(score) : "—"}
-                        </span>
-                        <span className="text-sm text-muted-foreground">/ 100</span>
+            <CardContent className="space-y-5 p-5">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div className="flex items-center gap-4">
+                        <ScoreRing score={score} />
+                        <div>
+                            <p className="text-lg font-semibold leading-tight">{scoreVerdict(score)}</p>
+                            <p className="text-sm text-muted-foreground">
+                                Call quality score{ev.adjusted_overall_score != null ? " · corrected by a manager" : ""}
+                            </p>
+                        </div>
                     </div>
-                    <div className="flex items-center gap-2 text-sm font-medium">
+                    <div className="flex flex-wrap items-center gap-2">
+                        {review.manager_review.reviewed_at && (
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-xs font-medium">
+                                <UserCheck className="h-3.5 w-3.5" />
+                                Manager checked
+                            </span>
+                        )}
                         {crm?.appointment_booked ? (
-                            <>
-                                <CalendarCheck className="h-4 w-4 text-emerald-600" />
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-3 py-1 text-sm font-medium text-emerald-700 dark:text-emerald-400">
+                                <CalendarCheck className="h-4 w-4" />
                                 Appointment booked
-                            </>
+                            </span>
                         ) : crm?.appointment_booked === false ? (
-                            <>
-                                <CalendarX className="h-4 w-4 text-muted-foreground" />
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-sm font-medium text-muted-foreground">
+                                <CalendarX className="h-4 w-4" />
                                 No appointment booked
-                            </>
+                            </span>
                         ) : (
-                            <span className="font-normal text-muted-foreground">Not linked to a lead</span>
+                            <span className="rounded-full bg-muted px-3 py-1 text-sm text-muted-foreground">
+                                Not linked to a lead
+                            </span>
                         )}
                     </div>
-                    {review.manager_review.reviewed_at && (
-                        <Badge variant="secondary">
-                            <UserCheck className="mr-1 h-3 w-3" />
-                            Manager checked
-                        </Badge>
-                    )}
                 </div>
 
-                <dl className="space-y-3">
-                    <GlanceRow label="Did well" icon={<ThumbsUp className="h-3.5 w-3.5 text-emerald-600" />}>
+                <div className="grid gap-3 md:grid-cols-3">
+                    <GlanceTile tone="good" label="Did well" icon={<ThumbsUp className="h-4 w-4" />}>
                         {ev.strengths[0] ? (
-                            <span className="line-clamp-2" title={ev.strengths[0].text}>
+                            <p className="line-clamp-3" title={ev.strengths[0].text}>
                                 {ev.strengths[0].text}
-                            </span>
+                            </p>
                         ) : (
-                            <span className="text-muted-foreground">Nothing specific noted.</span>
+                            <p className="text-muted-foreground">Nothing specific noted.</p>
                         )}
-                    </GlanceRow>
+                    </GlanceTile>
 
-                    <GlanceRow label="Fix this" icon={<TrendingUp className="h-3.5 w-3.5 text-amber-600" />}>
+                    <GlanceTile tone="fix" label="Fix this" icon={<TrendingUp className="h-4 w-4" />}>
                         {fix ? (
-                            <span className={cn("line-clamp-2", fix.urgent && "font-medium text-red-600")} title={fix.text}>
-                                {fix.text}
-                            </span>
+                            <div className="space-y-1.5">
+                                {fix.tag && (
+                                    <span className="inline-block rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-medium text-red-700 dark:text-red-400">
+                                        {fix.tag}
+                                    </span>
+                                )}
+                                <p className="line-clamp-3" title={fix.text}>
+                                    {fix.text}
+                                </p>
+                            </div>
                         ) : (
-                            <span className="text-muted-foreground">Nothing to fix on this call.</span>
+                            <p className="text-muted-foreground">Nothing to fix on this call.</p>
                         )}
-                    </GlanceRow>
+                    </GlanceTile>
 
                     {(hidden || isSalesCall) && (
-                        <GlanceRow label="Hidden objection" icon={<Search className="h-3.5 w-3.5" />}>
+                        <GlanceTile tone="hidden" label="Hidden objection" icon={<Search className="h-4 w-4" />}>
                             {hidden ? (
-                                <span className={cn("block space-y-0.5", hiddenMarkedWrong && "opacity-60")}>
-                                    <span className={cn("block font-medium", hiddenMarkedWrong && "line-through")}>
-                                        {hidden.guess}
-                                    </span>
+                                <div className={cn("space-y-2", hiddenMarkedWrong && "opacity-60")}>
+                                    <p className={cn("font-medium", hiddenMarkedWrong && "line-through")}>{hidden.guess}</p>
                                     {hidden.how_to_uncover && !hiddenMarkedWrong && (
-                                        <span className="block">
-                                            <span className="text-muted-foreground">Ask: </span>
-                                            {hidden.how_to_uncover}
-                                        </span>
+                                        <p className="rounded-md border-l-2 border-primary/50 bg-background/60 px-2.5 py-1.5 italic">
+                                            &ldquo;{hidden.how_to_uncover}&rdquo;
+                                        </p>
                                     )}
-                                    <span className="block text-xs text-muted-foreground">
+                                    <p className="text-xs text-muted-foreground">
                                         {hiddenMarkedWrong
                                             ? "A manager marked this guess as wrong."
-                                            : `AI's guess, ${CONFIDENCE_LABEL[hidden.confidence] ?? hidden.confidence}${hidden.supported ? "" : " (no clear clues)"}`}
-                                    </span>
-                                </span>
+                                            : `AI's guess · ${CONFIDENCE_LABEL[hidden.confidence] ?? hidden.confidence}${hidden.supported ? "" : " · no clear clues"}`}
+                                    </p>
+                                </div>
                             ) : (
-                                <span className="text-muted-foreground">
-                                    No guess yet. Re-score this call to get one.
-                                </span>
+                                <p className="text-muted-foreground">No guess yet. Re-score this call to get one.</p>
                             )}
-                        </GlanceRow>
+                        </GlanceTile>
                     )}
-                </dl>
+                </div>
 
                 {review.manager_review.note && (
                     <p className="rounded-md bg-muted px-3 py-2 text-sm">
@@ -731,8 +782,8 @@ export default function CallReviewDetailPage() {
 
             {ev && (
                 <Button
-                    variant="outline"
-                    className="w-full sm:w-auto"
+                    variant="ghost"
+                    className="w-full justify-center border border-dashed text-muted-foreground hover:text-foreground"
                     onClick={() => setShowDetails((v) => !v)}
                     aria-expanded={showDetails}
                     aria-controls="call-review-details"
