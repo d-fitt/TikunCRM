@@ -88,7 +88,19 @@ export type FeedbackItemType =
     | "improvement"
     | "missed_opportunity"
     | "objection"
-    | "coaching";
+    | "coaching"
+    | "hidden_objection";
+
+/** The AI's guess at the real concern the customer did not say out loud. A guess, never a fact. */
+export interface HiddenObjection {
+    guess: string;
+    category: string;
+    confidence: "low" | "medium" | "high";
+    how_to_uncover: string;
+    evidence: Evidence[];
+    /** false when none of the clues it gave could be found in the transcript */
+    supported: boolean;
+}
 
 export type FeedbackVerdict = "accurate" | "inaccurate" | "useful" | "not_useful";
 
@@ -137,6 +149,8 @@ export interface CallEvaluation {
     missed_appointment_opportunities: Observation[];
     customer_objections: Objection[];
     coaching_suggestions: Observation[];
+    /** Missing on calls reviewed before this was added; null on non-sales calls */
+    hidden_objection?: HiddenObjection | null;
 }
 
 export interface TranscriptLine {
@@ -265,6 +279,10 @@ export interface CallDashboard {
     common_mistakes: CriterionStats[];
     successful_behaviors: CriterionStats[];
     objections: { category: string; label: string; calls: number; unresolved: number }[];
+    hidden_objections: {
+        calls_with_guess: number;
+        items: { category: string; label: string; calls: number; medium_or_high: number; stated_too: number }[];
+    };
     missed_opportunities: { calls: number; total: number };
     by_rep: GroupStats[];
     by_dealership: GroupStats[];

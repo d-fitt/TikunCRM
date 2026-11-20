@@ -660,9 +660,13 @@ async def save_feedback(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Only criterion scores can be corrected"
             )
-        items = (ev.result or {}).get(_RESULT_LISTS[body.item_type]) or []
-        if not body.item_key.isdigit() or int(body.item_key) >= len(items):
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown item")
+        if body.item_type == FeedbackItemType.HIDDEN_OBJECTION:
+            if body.item_key != "0" or not (ev.result or {}).get("hidden_objection"):
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown item")
+        else:
+            items = (ev.result or {}).get(_RESULT_LISTS[body.item_type]) or []
+            if not body.item_key.isdigit() or int(body.item_key) >= len(items):
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown item")
 
     note = (body.note or "").strip() or None
     existing = (

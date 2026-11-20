@@ -162,6 +162,30 @@ def _objection_breakdown(calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+def _hidden_objection_breakdown(calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    The AI's guesses at unstated objections. Kept apart from stated objections:
+    these are guesses, and guesses a manager marked wrong are already excluded.
+    """
+    counts: Dict[str, Dict[str, int]] = defaultdict(lambda: {"calls": 0, "medium_or_high": 0, "stated_too": 0})
+    with_guess = 0
+    for call in calls:
+        hidden = call.get("hidden_objection")
+        if not hidden:
+            continue
+        with_guess += 1
+        category = hidden.get("category") if hidden.get("category") in OBJECTION_CATEGORIES else "other"
+        counts[category]["calls"] += 1
+        if hidden.get("confidence") in ("medium", "high"):
+            counts[category]["medium_or_high"] += 1
+        stated = {o.get("category") for o in call.get("objections") or []}
+        if category in stated:
+            counts[category]["stated_too"] += 1
+    items = [{"category": k, "label": OBJECTION_CATEGORIES[k], **v} for k, v in counts.items()]
+    items.sort(key=lambda x: (-x["calls"], x["label"]))
+    return {"calls_with_guess": with_guess, "items": items}
+
+
 def _group(calls: List[Dict[str, Any]], key: str, names: Dict[Any, str]) -> List[Dict[str, Any]]:
     groups: Dict[Any, List[Dict[str, Any]]] = defaultdict(list)
     for c in calls:
@@ -280,6 +304,7 @@ def build_dashboard(
             [c for c in criteria if c["high_count"]], key=lambda c: (-c["high_count"], c["name"])
         )[:5],
         "objections": objections,
+        "hidden_objections": _hidden_objection_breakdown(calls),
         "missed_opportunities": missed,
         "by_rep": _group(calls, "rep_user_id", rep_names),
         "by_dealership": _group(calls, "dealership_id", dealership_names),
@@ -334,17 +359,21 @@ async def load_calls(
         for a in appt_result.scalars().all():
             appointments[a.lead_id].append(a)
 
-    # Objections a manager marked as wrong are left out of the counts
+    # Objections (stated, and guessed hidden ones) a manager marked as wrong are left out of the counts
     rejected: set = set()
     fb_result = await db.execute(
-        select(CallEvaluationFeedback.evaluation_id, CallEvaluationFeedback.item_key).where(
+        select(
+            CallEvaluationFeedback.evaluation_id, CallEvaluationFeedback.item_type, CallEvaluationFeedback.item_key
+        ).where(
             CallEvaluationFeedback.evaluation_id.in_([e.id for _, e, _ in rows]),
-            CallEvaluationFeedback.item_type == FeedbackItemType.OBJECTION.value,
+            CallEvaluationFeedback.item_type.in_(
+                [FeedbackItemType.OBJECTION.value, FeedbackItemType.HIDDEN_OBJECTION.value]
+            ),
             CallEvaluationFeedback.verdict == FeedbackVerdict.INACCURATE.value,
         )
     )
-    for evaluation_id, item_key in fb_result.all():
-        rejected.add((evaluation_id, item_key))
+    for evaluation_id, item_type, item_key in fb_result.all():
+        rejected.add((evaluation_id, item_type, item_key))
 
     calls = []
     for review, ev, ended_at in rows:
@@ -362,8 +391,14 @@ async def load_calls(
                 "category_scores": ev.category_scores or [],
                 "objections": [
                     o for i, o in enumerate(result_json.get("customer_objections") or [])
-                    if (ev.id, str(i)) not in rejected
+                    if (ev.id, FeedbackItemType.OBJECTION.value, str(i)) not in rejected
                 ],
+                # The AI's guess at the unstated objection, unless a manager said it was wrong
+                "hidden_objection": (
+                    None
+                    if (ev.id, FeedbackItemType.HIDDEN_OBJECTION.value, "0") in rejected
+                    else result_json.get("hidden_objection")
+                ),
                 "missed_opportunities": len(result_json.get("missed_appointment_opportunities") or []),
                 "summary": result_json.get("summary") or "",
                 "ai_call_outcome": ev.ai_call_outcome,

@@ -585,6 +585,31 @@ export default function CallIntelligencePage() {
                         </CardContent>
                     </Card>
 
+                    {data.hidden_objections.calls_with_guess > 0 && (
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="text-base">Suspected hidden objections (AI&apos;s guess)</CardTitle>
+                                <CardDescription>
+                                    What the AI thinks customers were really worried about but did not say. These
+                                    are guesses, not facts, and are counted separately from stated objections.
+                                    Guesses a manager marked wrong are left out.
+                                </CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                <ShareBars
+                                    rows={data.hidden_objections.items.map((h) => ({
+                                        key: h.category,
+                                        label: h.label,
+                                        count: h.calls,
+                                        total: s.calls_reviewed,
+                                        note: `${h.medium_or_high} with medium or high confidence · said out loud on ${h.stated_too}`,
+                                    }))}
+                                    emptyText="No guesses in this period."
+                                />
+                            </CardContent>
+                        </Card>
+                    )}
+
                     <GroupTable
                         title="By representative"
                         description="Call quality (AI) and appointments set (CRM) side by side. Small call counts make both numbers unreliable."

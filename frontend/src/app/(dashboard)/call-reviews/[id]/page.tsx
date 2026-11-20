@@ -361,12 +361,44 @@ function GlanceColumn({
  * the top one or two points in each direction. Everything else is in the
  * full breakdown below.
  */
+const CONFIDENCE_LABEL: Record<string, string> = { low: "low confidence", medium: "medium confidence", high: "high confidence" }
+
+/** The AI's guess at the unstated objection, always labelled as a guess. */
+function HiddenObjectionLine({
+    hidden,
+    markedWrong,
+}: {
+    hidden: NonNullable<CallReviewDetail["evaluation"]>["hidden_objection"]
+    markedWrong: boolean
+}) {
+    if (!hidden) return null
+    return (
+        <div className={cn("space-y-1 rounded-md border border-dashed px-3 py-2", markedWrong && "opacity-60")}>
+            <p className="flex flex-wrap items-center gap-x-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <Search className="h-3.5 w-3.5" />
+                Real objection? · AI&apos;s guess, {CONFIDENCE_LABEL[hidden.confidence] ?? hidden.confidence}
+                {!hidden.supported && <span className="font-normal normal-case">(no clear clues: a hunch)</span>}
+            </p>
+            <p className={cn("text-sm font-medium", markedWrong && "line-through")}>{hidden.guess}</p>
+            {markedWrong && <p className="text-xs">A manager marked this guess as wrong.</p>}
+            {hidden.how_to_uncover && !markedWrong && (
+                <p className="text-sm text-muted-foreground">
+                    <span className="font-medium text-foreground">Ask: </span>
+                    {hidden.how_to_uncover}
+                </p>
+            )}
+        </div>
+    )
+}
+
 function AtAGlance({
     review,
     correctedScore,
+    hiddenMarkedWrong,
 }: {
     review: CallReviewDetail
     correctedScore: (key: string) => number | null | undefined
+    hiddenMarkedWrong: boolean
 }) {
     const ev = review.evaluation
     if (!ev) return null
@@ -450,6 +482,8 @@ function AtAGlance({
                         )}
                     </GlanceColumn>
                 </div>
+
+                <HiddenObjectionLine hidden={ev.hidden_objection} markedWrong={hiddenMarkedWrong} />
 
                 {criteria.length > 0 && (
                     <div className="flex flex-wrap gap-1.5" aria-label="Scores by criterion">
@@ -736,7 +770,11 @@ export default function CallReviewDetailPage() {
                 </Alert>
             )}
 
-            <AtAGlance review={review} correctedScore={(key) => feedbackCtx.get("category", key)?.corrected_score} />
+            <AtAGlance
+                review={review}
+                correctedScore={(key) => feedbackCtx.get("category", key)?.corrected_score}
+                hiddenMarkedWrong={feedbackCtx.get("hidden_objection", "0")?.verdict === "inaccurate"}
+            />
 
             {ev && (
                 <Button
@@ -964,6 +1002,53 @@ export default function CallReviewDetailPage() {
                                         emptyText="None found in this call."
                                         onJump={jumpTo}
                                     />
+                                    {ev.hidden_objection && (
+                                        <Card>
+                                            <CardHeader className="pb-3">
+                                                <CardTitle className="flex items-center gap-2 text-base">
+                                                    <Search className="h-4 w-4" />
+                                                    Hidden objection (AI&apos;s guess)
+                                                </CardTitle>
+                                                <CardDescription>
+                                                    What the customer may really have meant but did not say. A guess to coach from: it does not
+                                                    affect the score.
+                                                </CardDescription>
+                                            </CardHeader>
+                                            <CardContent className="space-y-2">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <span className="text-sm font-medium">{ev.hidden_objection.guess}</span>
+                                                    <Badge variant="outline">
+                                                        {CONFIDENCE_LABEL[ev.hidden_objection.confidence] ?? ev.hidden_objection.confidence}
+                                                    </Badge>
+                                                </div>
+                                                {ev.hidden_objection.how_to_uncover && (
+                                                    <p className="text-sm text-muted-foreground">
+                                                        <span className="font-medium text-foreground">Question that could bring it out: </span>
+                                                        {ev.hidden_objection.how_to_uncover}
+                                                    </p>
+                                                )}
+                                                {ev.hidden_objection.evidence.length > 0 ? (
+                                                    <>
+                                                        <p className="text-xs font-medium text-muted-foreground">Clues in the call</p>
+                                                        {ev.hidden_objection.evidence.map((e, j) => (
+                                                            <EvidenceQuote key={j} evidence={e} onJump={jumpTo} />
+                                                        ))}
+                                                    </>
+                                                ) : (
+                                                    <p className="text-xs text-muted-foreground">
+                                                        No clear clues in the transcript, so treat this as a hunch.
+                                                    </p>
+                                                )}
+                                                <FeedbackControls
+                                                    ctx={feedbackCtx}
+                                                    type="hidden_objection"
+                                                    itemKey="0"
+                                                    positive={{ verdict: "accurate", label: "Right guess" }}
+                                                    negative={{ verdict: "inaccurate", label: "Wrong guess" }}
+                                                />
+                                            </CardContent>
+                                        </Card>
+                                    )}
                                     <Card>
                                         <CardHeader className="pb-3">
                                             <CardTitle className="text-base">Customer objections and concerns</CardTitle>

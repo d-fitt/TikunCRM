@@ -175,6 +175,7 @@ class FeedbackItemType(str, Enum):
     MISSED_OPPORTUNITY = "missed_opportunity"
     OBJECTION = "objection"
     COACHING = "coaching"
+    HIDDEN_OBJECTION = "hidden_objection"     # item_key = "0" (one guess per call)
 
 
 class FeedbackVerdict(str, Enum):

@@ -85,6 +85,12 @@ def llm_output(**overrides):
         "missed_appointment_opportunities": [],
         "customer_objections": [],
         "coaching_suggestions": [{"text": "Ask about a trade-in before offering times.", "evidence": []}],
+        "hidden_objection": {
+            "guess": "May be worried about getting approved, not just the payment.",
+            "category": "credit_or_financing", "confidence": "medium",
+            "how_to_uncover": "Is getting approved part of the worry?",
+            "evidence": [{"quote": "Honestly the monthly payment", "timestamp_seconds": 3}],
+        },
         "call_outcome": "appointment_booked",
     }
     data.update(overrides)
@@ -199,7 +205,7 @@ class TestGroundingAndScoring:
         out = evaluation.parse_and_ground(llm_output(), TRANSCRIPT, CRITERIA)
         texts = [i["text"] for i in out["result"]["improvements"]]
         assert texts == ["Did not ask about a trade-in."]
-        assert out["result"]["grounding"] == {"quotes_total": 4, "quotes_verified": 3, "observations_dropped": 1}
+        assert out["result"]["grounding"] == {"quotes_total": 5, "quotes_verified": 4, "observations_dropped": 1}
 
     def test_quote_matching_ignores_case_and_punctuation(self):
         assert evaluation.locate_quote("SATURDAY at eleven works", TRANSCRIPT) == 5
@@ -1230,3 +1236,125 @@ class TestWeeklyReport:
         monkeypatch.setattr(reports.EmailNotifier, "_send_via_system",
                             staticmethod(lambda *a: (_ for _ in ()).throw(AssertionError("must not send"))))
         assert await reports.send_weekly_reports() == 0
+
+
+# ------------------------------------------------------- hidden objection ----
+
+def _hidden(**kw):
+    data = {"guess": "Worried about credit approval.", "category": "credit_or_financing", "confidence": "high",
+            "how_to_uncover": "Is approval part of it?", "evidence": [{"quote": "Honestly the monthly payment"}]}
+    data.update(kw)
+    return data
+
+
+class TestHiddenObjection:
+    def test_guess_is_grounded_and_timestamp_comes_from_the_transcript(self):
+        out = evaluation.parse_and_ground(llm_output(hidden_objection=_hidden()), TRANSCRIPT, CRITERIA)
+        h = out["result"]["hidden_objection"]
+        assert h["supported"] is True and h["confidence"] == "high" and h["category"] == "credit_or_financing"
+        assert h["evidence"][0]["timestamp_seconds"] == 14.5 and h["evidence"][0]["speaker"] == "customer"
+        assert h["how_to_uncover"] == "Is approval part of it?"
+
+    def test_guess_without_real_clues_is_kept_as_a_low_confidence_hunch(self):
+        raw = llm_output(hidden_objection=_hidden(evidence=[{"quote": "I can never get approved anywhere"}]))
+        h = evaluation.parse_and_ground(raw, TRANSCRIPT, CRITERIA)["result"]["hidden_objection"]
+        assert h["guess"] == "Worried about credit approval."
+        assert h["supported"] is False and h["evidence"] == [] and h["confidence"] == "low"
+
+        no_clues = evaluation.parse_and_ground(llm_output(hidden_objection=_hidden(evidence=[])), TRANSCRIPT, CRITERIA)
+        assert no_clues["result"]["hidden_objection"]["confidence"] == "low"
+
+    def test_unknown_category_becomes_other(self):
+        raw = llm_output(hidden_objection=_hidden(category="secret_reason"))
+        assert evaluation.parse_and_ground(raw, TRANSCRIPT, CRITERIA)["result"]["hidden_objection"]["category"] == "other"
+
+    def test_a_guess_is_required_on_every_sales_call(self):
+        with pytest.raises(ValueError):
+            evaluation.parse_and_ground(llm_output(hidden_objection=None), TRANSCRIPT, CRITERIA)
+        # ...but not when the call was not a sales conversation
+        out = evaluation.parse_and_ground(
+            llm_output(hidden_objection=None, call_outcome="not_a_sales_conversation"), TRANSCRIPT, CRITERIA
+        )
+        assert out["result"]["hidden_objection"] is None
+
+    def test_guess_does_not_change_the_score(self):
+        with_guess = evaluation.parse_and_ground(llm_output(), TRANSCRIPT, CRITERIA)
+        other_guess = evaluation.parse_and_ground(
+            llm_output(hidden_objection=_hidden(category="needs_to_consult_someone", confidence="low")), TRANSCRIPT, CRITERIA
+        )
+        assert with_guess["overall_score"] == other_guess["overall_score"]
+
+    async def test_missing_guess_triggers_one_retry(self, monkeypatch):
+        monkeypatch.setattr(settings, "openai_api_key", "test-key")
+        sent = []
+
+        async def fake(messages):
+            sent.append(messages)
+            return llm_output(hidden_objection=None) if len(sent) == 1 else llm_output()
+
+        monkeypatch.setattr(evaluation, "_call_llm", fake)
+        out = await evaluation.evaluate_transcript(TRANSCRIPT, CRITERIA)
+        assert len(sent) == 2 and "hidden_objection" in sent[1][-1]["content"]
+        assert out["result"]["hidden_objection"]["category"] == "credit_or_financing"
+
+    def test_prompt_asks_for_a_guess_every_time(self):
+        system = evaluation.build_messages(TRANSCRIPT, CRITERIA, None, None)[0]["content"]
+        assert "HIDDEN OBJECTION" in system and "even when your confidence is low" in system
+        assert "never affects any score" in system
+
+
+class TestHiddenObjectionFeedbackAndDashboard:
+    async def _reviewed(self, db, **kw):
+        call = await _add_call(db, **kw)
+        review = await reviews.get_or_create_review(db, call)
+        await db.commit()
+        await reviews.process_review(db, review.id)
+        return review
+
+    async def test_manager_can_mark_the_guess(self, api, db, fakes):
+        review = await self._reviewed(db)
+        url = f"/call-reviews/{review.id}/feedback"
+        r = await api.client.put(url, json={"item_type": "hidden_objection", "item_key": "0", "verdict": "accurate"})
+        assert r.status_code == 200
+        assert [(f["item_type"], f["verdict"]) for f in r.json()["feedback"]] == [("hidden_objection", "accurate")]
+        bad = await api.client.put(url, json={"item_type": "hidden_objection", "item_key": "1", "verdict": "accurate"})
+        assert bad.status_code == 422
+        detail = (await api.client.get(f"/call-reviews/{review.id}")).json()
+        assert detail["evaluation"]["hidden_objection"]["guess"].startswith("May be worried")
+
+    async def test_dashboard_counts_guesses_separately_and_drops_wrong_ones(self, api, db, fakes):
+        now = utc_now()
+        first = await self._reviewed(db, started_at=now - timedelta(days=1), ended_at=now - timedelta(days=1) + timedelta(minutes=3))
+        await self._reviewed(db, started_at=now - timedelta(days=2), ended_at=now - timedelta(days=2) + timedelta(minutes=3))
+
+        d = (await api.client.get("/call-reviews/dashboard", params={"days": 30})).json()
+        assert d["hidden_objections"]["calls_with_guess"] == 2
+        assert d["hidden_objections"]["items"] == [{
+            "category": "credit_or_financing", "label": evaluation.OBJECTION_CATEGORIES["credit_or_financing"],
+            "calls": 2, "medium_or_high": 2, "stated_too": 0,
+        }]
+        assert d["objections"] == []                          # guesses never count as stated objections
+
+        await api.client.put(f"/call-reviews/{first.id}/feedback",
+                             json={"item_type": "hidden_objection", "item_key": "0", "verdict": "inaccurate"})
+        d = (await api.client.get("/call-reviews/dashboard", params={"days": 30})).json()
+        assert d["hidden_objections"]["calls_with_guess"] == 1
+
+    def test_breakdown_maths(self):
+        calls = [
+            _call(objections=[{"category": "price_or_payment", "resolved": True}]),
+            _call(), _call(),
+        ]
+        calls[0]["hidden_objection"] = {"category": "price_or_payment", "confidence": "low"}
+        calls[1]["hidden_objection"] = {"category": "credit_or_financing", "confidence": "high"}
+        calls[2]["hidden_objection"] = None
+        out = insights._hidden_objection_breakdown(calls)
+        assert out["calls_with_guess"] == 2
+        assert {i["category"]: (i["calls"], i["medium_or_high"], i["stated_too"]) for i in out["items"]} == {
+            "price_or_payment": (1, 0, 1), "credit_or_financing": (1, 1, 0),
+        }
+
+    def test_question_sheet_labels_guesses_as_guesses(self):
+        built, _ = _built()
+        text = json.dumps(built["sheet"], default=str)
+        assert "suspected_hidden_objections_AI_GUESSES_NOT_FACTS" in text

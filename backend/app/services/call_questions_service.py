@@ -57,7 +57,8 @@ Rules:
    - call QUALITY: AI scores from 0 to 100 for how the rep handled the call;
    - business OUTCOME: appointments booked and customers who showed up, taken from CRM records.
    A high score does not mean an appointment was booked. Say which kind you are quoting.
-4. Do not claim that one thing causes another. The data shows what happened together, not why.
+4. Suspected hidden objections are the AI's guesses about what customers did not say. If you use them,
+   call them guesses ("the AI suspects..."), never facts. Do not claim that one thing causes another. The data shows what happened together, not why.
 5. When fewer than 5 calls are behind a figure, say that the sample is small.
 6. Do not criticise a representative for anything DATA does not show.
 7. Never include customer names, phone numbers or other personal details.
@@ -134,6 +135,11 @@ def build_fact_sheet(
                     for o in c.get("objections") or []
                 ],
                 "missed_chances_to_ask_for_appointment": c.get("missed_opportunities") or 0,
+                "suspected_hidden_objection_AI_GUESS": (
+                    {"category": c["hidden_objection"].get("category") or "other",
+                     "confidence": c["hidden_objection"].get("confidence")}
+                    if c.get("hidden_objection") else None
+                ),
                 "crm_appointment": (
                     "not linked to a lead" if not c.get("lead_id") else appt["status"] if appt else "none booked"
                 ),
@@ -171,6 +177,14 @@ def build_fact_sheet(
              "calls_left_unresolved": o["unresolved"]}
             for o in dashboard["objections"]
         ],
+        "suspected_hidden_objections_AI_GUESSES_NOT_FACTS": {
+            "calls_with_a_guess": dashboard["hidden_objections"]["calls_with_guess"],
+            "by_category": [
+                {"objection": h["label"], "category": h["category"], "calls_guessed": h["calls"],
+                 "calls_guessed_with_medium_or_high_confidence": h["medium_or_high"]}
+                for h in dashboard["hidden_objections"]["items"]
+            ],
+        },
         "missed_chances_to_ask_for_appointment": {
             "calls_with_at_least_one": dashboard["missed_opportunities"]["calls"],
             "total_moments": dashboard["missed_opportunities"]["total"],

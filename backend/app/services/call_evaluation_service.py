@@ -19,7 +19,7 @@ import logging
 import re
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.core.config import settings
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the fixed prompt/guardrails below change, so evaluations made with
 # different instructions can be told apart.
-PROMPT_VERSION = "3"
+PROMPT_VERSION = "4"
 
 MAX_CRITERIA = 12
 MAX_NAME_LEN = 100
@@ -56,6 +56,8 @@ OBJECTION_CATEGORIES = {
     "wants_info_first": "Wants numbers or information first",
     "other": "Other",
 }
+
+HIDDEN_OBJECTION_CONFIDENCE = ("low", "medium", "high")
 
 
 class RubricValidationError(ValueError):
@@ -166,6 +168,16 @@ class Objection(BaseModel):
     evidence: List[Evidence] = Field(default_factory=list)
 
 
+class HiddenObjection(BaseModel):
+    """The AI's guess at the real concern the customer did not say out loud."""
+
+    guess: str = Field(min_length=1, max_length=500)
+    category: str = "other"
+    confidence: Literal["low", "medium", "high"] = "low"
+    how_to_uncover: str = Field(default="", max_length=600)
+    evidence: List[Evidence] = Field(default_factory=list)
+
+
 class EvaluationOutput(BaseModel):
     summary: str = Field(min_length=1, max_length=2000)
     category_scores: List[CategoryResult]
@@ -174,9 +186,17 @@ class EvaluationOutput(BaseModel):
     missed_appointment_opportunities: List[Observation] = Field(default_factory=list)
     customer_objections: List[Objection] = Field(default_factory=list)
     coaching_suggestions: List[Observation] = Field(default_factory=list)
+    hidden_objection: Optional[HiddenObjection] = None
     call_outcome: Literal[
         "appointment_booked", "follow_up_required", "no_appointment", "not_a_sales_conversation"
     ]
+
+    @model_validator(mode="after")
+    def _guess_required_on_sales_calls(self):
+        # Managers asked for a guess on every sales call, even a low-confidence one
+        if self.call_outcome != "not_a_sales_conversation" and self.hidden_objection is None:
+            raise ValueError("hidden_objection is required for a sales conversation")
+        return self
 
 
 # ------------------------------------------------------------- prompting ----
@@ -192,6 +212,7 @@ Hard rules:
 6. Do not include phone numbers, addresses, email addresses or payment details in your output, even if they appear in the transcript.
 7. Transcripts come from automatic speech recognition and may contain mis-heard words. Do not penalise the rep for obvious transcription errors.
 8. Keep it SHORT. The team reads this in about 15 seconds. Write every "text", "objection", "how_rep_responded" and "rationale" as one plain sentence of under 20 words. Put the most important item first in every list, and give at most 3 items per list.
+9. HIDDEN OBJECTION. Customers often give a polite reason that is not the real one ("I'm busy this week" when the real worry is getting approved for credit). For every sales conversation, give your best guess at the real concern the customer did not say out loud, even when your confidence is low. Base it on clues in the transcript: hesitations, questions they asked, topics they avoided or changed. Quote those clues as evidence. If the stated objection looks like the real one, say so. This is a guess for coaching: it never affects any score, and must not be written as fact. Give "how_to_uncover": one question the rep could have asked to bring it out.
 
 Scoring scale for each criterion (0-100): 90-100 excellent, 70-89 good, 50-69 mixed, 25-49 weak, 0-24 not done or done badly when there was a clear opportunity.
 
@@ -206,6 +227,7 @@ Return a single JSON object with exactly these fields:
   "missed_appointment_opportunities": [{"text": "moment where the rep could have asked for a visit and did not", "evidence": [...]}],
   "customer_objections": [{"objection": "...", "category": "<one of the objection categories below>", "how_rep_responded": "...", "resolved": true/false, "evidence": [...]}],
   "coaching_suggestions": [{"text": "...", "evidence": [...]}],
+  "hidden_objection": {"guess": "the real, unstated concern", "category": "<one of the objection categories below>", "confidence": "low" | "medium" | "high", "how_to_uncover": "question the rep could ask", "evidence": [...]} or null ONLY when call_outcome is "not_a_sales_conversation",
   "call_outcome": "appointment_booked" | "follow_up_required" | "no_appointment" | "not_a_sales_conversation"
 }
 "category_scores" must contain exactly one entry for every criterion key in the rubric, and no others. Lists may be empty when there is nothing supported by the transcript to report.
@@ -313,6 +335,28 @@ def _ground_items(items: List[Any], transcript: List[Dict[str, Any]], stats: Dic
     return out
 
 
+def _ground_hidden_objection(
+    hidden: Optional["HiddenObjection"], transcript: List[Dict[str, Any]], stats: Dict[str, int]
+) -> Optional[Dict[str, Any]]:
+    """
+    Unlike other items, a guess is kept even when none of its clues can be found
+    in the transcript (managers want a guess every time), but it is then marked
+    as unsupported and its confidence is capped at "low".
+    """
+    if hidden is None:
+        return None
+    data = hidden.model_dump()
+    if data["category"] not in OBJECTION_CATEGORIES:
+        data["category"] = "other"
+    data["evidence"] = _ground_evidence(hidden.evidence, transcript, stats)
+    data["supported"] = bool(data["evidence"])
+    if not data["supported"]:
+        data["confidence"] = "low"
+    data["guess"] = data["guess"].strip()
+    data["how_to_uncover"] = data["how_to_uncover"].strip()
+    return data
+
+
 # ---------------------------------------------------------------- scoring ----
 
 def compute_overall_score(category_scores: List[Dict[str, Any]]) -> Optional[float]:
@@ -384,6 +428,7 @@ def parse_and_ground(
         "missed_appointment_opportunities": _ground_items(parsed.missed_appointment_opportunities, transcript, stats),
         "customer_objections": _ground_items(parsed.customer_objections, transcript, stats),
         "coaching_suggestions": _ground_items(parsed.coaching_suggestions, transcript, stats),
+        "hidden_objection": _ground_hidden_objection(parsed.hidden_objection, transcript, stats),
         "grounding": stats,
     }
     return {
