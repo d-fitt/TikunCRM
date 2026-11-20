@@ -27,6 +27,7 @@ const SEGMENT_LABELS: Record<string, string> = {
     calls: "Calls",
     "call-reviews": "Call Reviews",
     "call-scoring": "Call Scoring",
+    recurring: "Call Patterns",
     inbox: "Inbox",
     communications: "Communications",
     "auto-whatsapp": "Auto WhatsApp",

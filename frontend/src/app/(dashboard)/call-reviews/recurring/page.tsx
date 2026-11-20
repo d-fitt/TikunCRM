@@ -53,7 +53,7 @@ const LISTS: {
         description: "Objections customers actually said on the call. A call counts once per kind of objection.",
         icon: MessageSquareWarning,
         upIsGood: false,
-        bar: "bg-red-500",
+        bar: "bg-red-400/70",
         badge: "bg-red-500/15 text-red-700 dark:text-red-400",
         emptyText: "No objections recorded in this period.",
     },
@@ -65,7 +65,7 @@ const LISTS: {
             "What the AI suspects customers were really worried about but didn't say. Guesses, not facts; ones a manager marked wrong are left out.",
         icon: Search,
         upIsGood: false,
-        bar: "bg-primary",
+        bar: "bg-primary/60",
         badge: "bg-primary/15 text-primary",
         emptyText: "No guesses yet in this period. Calls reviewed before guessing was added have none until re-scored.",
     },
@@ -76,7 +76,7 @@ const LISTS: {
         description: "What reps did well, grouped by scoring criterion. A call counts once per kind.",
         icon: ThumbsUp,
         upIsGood: true,
-        bar: "bg-emerald-500",
+        bar: "bg-emerald-500/60",
         badge: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
         emptyText: "Nothing recorded in this period.",
     },
@@ -88,11 +88,25 @@ const LISTS: {
             "Every issue flagged on a call (missed asks, objections left open and things to improve), not just the one shown in Fix this. A call counts once per kind.",
         icon: TrendingUp,
         upIsGood: false,
-        bar: "bg-amber-500",
+        bar: "bg-amber-500/70",
         badge: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
         emptyText: "Nothing flagged in this period.",
     },
 ]
+
+/** Below this many reviewed calls, bars and percentages say more about luck than about patterns. */
+const MIN_CALLS_FOR_SHARES = 5
+
+/** "39% of calls", or "under 1%" for very rare items. */
+function shareLabel(count: number, total: number): string {
+    if (!total) return ""
+    const share = count / total
+    return share > 0 && share < 0.01 ? "under 1%" : `${Math.round(share * 100)}% of calls`
+}
+
+function callsWord(n: number): string {
+    return n === 1 ? "call" : "calls"
+}
 
 function fmtDate(iso: string | null): string {
     if (!iso) return "—"
@@ -148,11 +162,23 @@ function Row({
                         <span className="font-medium">{row.label}</span>
                         {compare && <Change now={row.count} before={row.previous_count} upIsGood={list.upIsGood} />}
                     </div>
-                    <div className="h-2 w-full rounded-sm bg-muted" title={`${row.count} of ${total} reviewed calls`}>
-                        <div className={cn("h-full rounded-r-[4px]", list.bar)} style={{ width: `${Math.max(share * 100, 1)}%` }} />
-                    </div>
+                    {total >= MIN_CALLS_FOR_SHARES && (
+                        <div className="flex items-center gap-3">
+                            <div
+                                className="h-2.5 flex-1 overflow-hidden rounded-full bg-muted"
+                                role="img"
+                                aria-label={`${shareLabel(row.count, total)}: ${row.count} of ${total} reviewed calls`}
+                            >
+                                <div
+                                    className={cn("h-full rounded-full", list.bar)}
+                                    style={{ width: `${Math.max(share * 100, 1)}%` }}
+                                />
+                            </div>
+                            <span className="w-24 shrink-0 text-xs font-medium tabular-nums">{shareLabel(row.count, total)}</span>
+                        </div>
+                    )}
                     <p className="text-xs text-muted-foreground">
-                        {row.count} of {total} reviewed calls ({Math.round(share * 100)}%) ·{" "}
+                        {row.count} of {total} reviewed {callsWord(total)} ·{" "}
                         {row.by_rep
                             .slice(0, 3)
                             .map((r) => `${r.name} ${r.count}`)
@@ -322,6 +348,8 @@ export default function CallPatternsPage() {
                         Based on {data.calls_reviewed} reviewed {data.calls_reviewed === 1 ? "call" : "calls"}
                         {data.period.all_time ? " in total" : ` in the last ${periodLabel}`}.
                         {data.period.truncated && " Only the most recent 5,000 are included."}
+                        {data.calls_reviewed < MIN_CALLS_FOR_SHARES &&
+                            ` Bars and percentages appear once ${MIN_CALLS_FOR_SHARES} or more calls are reviewed.`}
                     </p>
 
                     {/* Top of each list at a glance; click to open that list */}
@@ -350,7 +378,9 @@ export default function CallPatternsPage() {
                                         <>
                                             <span className="font-semibold leading-snug">{top.label}</span>
                                             <span className="text-sm text-muted-foreground">
-                                                {top.count} of {data.calls_reviewed} calls
+                                                {top.count} of {data.calls_reviewed} {callsWord(data.calls_reviewed)}
+                                                {data.calls_reviewed >= MIN_CALLS_FOR_SHARES &&
+                                                    ` · ${shareLabel(top.count, data.calls_reviewed).replace(" of calls", "")}`}
                                             </span>
                                         </>
                                     ) : (
@@ -372,7 +402,12 @@ export default function CallPatternsPage() {
                         </TabsList>
                         {LISTS.map((list) => (
                             <TabsContent key={list.key} value={list.key} className="space-y-3">
-                                <p className="text-sm text-muted-foreground">{list.description} Click a row to see the calls.</p>
+                                <p className="text-sm text-muted-foreground">
+                                    {list.description}
+                                    {data.calls_reviewed >= MIN_CALLS_FOR_SHARES &&
+                                        ` The bar is the share of all ${data.calls_reviewed} reviewed calls where it came up.`}{" "}
+                                    Click a row to see the calls.
+                                </p>
                                 {data[list.key].length === 0 ? (
                                     <p className="text-sm text-muted-foreground">{list.emptyText}</p>
                                 ) : (
