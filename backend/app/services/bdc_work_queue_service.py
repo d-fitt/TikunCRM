@@ -1,11 +1,14 @@
 """
 Ranked Call next list for a BDC agent.
 
-Rules only — no model call. Notes, calls, follow-ups, and appointments
-decide the order. The same note text is shown on the card.
+Notes, calls, follow-ups, and appointments are gathered first.
+Tikun AI then orders who to call, using those notes. If the model is
+unavailable, the rules order is used.
 """
 from __future__ import annotations
 
+import json
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -25,6 +28,8 @@ from app.models.call_log import CallDirection, CallLog, CallStatus
 from app.models.follow_up import FollowUp, FollowUpStatus
 from app.models.lead import Lead
 from app.services.activity import ActivityService
+
+logger = logging.getLogger(__name__)
 
 QUEUE_LIMIT = 25
 BUCKET_LIMIT = 60
@@ -491,12 +496,97 @@ def _note_body(meta: Any) -> str:
     return str(meta.get("content") or meta.get("notes") or "").strip()
 
 
+@dataclass
+class WorkQueueResult:
+    items: List[Dict[str, Any]]
+    ranked_by: str = "rules"
+
+
+def apply_ai_order(rows: List[Dict[str, Any]], ordered: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Apply the model order. Do-not-call stays at the bottom even if the model promotes it."""
+    by_id = {str(row["lead_id"]): row for row in rows}
+    used = set()
+    result: List[Dict[str, Any]] = []
+    for item in ordered:
+        if not isinstance(item, dict):
+            continue
+        lead_id = str(item.get("lead_id") or "")
+        row = by_id.get(lead_id)
+        if row is None or lead_id in used or row.get("priority_band") == BAND_DNC:
+            continue
+        reason = str(item.get("reason") or "").strip()
+        if reason:
+            row = {**row, "reason": reason[:180]}
+        result.append(row)
+        used.add(lead_id)
+    for row in rows:
+        if str(row["lead_id"]) not in used:
+            result.append(row)
+    return result
+
+
+async def rerank_with_ai(rows: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], str]:
+    """Ask Tikun AI to order the gathered leads from their notes and call history."""
+    from app.core.config import settings
+
+    if not settings.ai_assistant_enabled or not settings.openai_api_key:
+        return rows, "rules"
+    candidates = [row for row in rows if row.get("priority_band") != BAND_DNC][:40]
+    if len(candidates) < 2:
+        return rows, "rules"
+    briefs = [
+        {
+            "lead_id": str(row["lead_id"]),
+            "name": row.get("customer_name"),
+            "note": (row.get("note_preview") or "")[:240],
+            "last_outcome": row.get("last_outcome"),
+            "chips": row.get("chips") or [],
+            "attempts_today": row.get("attempts_today") or 0,
+            "rules_hint": row.get("reason"),
+        }
+        for row in candidates
+    ]
+    try:
+        from app.services.ai_assistant_service import AiAssistantService
+
+        client = AiAssistantService._client()
+        completion = await client.chat.completions.create(
+            model=settings.bdc_attention_model,
+            temperature=0.2,
+            response_format={"type": "json_object"},
+            timeout=20,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You order a BDC agent's next phone calls. "
+                        "Use only the note, last outcome, chips, and rules hint. "
+                        "Call back, waiting, hot, coming in, a missed call, or an overdue follow-up "
+                        "comes before a cold fresh lead. "
+                        "A lead just tried with no answer stays lower unless the note says to call back now. "
+                        "Do not invent facts. Each reason is one short sentence from the note or the hint. "
+                        'Return JSON {"order":[{"lead_id":"...","reason":"..."}]} and include every lead_id once.'
+                    ),
+                },
+                {"role": "user", "content": json.dumps({"leads": briefs})},
+            ],
+        )
+        payload = json.loads(completion.choices[0].message.content or "{}")
+        order = payload.get("order") if isinstance(payload, dict) else None
+        if not isinstance(order, list) or not order:
+            return rows, "rules"
+        return apply_ai_order(rows, order), "ai"
+    except Exception:
+        logger.exception("AI call-next rank failed")
+        return rows, "rules"
+
+
 async def build_work_queue(
     db: AsyncSession,
     user,
     dealership_id: Optional[UUID],
     tz_name: Optional[str],
-) -> List[Dict[str, Any]]:
+) -> WorkQueueResult:
     now = utc_now()
     today_start, today_end = day_bounds(now, tz_name)
     soon_end = now + timedelta(hours=2)
@@ -600,7 +690,7 @@ async def build_work_queue(
                 seen.add(lead_id)
                 lead_ids.append(lead_id)
     if not lead_ids:
-        return []
+        return WorkQueueResult(items=[])
 
     leads = (
         await db.execute(
@@ -634,7 +724,7 @@ async def build_work_queue(
     for index, row in enumerate(top, start=1):
         row["rank"] = index
         row.pop("tie", None)
-    return top
+    return WorkQueueResult(items=top, ranked_by="rules")
 
 
 async def _signals_for(

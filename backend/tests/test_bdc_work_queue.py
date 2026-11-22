@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytz
 
+from app.services.bdc_attention_service import merge_attention
 from app.services.bdc_work_queue_service import (
     BAND_COOLDOWN,
     BAND_DNC,
@@ -154,3 +155,15 @@ class TestNextTouch:
         now = local.astimezone(pytz.UTC)
         nxt = next_touch_at(now, "America/New_York", "tomorrow").astimezone(TZ)
         assert (nxt.year, nxt.month, nxt.day, nxt.hour, nxt.minute) == (2026, 11, 22, 9, 0)
+
+
+def test_merge_attention_keeps_higher_priority_and_numbers_the_list():
+    rows = merge_attention([
+        {"lead_id": "a", "priority": 20, "reason": "fresh"},
+        {"lead_id": "b", "priority": 90, "reason": "overdue follow-up"},
+        {"lead_id": "a", "priority": 40, "reason": "note says call back"},
+    ])
+    assert [row["lead_id"] for row in rows] == ["b", "a"]
+    assert rows[1]["reason"] == "note says call back"
+    assert rows[0]["rank"] == 1
+    assert rows[1]["rank"] == 2

@@ -56,6 +56,8 @@ export interface BdcWorkQueueItem {
     priority_band: string;
     priority_score: number;
     reason: string;
+    why?: string | null;
+    ask?: string | null;
     action: "call" | "confirm" | "book" | string;
     note_preview?: string | null;
     chips: string[];
@@ -65,6 +67,13 @@ export interface BdcWorkQueueItem {
 
 export interface BdcWorkQueueResponse {
     items: BdcWorkQueueItem[];
+    ranked_by?: "ai" | "rules" | string;
+    status?: "empty" | "running" | "ready" | "failed" | string;
+    generated_at?: string | null;
+    scanned_count?: number;
+    attention_count?: number;
+    error?: string | null;
+    model?: string | null;
 }
 
 export interface BdcStats {
@@ -149,6 +158,15 @@ export const DashboardService = {
 
     async getBdcWorkQueue(params: { dealership_id?: string; tz?: string } = {}): Promise<BdcWorkQueueResponse> {
         const response = await apiClient.get<BdcWorkQueueResponse>("/dashboard/bdc/work-queue", { params });
+        return response.data;
+    },
+
+    async refreshBdcWorkQueue(dealershipId?: string | null): Promise<BdcWorkQueueResponse> {
+        const response = await apiClient.post<BdcWorkQueueResponse>(
+            "/dashboard/bdc/work-queue/refresh",
+            null,
+            { params: dealershipId ? { dealership_id: dealershipId } : {}, timeout: 60_000 },
+        );
         return response.data;
     },
 

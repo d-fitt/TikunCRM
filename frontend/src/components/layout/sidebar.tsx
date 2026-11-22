@@ -79,6 +79,7 @@ const allSidebarItems: SidebarItem[] = [
         icon: Inbox,
         children: [
             { name: "All leads", icon: Inbox, href: "/leads?filter=all" },
+            { name: "Call next", icon: Sparkles, href: "/leads?filter=call_next", roles: ["bdc"] },
             { name: "Unassigned", icon: InboxIcon, href: "/leads?filter=unassigned" },
             {
                 name: "Manager review",

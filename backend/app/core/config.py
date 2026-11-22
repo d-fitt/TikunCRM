@@ -202,6 +202,8 @@ class Settings(BaseSettings):
     # Tikun AI (ChatGPT-style CRM assistant)
     ai_assistant_enabled: bool = True
     ai_assistant_model: str = "gpt-4o"
+    # Morning BDC attention pass. Mini, once a day, not the copilot model.
+    bdc_attention_model: str = "gpt-4o-mini"
     # Auto-retrieve notes/activities into Tikun AI chat (RAG) when the question needs timeline context
     crm_search_auto_retrieve: bool = True
     # Default page size for timeline search UI / API (use Load more for additional pages)

@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select, func, and_, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
@@ -26,11 +26,9 @@ from app.models.user import User
 from app.models.activity import Activity
 from app.models.follow_up import FollowUp, FollowUpStatus
 from app.models.appointment import Appointment, AppointmentStatus
-from app.services.bdc_work_queue_service import (
-    WorkQueueError,
-    apply_disposition,
-    build_work_queue,
-)
+from app.services.bdc_attention_service import drop_lead_from_snapshot, snapshot_view
+from app.services.bdc_work_queue_service import WorkQueueError, apply_disposition
+from app.tasks.bdc_attention import run_attention_for_user_id
 
 router = APIRouter()
 
@@ -162,6 +160,8 @@ class BdcWorkQueueItem(BaseModel):
     priority_band: str
     priority_score: int
     reason: str
+    why: Optional[str] = None
+    ask: Optional[str] = None
     action: str
     note_preview: Optional[str] = None
     chips: List[str] = []
@@ -171,6 +171,13 @@ class BdcWorkQueueItem(BaseModel):
 
 class BdcWorkQueueResponse(BaseModel):
     items: List[BdcWorkQueueItem]
+    ranked_by: str = "ai"
+    status: str = "empty"
+    generated_at: Optional[datetime] = None
+    scanned_count: int = 0
+    attention_count: int = 0
+    error: Optional[str] = None
+    model: Optional[str] = None
 
 
 class BdcWorkQueueDisposition(BaseModel):
@@ -763,9 +770,23 @@ async def get_bdc_work_queue(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.require_role(UserRole.BDC)),
 ) -> Any:
-    """Ranked call list for the signed-in BDC agent."""
-    items = await build_work_queue(db, current_user, dealership_id, tz)
-    return BdcWorkQueueResponse(items=items)
+    """Saved morning attention list. The model runs on the daily job or a manual recheck."""
+    payload = await snapshot_view(db, current_user, dealership_id)
+    return BdcWorkQueueResponse(**payload)
+
+
+@router.post("/bdc/work-queue/refresh", response_model=BdcWorkQueueResponse)
+async def refresh_bdc_work_queue(
+    background: BackgroundTasks,
+    dealership_id: Optional[UUID] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_role(UserRole.BDC)),
+) -> Any:
+    """Recheck every lead with gpt-4o-mini and refresh the saved list."""
+    background.add_task(run_attention_for_user_id, str(current_user.id))
+    payload = await snapshot_view(db, current_user, dealership_id)
+    payload["status"] = "running"
+    return BdcWorkQueueResponse(**payload)
 
 
 @router.post("/bdc/work-queue/{lead_id}/disposition", response_model=BdcWorkQueueResponse)
@@ -781,9 +802,10 @@ async def post_bdc_work_queue_disposition(
         await apply_disposition(db, current_user, lead_id, body.outcome, body.timezone)
     except WorkQueueError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    await drop_lead_from_snapshot(db, current_user.id, lead_id)
     await db.commit()
-    items = await build_work_queue(db, current_user, dealership_id, body.timezone)
-    return BdcWorkQueueResponse(items=items)
+    payload = await snapshot_view(db, current_user, dealership_id)
+    return BdcWorkQueueResponse(**payload)
 
 
 @router.get("/stats")

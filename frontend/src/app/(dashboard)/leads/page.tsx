@@ -111,6 +111,7 @@ import {
 } from "@/lib/leads-open-preference"
 import { useSkateConfirmStore, isSkateWarningResponse, type SkateWarningInfo } from "@/stores/skate-confirm-store"
 import { SavedViewsBar } from "@/components/leads/saved-views-bar"
+import { CallNextQueue } from "@/components/leads/call-next-queue"
 import { TrustScoreBadge } from "@/components/eligibility/trust-score-badge"
 import type { SavedView } from "@/services/saved-view-service"
 
@@ -130,7 +131,7 @@ const LEAD_SOURCES = [
     { value: "walk_in", label: "Walk-in" },
 ]
 
-type ViewMode = "mine" | "unassigned" | "all" | "converted" | "fresh" | "manager_review" | "multi_campaign"
+type ViewMode = "mine" | "unassigned" | "all" | "converted" | "fresh" | "manager_review" | "multi_campaign" | "call_next"
 type DisplayView = "list" | "pipeline"
 
 /** Optional (toggleable) table columns. Customer and Actions are always shown. */
@@ -323,7 +324,9 @@ export default function LeadsPage() {
                       ? "multi_campaign"
                       : filterParam === "mine"
                         ? "mine"
-                        : isAdminLevel || isBdc
+                        : filterParam === "call_next" && isBdc
+                          ? "call_next"
+                          : isAdminLevel || isBdc
                           ? "all"
                           : "mine"
     )
@@ -817,6 +820,10 @@ export default function LeadsPage() {
     }, [])
 
     const fetchLeads = React.useCallback(async () => {
+        if (viewMode === "call_next") {
+            setIsLoading(false)
+            return
+        }
         setIsLoading(true)
         try {
             const filters = buildLeadListFilters()
@@ -832,10 +839,10 @@ export default function LeadsPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [page, buildLeadListFilters])
+    }, [page, buildLeadListFilters, viewMode])
 
     const fetchLeadsForPipeline = React.useCallback(async () => {
-        if (stages.length === 0) return
+        if (viewMode === "call_next" || stages.length === 0) return
         setIsLoadingPipeline(true)
         setStagePagination({})
         try {
@@ -1298,6 +1305,8 @@ export default function LeadsPage() {
                             params.set("filter", "manager_review")
                         } else if (mode === "multi_campaign") {
                             params.set("filter", "multi_campaign")
+                        } else if (mode === "call_next") {
+                            params.set("filter", "call_next")
                         } else {
                             params.set("filter", "mine")
                         }
@@ -1319,6 +1328,11 @@ export default function LeadsPage() {
                             <FileStack className="h-4 w-4 mr-1.5 shrink-0" />
                             Multiple form fills
                         </TabsTrigger>
+                        {isBdc && (
+                            <TabsTrigger value="call_next" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                                Call next
+                            </TabsTrigger>
+                        )}
                         <TabsTrigger value="fresh" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">Fresh (untouched)</TabsTrigger>
                         <TabsTrigger value="converted" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
                             <CheckCircle2 className="h-4 w-4 mr-1.5" />
@@ -1366,6 +1380,10 @@ export default function LeadsPage() {
                 </div>
             </div>
 
+            {viewMode === "call_next" && <CallNextQueue />}
+
+            {viewMode !== "call_next" && (
+            <>
             {/* Toolbar */}
             <Card className="min-w-0">
                 <CardContent className="p-4">
@@ -2298,6 +2316,8 @@ export default function LeadsPage() {
                     </div>
                 )}
             </Card>
+            )}
+            </>
             )}
 
             {/* Assignment to Salesperson Modal */}
