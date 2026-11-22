@@ -180,7 +180,7 @@ export function LeadStoreDrive({
                         </ul>
                     )}
                     {zip && !showForm && data && (data.stores?.length ?? 0) === 0 && !failed && (
-                        <p className="mt-1 text-xs text-muted-foreground">No store ZIP to compare.</p>
+                        <p className="mt-1 text-xs text-muted-foreground">No store address to compare.</p>
                     )}
                 </div>
             </div>

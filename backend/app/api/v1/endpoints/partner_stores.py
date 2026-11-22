@@ -185,42 +185,42 @@ async def store_drive_times(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    """How long a drive from this ZIP is to each store, at about 65 mph."""
-    from app.services.zip_distance import lookup_zip, miles_between, minutes_at_drive_speed, zip5
+    """Driving time from this ZIP to each store's street address."""
+    import httpx
+
+    from app.services.zip_distance import driving_leg, locate, lookup_zip, store_location_query, zip5
 
     origin_code = zip5(postal_code)
     if origin_code is None:
         raise HTTPException(status_code=400, detail="Enter a 5-digit ZIP code")
-    origin = await lookup_zip(origin_code)
+    place = await lookup_zip(origin_code)
     stores = list(
-        (
-            await db.execute(
-                select(PartnerStore).where(
-                    PartnerStore.is_active.is_(True),
-                    PartnerStore.postal_code.isnot(None),
-                )
-            )
-        ).scalars().all()
+        (await db.execute(select(PartnerStore).where(PartnerStore.is_active.is_(True)))).scalars().all()
     )
     timed: List[StoreDriveTime] = []
-    for store in stores:
-        dest = await lookup_zip(store.postal_code)
-        if origin is None or dest is None:
-            continue
-        miles = miles_between(origin[0], origin[1], dest[0], dest[1])
-        timed.append(
-            StoreDriveTime(
-                id=store.id,
-                name=store.name,
-                city=store.city,
-                miles=max(1, round(miles)) if miles >= 0.5 else 0,
-                minutes=minutes_at_drive_speed(miles),
+    async with httpx.AsyncClient(timeout=8) as client:
+        origin = await locate(client, f"{origin_code}, USA", postal_fallback=origin_code)
+        for store in stores:
+            query = store_location_query(store.address, store.city, store.state, store.postal_code)
+            if origin is None or not query:
+                continue
+            dest = await locate(client, query, postal_fallback=store.postal_code)
+            if dest is None:
+                continue
+            miles, minutes = await driving_leg(client, (origin[0], origin[1]), (dest[0], dest[1]))
+            timed.append(
+                StoreDriveTime(
+                    id=store.id,
+                    name=store.name,
+                    city=store.city,
+                    miles=miles,
+                    minutes=minutes,
+                )
             )
-        )
     timed.sort(key=lambda row: (row.minutes, row.name))
     return DriveTimesResponse(
         postal_code=origin_code,
-        place=origin[2] if origin else None,
+        place=place[2] if place else None,
         stores=timed,
     )
 
