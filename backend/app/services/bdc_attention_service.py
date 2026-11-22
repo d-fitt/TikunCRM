@@ -257,6 +257,22 @@ def _without_claimed(items: List[Dict[str, Any]], claimed: Dict[str, Any]) -> Li
     return visible
 
 
+def _percent(done: int, total: int, start: int, span: int) -> int:
+    if total <= 0:
+        return start + span
+    return start + int(span * min(done, total) / total)
+
+
+async def _write_progress(db: AsyncSession, done: int, label: str) -> None:
+    row = await db.get(BdcAttentionSnapshot, SHARED_ATTENTION_ID)
+    if row is None:
+        return
+    row.progress_done = max(0, min(done, 100))
+    row.progress_total = 100
+    row.progress_label = label[:160]
+    await db.commit()
+
+
 def _running_fresh(snap: BdcAttentionSnapshot, now: datetime) -> bool:
     if snap.status != "running" or snap.started_at is None:
         return False
@@ -281,6 +297,9 @@ async def snapshot_view(
             "generated_at": None,
             "scanned_count": 0,
             "attention_count": 0,
+            "progress_done": 0,
+            "progress_total": 0,
+            "progress_label": None,
             "error": None,
             "model": settings.bdc_attention_model,
         }
@@ -294,6 +313,9 @@ async def snapshot_view(
         "generated_at": snap.generated_at,
         "scanned_count": snap.scanned_count,
         "attention_count": snap.attention_count,
+        "progress_done": snap.progress_done or 0,
+        "progress_total": snap.progress_total or 0,
+        "progress_label": snap.progress_label,
         "error": snap.error,
         "model": snap.model or settings.bdc_attention_model,
     }
@@ -383,6 +405,9 @@ async def run_attention_for_user(
     snap.status = "running"
     snap.started_at = now
     snap.error = None
+    snap.progress_done = 0
+    snap.progress_total = 100
+    snap.progress_label = "Counting leads"
     snap.model = settings.bdc_attention_model
     await db.commit()
     snap = await _load_snapshot(db)
@@ -439,6 +464,12 @@ async def run_attention_for_user(
                 brief = _brief(lead, signals, scored, notes, calls)
                 briefs.append(brief)
                 catalog[str(lead.id)] = _item_from_model(lead, signals, scored, {"priority": 0, "reason": brief["rules_hint"], "action": (scored or {}).get("action")})
+            reviewed = min(offset + len(chunk), len(lead_ids))
+            await _write_progress(
+                db,
+                _percent(reviewed, len(lead_ids), 0, 35),
+                f"Reading notes and calls · {reviewed:,} of {len(lead_ids):,}",
+            )
 
         client = AiAssistantService._client()
         found: List[Dict[str, Any]] = []
@@ -452,6 +483,12 @@ async def run_attention_for_user(
             except Exception:
                 failures += 1
                 logger.exception("Mini attention batch failed for user %s", user.id)
+            ranked = min(offset + len(batch), len(briefs))
+            await _write_progress(
+                db,
+                _percent(ranked, len(briefs), 35, 65),
+                f"Choosing who to call · {ranked:,} of {len(briefs):,}",
+            )
 
         if batches and failures == batches:
             raise RuntimeError("Every attention batch failed.")
@@ -502,6 +539,9 @@ async def run_attention_for_user(
         snap.claimed = merged
         snap.scanned_count = len(lead_ids)
         snap.attention_count = len(items)
+        snap.progress_done = 100
+        snap.progress_total = 100
+        snap.progress_label = None
         snap.generated_at = utc_now()
         snap.status = "ready"
         snap.error = None

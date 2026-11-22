@@ -72,6 +72,9 @@ export interface BdcWorkQueueResponse {
     generated_at?: string | null;
     scanned_count?: number;
     attention_count?: number;
+    progress_done?: number;
+    progress_total?: number;
+    progress_label?: string | null;
     error?: string | null;
     model?: string | null;
 }

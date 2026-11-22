@@ -176,6 +176,9 @@ class BdcWorkQueueResponse(BaseModel):
     generated_at: Optional[datetime] = None
     scanned_count: int = 0
     attention_count: int = 0
+    progress_done: int = 0
+    progress_total: int = 0
+    progress_label: Optional[str] = None
     error: Optional[str] = None
     model: Optional[str] = None
 

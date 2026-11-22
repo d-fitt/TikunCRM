@@ -6,6 +6,7 @@ import { Loader2, Phone, Sparkles, Store } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Progress } from "@/components/ui/progress"
 import { useCallLeadOptional } from "@/contexts/call-lead-context"
 import { useToast } from "@/hooks/use-toast"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
@@ -33,6 +34,9 @@ export function CallNextQueue() {
     const [status, setStatus] = React.useState<string>("empty")
     const [generatedAt, setGeneratedAt] = React.useState<string | null>(null)
     const [scannedCount, setScannedCount] = React.useState(0)
+    const [progressDone, setProgressDone] = React.useState(0)
+    const [progressTotal, setProgressTotal] = React.useState(0)
+    const [progressLabel, setProgressLabel] = React.useState<string | null>(null)
     const [error, setError] = React.useState<string | null>(null)
     const [loading, setLoading] = React.useState(true)
     const [rechecking, setRechecking] = React.useState(false)
@@ -62,6 +66,9 @@ export function CallNextQueue() {
             setStatus(data.status || "empty")
             setGeneratedAt(stamp)
             setScannedCount(data.scanned_count || 0)
+            setProgressDone(data.progress_done || 0)
+            setProgressTotal(data.progress_total || 0)
+            setProgressLabel(data.progress_label || null)
             setError(data.error || null)
         } catch {
             setError("Could not load who to call next.")
@@ -145,6 +152,9 @@ export function CallNextQueue() {
         baselineRef.current = generatedAt
         setRechecking(true)
         setStatus("running")
+        setProgressDone(0)
+        setProgressTotal(0)
+        setProgressLabel("Starting the check")
         try {
             const data = await DashboardService.refreshBdcWorkQueue()
             setItems(data.items || [])
@@ -213,6 +223,24 @@ export function CallNextQueue() {
                         </Button>
                     </div>
                 </div>
+                {(status === "running" || rechecking) && (
+                    <div className="mt-3 space-y-1.5">
+                        <div className="relative">
+                            <Progress
+                                value={progressTotal > 0 ? progressDone : 0}
+                                max={progressTotal > 0 ? progressTotal : 100}
+                            />
+                            {progressDone <= 0 && (
+                                <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-full">
+                                    <div className="h-full w-1/3 bg-primary [animation:call-next-progress_1.4s_ease-in-out_infinite]" />
+                                </div>
+                            )}
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                            {progressLabel || "Starting the check"}
+                        </p>
+                    </div>
+                )}
             </CardHeader>
             <CardContent className="space-y-3">
                 {loading && (
