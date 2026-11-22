@@ -83,6 +83,15 @@ export interface AiUiBlock {
     summary?: string;
     args?: Record<string, unknown>;
   }>;
+  summary?: string;
+  percentage?: number | null;
+  numerator?: number;
+  denominator?: number;
+  scope?: string;
+  columns?: string[];
+  rows?: Array<Record<string, unknown>>;
+  row_count?: number;
+  truncated?: boolean;
 }
 
 export interface AiStreamHandlers {

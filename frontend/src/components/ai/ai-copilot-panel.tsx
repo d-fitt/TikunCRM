@@ -603,6 +603,66 @@ function ConfirmActionsBlock({
   )
 }
 
+function QueryResultBlock({ block }: { block: AiUiBlock }) {
+  const columns = block.columns || []
+  const rows = block.rows || []
+  return (
+    <div className="overflow-hidden rounded-xl border bg-muted/40">
+      <p className="px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        {block.row_count ?? rows.length} row{(block.row_count ?? rows.length) === 1 ? "" : "s"} from the database
+        {block.truncated ? " (first rows)" : ""}
+      </p>
+      {columns.length > 0 && rows.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-t">
+                {columns.map((column) => (
+                  <th key={column} className="px-3 py-1.5 font-medium text-muted-foreground">
+                    {column}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, index) => (
+                <tr key={index} className="border-t">
+                  {columns.map((column) => (
+                    <td key={column} className="px-3 py-1.5 tabular-nums text-foreground">
+                      {row[column] == null ? "—" : String(row[column])}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function StatsBlock({ block }: { block: AiUiBlock }) {
+  const pct =
+    typeof block.percentage === "number" ? `${block.percentage}%` : null
+  return (
+    <div className="rounded-xl border bg-muted/40 px-3 py-3">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        {block.title || "From the database"}
+      </p>
+      {pct ? (
+        <p className="mt-1 text-2xl font-semibold tabular-nums text-foreground">{pct}</p>
+      ) : null}
+      {block.summary ? (
+        <p className="mt-1 text-sm text-foreground">{block.summary}</p>
+      ) : null}
+      {block.scope ? (
+        <p className="mt-1 text-xs text-muted-foreground">{block.scope}</p>
+      ) : null}
+    </div>
+  )
+}
+
 function UiBlocks({
   blocks,
   conversationId,
@@ -626,6 +686,12 @@ function UiBlocks({
         }
         if (b.type === "note_hits") {
           return <NoteHitsBlock key={`${b.type}-${i}`} block={b} />
+        }
+        if (b.type === "crm_stats") {
+          return <StatsBlock key={`${b.type}-${i}`} block={b} />
+        }
+        if (b.type === "query_result") {
+          return <QueryResultBlock key={`${b.type}-${i}`} block={b} />
         }
         if (b.type === "confirm_actions") {
           return (

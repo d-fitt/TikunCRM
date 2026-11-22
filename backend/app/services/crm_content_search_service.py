@@ -83,10 +83,15 @@ def should_auto_retrieve_crm_content(user_text: str) -> bool:
     if not t or len(t) < 3:
         return False
     lower = t.lower()
+    if re.search(
+        r"\b(percent|percentage|how many|how much|average|conversion rate)\b",
+        lower,
+    ):
+        return False
     if re.search(r"\b(ssn stip|dl stip|has_ssn|has_dl|down payment|down_min|stips only)\b", lower):
         if not CONTENT_QUERY_RE.search(t):
             return False
-    return bool(CONTENT_QUERY_RE.search(t) or "?" in t)
+    return bool(CONTENT_QUERY_RE.search(t))
 
 
 def extract_activity_content(activity: Activity) -> str:
