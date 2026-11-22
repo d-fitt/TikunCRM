@@ -42,8 +42,12 @@ export interface LeadCampaignMappingBrief {
 }
 
 /** One row per campaign (mapping id or raw name); keeps earliest added_at. */
+function textOf(value: unknown): string {
+    return typeof value === "string" ? value.trim() : "";
+}
+
 export function dedupeLeadCampaigns(campaigns: LeadCampaign[] | undefined): LeadCampaign[] {
-    if (!campaigns?.length) return [];
+    if (!Array.isArray(campaigns) || campaigns.length === 0) return [];
     const map = new Map<string, LeadCampaign>();
     for (const c of campaigns) {
         const key = c.campaign_mapping_id ?? `raw:${c.campaign_name}`;
@@ -66,12 +70,11 @@ export function leadVisibleSource(lead: {
 }): string {
     const latestCampaign = lead.campaigns?.length ? dedupeLeadCampaigns(lead.campaigns)[0] : undefined;
     const raw =
-        lead.latest_source_display?.trim()
-        || latestCampaign?.display_name?.trim()
-        || latestCampaign?.campaign_name?.trim()
-        || lead.source_display?.trim()
-        || lead.source
-        || "";
+        textOf(lead.latest_source_display)
+        || textOf(latestCampaign?.display_name)
+        || textOf(latestCampaign?.campaign_name)
+        || textOf(lead.source_display)
+        || textOf(lead.source);
     return raw.replace(/_/g, " ");
 }
 

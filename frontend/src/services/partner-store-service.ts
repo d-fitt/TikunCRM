@@ -191,9 +191,30 @@ function invalidateActiveStoresCache() {
     activeStoresPromise = null
 }
 
+export interface StoreDriveTime {
+    id: string
+    name: string
+    city?: string | null
+    miles: number
+    minutes: number
+}
+
+export interface DriveTimesResponse {
+    postal_code: string
+    place?: string | null
+    stores: StoreDriveTime[]
+}
+
 export const PartnerStoreService = {
     forgetListCache() {
         invalidateActiveStoresCache()
+    },
+
+    async driveTimes(postalCode: string): Promise<DriveTimesResponse> {
+        const response = await apiClient.get<DriveTimesResponse>(`${PREFIX}/drive-times`, {
+            params: { postal_code: postalCode },
+        })
+        return response.data
     },
 
     async list(params: PartnerStoreListParams = {}): Promise<PartnerStoreListResponse> {

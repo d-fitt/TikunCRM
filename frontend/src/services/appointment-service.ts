@@ -114,11 +114,13 @@ export interface AppointmentListResponse {
 /** Store on the appointment, or the lead's store when the appointment was booked before one was saved. */
 export function appointmentStoreLabel(apt: Appointment): string | null {
     const store = apt.partner_store || apt.lead?.partner_store
-    if (!store?.name) return null
-    if (store.brand && !store.name.toLowerCase().includes(store.brand.toLowerCase())) {
-        return `${store.name} · ${store.brand}`
+    const name = typeof store?.name === "string" ? store.name.trim() : ""
+    const brand = typeof store?.brand === "string" ? store.brand.trim() : ""
+    if (!name) return null
+    if (brand && !name.toLowerCase().includes(brand.toLowerCase())) {
+        return `${name} · ${brand}`
     }
-    return store.name
+    return name
 }
 
 export interface AppointmentStats {

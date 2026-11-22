@@ -7,6 +7,7 @@ runs the same pass.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timedelta
@@ -475,19 +476,30 @@ async def run_attention_for_user(
         found: List[Dict[str, Any]] = []
         failures = 0
         batches = 0
-        for offset in range(0, len(briefs), BATCH_SIZE):
-            batch = briefs[offset:offset + BATCH_SIZE]
-            batches += 1
+        pending = [briefs[offset:offset + BATCH_SIZE] for offset in range(0, len(briefs), BATCH_SIZE)]
+
+        async def _rank_one(batch: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], bool]:
             try:
-                found.extend(await _rank_batch(client, batch))
+                return await _rank_batch(client, batch), False
             except Exception:
-                failures += 1
-                logger.exception("Mini attention batch failed for user %s", user.id)
-            ranked = min(offset + len(batch), len(briefs))
+                logger.exception("Mini attention batch failed")
+                return [], True
+
+        ranked = 0
+        for group_at in range(0, len(pending), 4):
+            group = pending[group_at:group_at + 4]
+            results = await asyncio.gather(*[_rank_one(batch) for batch in group])
+            for rows, failed in results:
+                batches += 1
+                ranked += BATCH_SIZE
+                if failed:
+                    failures += 1
+                else:
+                    found.extend(rows)
             await _write_progress(
                 db,
-                _percent(ranked, len(briefs), 35, 65),
-                f"Choosing who to call · {ranked:,} of {len(briefs):,}",
+                _percent(min(ranked, len(briefs)), len(briefs), 35, 65),
+                f"Choosing who to call · {min(ranked, len(briefs)):,} of {len(briefs):,}",
             )
 
         if batches and failures == batches:

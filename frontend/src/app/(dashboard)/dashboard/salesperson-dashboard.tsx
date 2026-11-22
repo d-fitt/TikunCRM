@@ -249,7 +249,7 @@ export function SalespersonDashboard() {
                     <CardContent>
                         <div className="space-y-2">
                                 {todayAppointments.slice(0, 3).map((apt) => (
-                                    <Link key={apt.id} href={`/leads/${apt.lead_id}`}>
+                                    <Link key={apt.id} href={apt.lead_id ? `/leads/${apt.lead_id}` : "/appointments"}>
                                         <div 
                                             className="flex items-center justify-between bg-white dark:bg-blue-900/50 rounded-lg p-3 hover:bg-blue-100 dark:hover:bg-blue-800/50 transition-colors cursor-pointer"
                                         >
@@ -306,7 +306,7 @@ export function SalespersonDashboard() {
                     <CardContent>
                         <div className="space-y-2">
                                 {upcomingAppointments.map((apt) => (
-                                    <Link key={apt.id} href={`/leads/${apt.lead_id}`}>
+                                    <Link key={apt.id} href={apt.lead_id ? `/leads/${apt.lead_id}` : "/appointments"}>
                                         <div 
                                             className="flex items-center justify-between bg-white dark:bg-purple-900/50 rounded-lg p-3 hover:bg-purple-100 dark:hover:bg-purple-800/50 transition-colors cursor-pointer"
                                         >

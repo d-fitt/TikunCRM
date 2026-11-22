@@ -148,8 +148,13 @@
 }
 
 @keyframes call-next-progress {
-  0% { transform: translateX(-120%); }
-  100% { transform: translateX(420%); }
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+.call-next-indeterminate {
+  width: 28%;
+  animation: call-next-progress 1.1s linear infinite;
 }
 
 @layer base {

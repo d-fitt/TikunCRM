@@ -165,6 +165,66 @@ async def list_brands(
     return [row[0] for row in result.all()]
 
 
+class StoreDriveTime(BaseModel):
+    id: UUID
+    name: str
+    city: Optional[str] = None
+    miles: int
+    minutes: int
+
+
+class DriveTimesResponse(BaseModel):
+    postal_code: str
+    place: Optional[str] = None
+    stores: List[StoreDriveTime]
+
+
+@router.get("/drive-times", response_model=DriveTimesResponse)
+async def store_drive_times(
+    postal_code: str = Query(..., min_length=5, max_length=20),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """How long a drive from this ZIP is to each store, at about 65 mph."""
+    from app.services.zip_distance import lookup_zip, miles_between, minutes_at_drive_speed, zip5
+
+    origin_code = zip5(postal_code)
+    if origin_code is None:
+        raise HTTPException(status_code=400, detail="Enter a 5-digit ZIP code")
+    origin = await lookup_zip(origin_code)
+    stores = list(
+        (
+            await db.execute(
+                select(PartnerStore).where(
+                    PartnerStore.is_active.is_(True),
+                    PartnerStore.postal_code.isnot(None),
+                )
+            )
+        ).scalars().all()
+    )
+    timed: List[StoreDriveTime] = []
+    for store in stores:
+        dest = await lookup_zip(store.postal_code)
+        if origin is None or dest is None:
+            continue
+        miles = miles_between(origin[0], origin[1], dest[0], dest[1])
+        timed.append(
+            StoreDriveTime(
+                id=store.id,
+                name=store.name,
+                city=store.city,
+                miles=max(1, round(miles)) if miles >= 0.5 else 0,
+                minutes=minutes_at_drive_speed(miles),
+            )
+        )
+    timed.sort(key=lambda row: (row.minutes, row.name))
+    return DriveTimesResponse(
+        postal_code=origin_code,
+        place=origin[2] if origin else None,
+        stores=timed,
+    )
+
+
 @router.get("/{store_id}", response_model=PartnerStoreResponse)
 async def get_partner_store(
     store_id: UUID,

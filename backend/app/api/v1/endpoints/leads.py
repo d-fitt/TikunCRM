@@ -1302,15 +1302,22 @@ async def create_lead(
         if val is not None:
             customer_extra[f] = val
 
-    customer, customer_created = await CustomerService.find_or_create(
-        db,
-        phone=lead_in.phone,
-        email=lead_in.email,
-        first_name=lead_in.first_name,
-        last_name=lead_in.last_name,
-        source=lead_in.source.value if lead_in.source else None,
-        **customer_extra,
-    )
+    try:
+        customer, customer_created = await CustomerService.find_or_create(
+            db,
+            phone=lead_in.phone,
+            email=lead_in.email,
+            first_name=lead_in.first_name,
+            last_name=lead_in.last_name,
+            source=lead_in.source.value if lead_in.source else None,
+            **customer_extra,
+        )
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A customer with this phone or email already exists.",
+        )
 
     # Step 2: check for existing active lead in the same dealership
     active_query = select(Lead).where(
@@ -1377,7 +1384,14 @@ async def create_lead(
         bdc_assigned_to_id=current_user.id if current_user.role == UserRole.BDC else None,
     )
     db.add(lead)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A customer with this phone or email already exists.",
+        )
 
     # Log activity
     lead_name = customer.full_name
@@ -1877,7 +1891,7 @@ async def get_lead(
         note_activities = notes_result.scalars().all()
         mentioned_ids = set()
         for act in note_activities:
-            ids = act.meta_data.get("mentioned_user_ids") or []
+            ids = (act.meta_data or {}).get("mentioned_user_ids") or []
             mentioned_ids.update(str(i) for i in ids)
         if str(current_user.id) in mentioned_ids:
             access_level = "mention_only"
@@ -2121,7 +2135,7 @@ async def get_lead(
     # Fallback: resolve by source_display / display_name when FK is missing
     if mapping is None:
         meta = lead.meta_data if isinstance(getattr(lead, "meta_data", None), dict) else {}
-        source_label = (meta.get("source_display") or "").strip()
+        source_label = str(meta.get("source_display") or "").strip()
         if source_label:
             fallback_result = await db.execute(
                 select(CampaignMapping)
@@ -2189,7 +2203,7 @@ async def get_lead(
         response_data["campaigns"] = [_campaign_copy(campaign) for campaign in campaigns]
         if response_data["campaigns"]:
             newest = response_data["campaigns"][0]
-            latest_label = (newest.get("display_name") or newest.get("campaign_name") or "").strip()
+            latest_label = str(newest.get("display_name") or newest.get("campaign_name") or "").strip()
             response_data["latest_source_display"] = latest_label or None
 
     from app.services.eligibility_service import EligibilityService
@@ -3336,7 +3350,7 @@ async def add_lead_note(
         note_activities = notes_result.scalars().all()
         mentioned_ids = set()
         for act in note_activities:
-            ids = act.meta_data.get("mentioned_user_ids") or []
+            ids = (act.meta_data or {}).get("mentioned_user_ids") or []
             mentioned_ids.update(str(i) for i in ids)
         if str(current_user.id) not in mentioned_ids:
             raise HTTPException(status_code=403, detail="Not authorized to add notes to this lead")

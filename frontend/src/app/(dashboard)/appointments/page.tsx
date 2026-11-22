@@ -1952,9 +1952,9 @@ export default function AppointmentsPage() {
                                     <div className="flex items-start justify-between gap-2">
                                         <div className="flex-1 min-w-0">
                                             <div className="flex items-center gap-2 mb-1">
-                                                {appointment.lead ? (
+                                                {appointment.lead && (appointment.lead_id || appointment.lead.id) ? (
                                                     <Link 
-                                                        href={`/leads/${appointment.lead_id}`} 
+                                                        href={`/leads/${appointment.lead_id || appointment.lead.id}`} 
                                                         className="font-medium hover:underline text-left"
                                                         onClick={(e) => e.stopPropagation()}
                                                     >

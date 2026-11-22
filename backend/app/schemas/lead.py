@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.lead import LeadSource
 from app.schemas.customer import CustomerBrief
@@ -53,7 +53,7 @@ class LeadCreate(BaseModel):
     secondary_customer_id: Optional[UUID] = None
 
     @field_validator(
-        "last_name", "phone", "alternate_phone", "notes",
+        "last_name", "phone", "email", "alternate_phone", "notes",
         "interested_in", "budget_range", "address", "city", "state",
         "postal_code", "country", "company", "job_title",
         "preferred_contact_method", "preferred_contact_time",
@@ -61,9 +61,17 @@ class LeadCreate(BaseModel):
     )
     @classmethod
     def empty_string_to_none(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            v = v.strip()
         if v == "" or v is None:
             return None
         return v
+
+    @model_validator(mode="after")
+    def require_phone_or_email(self):
+        if not self.link_customer_id and not self.phone and not self.email:
+            raise ValueError("Enter a phone number or an email")
+        return self
 
 
 class LeadUpdate(BaseModel):

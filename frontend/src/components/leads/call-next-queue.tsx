@@ -232,7 +232,7 @@ export function CallNextQueue() {
                             />
                             {progressDone <= 0 && (
                                 <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-full">
-                                    <div className="h-full w-1/3 bg-primary [animation:call-next-progress_1.4s_ease-in-out_infinite]" />
+                                    <div className="call-next-indeterminate h-full bg-primary" />
                                 </div>
                             )}
                         </div>
