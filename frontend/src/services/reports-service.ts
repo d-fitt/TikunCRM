@@ -349,6 +349,7 @@ export interface BdcExportRow {
     source: string;
     lead_created: string;
     dealership: string;
+    partner_store: string;
     bdc_agent: string;
     salesperson: string;
     is_active: boolean;

@@ -66,6 +66,7 @@ from app.models.partner_store_recipient import PartnerStoreRecipient
 from app.models.partner_store_channel import PartnerStoreChannel
 from app.models.partner_inventory import PartnerInventorySource, PartnerInventoryUrl
 from app.models.lead_delivery import LeadDelivery
+from app.models.lead_delivery_mailbox import LeadDeliveryMailbox
 from app.models.partner_bdc_agent import PartnerBdcAgent
 from app.models.partner_portal_user import PartnerPortalUser
 from app.models.time_entry import TimeEntry
@@ -73,6 +74,7 @@ from app.models.call_review import (
     CallRubric, CallReview, CallEvaluation, CallEvaluationFeedback, CallInsightQuestion, CallReviewStatus, RubricStatus,
 )
 from app.models.note_reminder import NoteReminder, NoteReminderScan, NoteReminderStatus
+from app.models.bdc_attention import BdcAttentionSnapshot
 
 __all__ = [
     "NoteReminder",
@@ -173,4 +175,5 @@ __all__ = [
     "PartnerBdcAgent",
     "PartnerPortalUser",
     "TimeEntry",
+    "BdcAttentionSnapshot",
 ]

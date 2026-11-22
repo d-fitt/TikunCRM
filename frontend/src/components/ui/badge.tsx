@@ -122,7 +122,8 @@ function getRoleVariant(role: string): VariantProps<typeof badgeVariants>["varia
     return roleMap[role] || "default"
 }
 
-function getSourceVariant(source: string): VariantProps<typeof badgeVariants>["variant"] {
+function getSourceVariant(source: string | null | undefined): VariantProps<typeof badgeVariants>["variant"] {
+    if (!source) return "default"
     const sourceMap: Record<string, VariantProps<typeof badgeVariants>["variant"]> = {
         google_sheets: "google_sheets",
         meta_ads: "meta_ads",

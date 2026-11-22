@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 logger = logging.getLogger(__name__)
@@ -149,7 +150,6 @@ def setup_scheduler():
 
     # Weekly call report email - Mondays 13:00 UTC.
     # The job itself is a no-op unless CALL_REVIEW_WEEKLY_REPORT_ENABLED is on.
-    from apscheduler.triggers.cron import CronTrigger
     from app.services.call_report_service import send_weekly_reports
     scheduler.add_job(
         send_weekly_reports,
@@ -162,6 +162,31 @@ def setup_scheduler():
         misfire_grace_time=3600,
     )
 
+    # BDC morning attention — 7:15 AM Eastern, before the 8 AM floor.
+    from app.tasks.bdc_attention import run_bdc_morning_attention
+    scheduler.add_job(
+        run_bdc_morning_attention,
+        trigger=CronTrigger(hour=7, minute=15, timezone="America/New_York"),
+        id="bdc_morning_attention",
+        name="BDC morning attention check (gpt-4o-mini)",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3 * 60 * 60,
+    )
+
+    from app.services.voice_service import move_twilio_recordings_to_azure
+    scheduler.add_job(
+        move_twilio_recordings_to_azure,
+        trigger=IntervalTrigger(minutes=10, start_date=datetime.now() + timedelta(minutes=2)),
+        id="recording_off_twilio",
+        name="Copy call recordings to Azure and delete the Twilio copy",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=600,
+    )
+
     logger.info("Background scheduler configured (lead sync + appointments only):")
     logger.info("  - AI call review sweep (every 5 minutes, only when CALL_REVIEW_AUTO_ENABLED)")
     logger.info("  - Google Sheets lead sync (every 2 minutes)")
@@ -172,6 +197,8 @@ def setup_scheduler():
     logger.info("  - Missed appointment detection (every 30 minutes)")
     logger.info("  - Partner lead routing retry (every 2 minutes)")
     logger.info("  - CRM search backfill (every 24 hours, Azure only)")
+    logger.info("  - BDC morning attention (7:15 AM America/New_York, gpt-4o-mini)")
+    logger.info("  - Move call recordings off Twilio onto Azure (every 10 minutes)")
     logger.info("  - DISABLED: IMAP email sync, WhatsApp bulk, Auto WhatsApp worker")
 
 

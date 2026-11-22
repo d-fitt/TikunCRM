@@ -16,7 +16,9 @@ from app.models.lead_delivery import LeadDelivery
 from app.models.partner_store import PartnerStore
 from app.models.user import User
 from app.services.partner_routing_service import return_delivery
-from app.services.partner_send_service import SendError, send_lead_to_stores
+from decimal import Decimal
+
+from app.services.partner_send_service import SendDetails, SendError, send_lead_to_stores
 
 router = APIRouter()
 
@@ -40,6 +42,17 @@ class DeliveryResponse(BaseModel):
 
 class SendToStoresRequest(BaseModel):
     partner_store_ids: List[UUID] = Field(default_factory=list)
+    postal_code: Optional[str] = Field(None, max_length=20)
+    email: Optional[str] = Field(None, max_length=255)
+    city: Optional[str] = Field(None, max_length=100)
+    state: Optional[str] = Field(None, max_length=100)
+    down_payment: Optional[Decimal] = None
+    is_business: Optional[bool] = None
+    has_ssn_stip: Optional[bool] = None
+    has_dl_stip: Optional[bool] = None
+    interested_in: Optional[str] = Field(None, max_length=255)
+    interested_brand: Optional[str] = Field(None, max_length=100)
+    budget_range: Optional[str] = Field(None, max_length=100)
 
 
 class StoreSendResponse(BaseModel):
@@ -132,7 +145,28 @@ async def send_lead_to_partner_stores(
     if not await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to):
         raise HTTPException(status_code=403, detail="Access denied")
     try:
-        results = await send_lead_to_stores(db, lead, body.partner_store_ids, current_user)
+        provided = body.model_fields_set
+        results = await send_lead_to_stores(
+            db,
+            lead,
+            body.partner_store_ids,
+            current_user,
+            SendDetails(
+                postal_code=(body.postal_code or "") if "postal_code" in provided else None,
+                email=(body.email or "") if "email" in provided else None,
+                city=(body.city or "") if "city" in provided else None,
+                state=(body.state or "") if "state" in provided else None,
+                down_payment=body.down_payment if "down_payment" in provided and body.down_payment is not None else None,
+                clear_down_payment="down_payment" in provided and body.down_payment is None,
+                is_business=body.is_business if "is_business" in provided else None,
+                clear_business="is_business" in provided and body.is_business is None,
+                has_ssn_stip=body.has_ssn_stip if "has_ssn_stip" in provided else None,
+                has_dl_stip=body.has_dl_stip if "has_dl_stip" in provided else None,
+                interested_in=(body.interested_in or "") if "interested_in" in provided else None,
+                interested_brand=(body.interested_brand or "") if "interested_brand" in provided else None,
+                budget_range=(body.budget_range or "") if "budget_range" in provided else None,
+            ),
+        )
     except SendError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return SendToStoresResponse(
@@ -184,6 +218,22 @@ async def return_lead_delivery(
     if delivery.status in ("dead", "returned"):
         raise HTTPException(status_code=400, detail="Delivery is already closed")
     await return_delivery(db, delivery, body.note)
+    from app.models.lead_delivery import RELEASED_STATUSES
+
+    remaining = [
+        store_id
+        for store_id in (
+            await db.execute(
+                select(LeadDelivery.partner_store_id).where(
+                    LeadDelivery.lead_id == lead_id,
+                    LeadDelivery.status.notin_(list(RELEASED_STATUSES)),
+                )
+            )
+        ).scalars().all()
+    ]
+    if lead.partner_store_id not in remaining:
+        lead.partner_store_id = remaining[-1] if remaining else None
+        lead.partner_connected_at = delivery.updated_at if remaining else None
     rows = list(
         (
             await db.execute(

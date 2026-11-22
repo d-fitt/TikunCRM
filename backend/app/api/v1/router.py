@@ -3,7 +3,7 @@ API v1 Router - combines all route modules
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, users, dealerships, leads, activities, follow_ups, schedules, integrations, communications, auth_oauth, dashboard, emails, dealership_email_config, notifications, user_email_config, google_sheets, appointments, push, websocket, reports, bdc_reports, voice, sms, whatsapp, showroom, customers, lead_stages, stips, admin_sync_sources, campaign_mappings, auto_whatsapp, eligibility, guests, public, saved_views, tasks, ai_assistant, crm_search, credit_application, partner_stores, time_tracking, lead_deliveries, bdc_desk, partner_portal, call_reviews, note_reminders
+from app.api.v1.endpoints import auth, users, dealerships, leads, activities, follow_ups, schedules, integrations, communications, auth_oauth, dashboard, emails, dealership_email_config, notifications, user_email_config, google_sheets, appointments, push, websocket, reports, bdc_reports, voice, sms, whatsapp, showroom, customers, lead_stages, stips, admin_sync_sources, campaign_mappings, auto_whatsapp, eligibility, guests, public, saved_views, tasks, ai_assistant, crm_search, credit_application, partner_stores, time_tracking, lead_deliveries, bdc_desk, partner_portal, lead_delivery_email, call_reviews, note_reminders
 from app.api.v1.endpoints.webhooks import sendgrid as sendgrid_webhook
 from app.api.v1.endpoints.webhooks import twilio as twilio_webhook
 from app.api.v1.endpoints.webhooks import twilio_ai_voice as twilio_ai_voice_webhook
@@ -60,6 +60,7 @@ api_router.include_router(auto_whatsapp.router, tags=["Auto WhatsApp"])
 
 # Lead Sync Sources (Super Admin only)
 api_router.include_router(admin_sync_sources.router, prefix="/admin/sync-sources", tags=["Admin - Lead Sync Sources"])
+api_router.include_router(lead_delivery_email.router, prefix="/admin", tags=["Admin - Lead Delivery Email"])
 # Campaign Mappings (Dealership Admin/Owner - for editing display names)
 api_router.include_router(campaign_mappings.router, prefix="/campaign-mappings", tags=["Campaign Mappings"])
 

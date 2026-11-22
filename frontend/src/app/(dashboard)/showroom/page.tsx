@@ -391,6 +391,7 @@ export default function ShowroomPage() {
                             <TableHeader>
                                 <TableRow>
                                     <TableHead>Customer</TableHead>
+                                    <TableHead>Store</TableHead>
                                     <TableHead>Contact</TableHead>
                                     <TableHead>Checked In</TableHead>
                                     <TableHead>Duration</TableHead>
@@ -401,9 +402,9 @@ export default function ShowroomPage() {
                             <TableBody>
                                 {filteredCurrentVisits.length === 0 ? (
                                     <TableRow>
-                                        <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                                        <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                                             {currentVisits.length === 0 
-                                                ? "No customers in dealership right now" 
+                                                ? "No customers in the showroom right now" 
                                                 : "No results match your search"}
                                         </TableCell>
                                     </TableRow>
@@ -426,6 +427,9 @@ export default function ShowroomPage() {
                                                         </div>
                                                     </div>
                                                 </Link>
+                                            </TableCell>
+                                            <TableCell className="text-sm">
+                                                {visit.lead?.partner_store?.name || "—"}
                                             </TableCell>
                                             <TableCell>
                                                 <div className="flex flex-col gap-1">
@@ -483,6 +487,7 @@ export default function ShowroomPage() {
                             <TableHeader>
                                 <TableRow>
                                     <TableHead>Customer</TableHead>
+                                    <TableHead>Store</TableHead>
                                     <TableHead>Date</TableHead>
                                     <TableHead>Duration</TableHead>
                                     <TableHead>Outcome</TableHead>
@@ -493,7 +498,7 @@ export default function ShowroomPage() {
                             <TableBody>
                                 {historyVisits.length === 0 ? (
                                     <TableRow>
-                                        <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                                        <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                                             No visit history yet
                                         </TableCell>
                                     </TableRow>
@@ -518,6 +523,9 @@ export default function ShowroomPage() {
                                                             {visit.lead?.customer?.first_name} {visit.lead?.customer?.last_name}
                                                         </span>
                                                     </Link>
+                                                </TableCell>
+                                                <TableCell className="text-sm">
+                                                    {visit.lead?.partner_store?.name || "—"}
                                                 </TableCell>
                                                 <TableCell>
                                                     {format(new Date(visit.checked_in_at), "MMM d, yyyy h:mm a")}

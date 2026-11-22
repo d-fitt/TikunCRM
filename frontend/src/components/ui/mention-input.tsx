@@ -102,7 +102,7 @@ export function MentionInput({
     
     const filteredUsers = React.useMemo(() => {
         const sorted = sortMentionableUsers(mentionableUsers)
-        if (!suggestionFilter) return sorted.slice(0, 12)
+        if (!suggestionFilter) return sorted
 
         const lowerFilter = suggestionFilter.toLowerCase()
         return sorted
@@ -116,7 +116,7 @@ export function MentionInput({
                     getRoleLabel(user.role).toLowerCase().includes(lowerFilter)
                 )
             })
-            .slice(0, 12)
+            .slice(0, 40)
     }, [mentionableUsers, suggestionFilter])
     
     const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -241,11 +241,12 @@ export function MentionInput({
             {showSuggestions && filteredUsers.length > 0 && (
                 <div
                     ref={suggestionsRef}
-                    className="absolute left-0 bottom-full z-[100] mb-1 w-full max-w-xs rounded-md border bg-popover p-1 shadow-lg animate-in fade-in-0 zoom-in-95"
+                    className="absolute left-0 bottom-full z-[100] mb-1 w-full max-w-sm rounded-md border bg-popover p-1 shadow-lg animate-in fade-in-0 zoom-in-95"
                 >
                     <div className="text-xs font-medium text-muted-foreground px-2 py-1.5">
                         Mention a team member or BDC
                     </div>
+                    <div className="max-h-72 overflow-y-auto">
                     {filteredUsers.map((user, index) => (
                         <button
                             key={user.id}
@@ -276,6 +277,7 @@ export function MentionInput({
                             </Badge>
                         </button>
                     ))}
+                    </div>
                     <div className="border-t mt-1 pt-1 px-2 py-1 text-xs text-muted-foreground">
                         ↑↓ to navigate, Enter to select, Esc to close
                     </div>

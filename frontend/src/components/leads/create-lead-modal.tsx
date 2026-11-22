@@ -34,13 +34,38 @@ interface CreateLeadModalProps {
 }
 
 const LEAD_SOURCES = [
-    { value: "manual", label: "Manual Entry" },
-    { value: "website", label: "Website Form" },
+    { value: "manual", label: "Manual entry" },
+    { value: "phone", label: "Phone inquiry" },
+    { value: "website", label: "Website form" },
     { value: "referral", label: "Referral" },
     { value: "walk_in", label: "Walk-in" },
-    { value: "phone", label: "Phone Inquiry" },
-    { value: "social_media", label: "Social Media" },
+    { value: "social_media", label: "Social media" },
 ]
+
+function apiErrorMessage(err: unknown): string {
+    const detail =
+        err && typeof err === "object" && "response" in err
+            ? (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
+            : undefined
+    if (typeof detail === "string" && detail.trim()) return detail
+    if (Array.isArray(detail)) {
+        const parts = detail
+            .map((item) => {
+                if (typeof item === "string") return item
+                if (!item || typeof item !== "object") return ""
+                const row = item as { msg?: unknown; loc?: unknown }
+                const msg = typeof row.msg === "string" ? row.msg.replace(/^Value error,\s*/i, "") : ""
+                const loc = Array.isArray(row.loc)
+                    ? row.loc.filter((part) => part !== "body").map(String).join(" ")
+                    : ""
+                if (msg && loc) return `${loc}: ${msg}`
+                return msg
+            })
+            .filter(Boolean)
+        if (parts.length) return parts.join(". ")
+    }
+    return "Could not create the lead. Check the fields and try again."
+}
 
 export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalProps) {
     const user = useAuthStore((s) => s.user)
@@ -121,7 +146,7 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
         }
 
         if (!formData.email?.trim() && !formData.phone?.trim()) {
-            setError("Please provide either email or phone number")
+            setError("Enter a phone number or an email. Last name can be left blank.")
             return
         }
 
@@ -133,13 +158,36 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
         setIsLoading(true)
         setError("")
 
+        const phone = formData.phone.trim() ? toE164(formData.phone, dialCode) : undefined
+        const alternatePhone = formData.alternate_phone.trim()
+            ? toE164(formData.alternate_phone, dialCode)
+            : undefined
+        if ((phone && phone.length > 20) || (alternatePhone && alternatePhone.length > 20)) {
+            setError("That phone number is too long. Use the country code and the local number only.")
+            setIsLoading(false)
+            return
+        }
+        // Phone inquiry and social media are labels, not database sources.
+        const sourceChoice = formData.source
+        const source =
+            sourceChoice === "phone" || sourceChoice === "social_media" ? "manual" : sourceChoice
+        const sourceDisplay =
+            sourceChoice === "phone"
+                ? "Phone inquiry"
+                : sourceChoice === "social_media"
+                  ? "Social media"
+                  : undefined
         const payload: Parameters<typeof LeadService.createLead>[0] = {
-            ...formData,
-            email: formData.email?.trim() || undefined,
-            phone: formData.phone?.trim() ? toE164(formData.phone, dialCode) : undefined,
-            alternate_phone: formData.alternate_phone?.trim()
-                ? toE164(formData.alternate_phone, dialCode)
-                : undefined,
+            first_name: formData.first_name.trim(),
+            last_name: formData.last_name.trim() || undefined,
+            email: formData.email.trim() || undefined,
+            phone,
+            alternate_phone: alternatePhone,
+            source,
+            interested_in: formData.interested_in.trim() || undefined,
+            budget_range: formData.budget_range.trim() || undefined,
+            notes: formData.notes.trim() || undefined,
+            meta_data: sourceDisplay ? { source_display: sourceDisplay } : undefined,
         }
         // BDC manual leads always go to Carvaminos (single-org)
         if (isBdc && orgDealershipId) {
@@ -153,11 +201,7 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
             onClose()
         } catch (err: unknown) {
             console.error("Failed to create lead:", err)
-            const detail =
-                err && typeof err === "object" && "response" in err
-                    ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-                    : undefined
-            setError(detail || "Failed to create lead. Please try again.")
+            setError(apiErrorMessage(err))
         } finally {
             setIsLoading(false)
         }
@@ -203,7 +247,7 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                             />
                         </div>
                         <div className="space-y-2">
-                            <Label htmlFor="last_name">Last Name</Label>
+                            <Label htmlFor="last_name">Last Name (optional)</Label>
                             <Input
                                 id="last_name"
                                 placeholder="Doe"
@@ -214,8 +258,11 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                     </div>
 
                     <div className="space-y-4">
+                        <p className="text-xs text-muted-foreground">
+                            Phone or email is required. You can leave the other one blank.
+                        </p>
                         <div className="space-y-2">
-                            <Label htmlFor="email">Email (optional)</Label>
+                            <Label htmlFor="email">Email</Label>
                             <div className="relative">
                                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                                 <Input
@@ -230,7 +277,7 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                             </div>
                         </div>
                         <div className="space-y-2">
-                            <Label htmlFor="phone">Phone (optional)</Label>
+                            <Label htmlFor="phone">Phone</Label>
                             <div className="flex gap-2 w-full min-w-0">
                                 <Select
                                     value={dialCode}
@@ -329,9 +376,9 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                         />
                     </div>
 
-                    {error && (
+                    {error ? (
                         <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-lg">{error}</div>
-                    )}
+                    ) : null}
 
                     <DialogFooter>
                         <Button type="button" variant="outline" onClick={handleClose}>

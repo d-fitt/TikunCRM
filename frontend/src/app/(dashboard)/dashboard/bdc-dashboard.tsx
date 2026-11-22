@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { startOfDay, endOfDay } from "date-fns"
+import { startOfDay } from "date-fns"
 import {
     Inbox,
     CheckCircle,
@@ -12,11 +12,9 @@ import {
     UserPlus,
     ClipboardList,
     CalendarClock,
-    Building2,
     ArrowUpRight,
     Sparkles,
     Phone,
-    ChevronRight,
     Store,
     Mail,
 } from "lucide-react"
@@ -34,13 +32,11 @@ import {
 import { DashboardService, BdcStats, BdcDealershipBreakdown } from "@/services/dashboard-service"
 import { LeadService, Lead, getLeadFullName, getLeadPhone, getLeadEmail } from "@/services/lead-service"
 import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/services/appointment-service"
-import { FollowUpService, FollowUp } from "@/services/follow-up-service"
 import { ShowroomService } from "@/services/showroom-service"
 import { getStageLabel, getStageColor } from "@/services/lead-stage-service"
 import { useStatsRefresh, useShowroomUpdates, useWebSocketEvent } from "@/hooks/use-websocket"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
-import { formatDateInTimezone, formatRelativeTimeInTimezone } from "@/utils/timezone"
-import { cn } from "@/lib/utils"
+import { formatDateInTimezone } from "@/utils/timezone"
 import { useBdcDealership } from "@/contexts/bdc-dealership-context"
 import { BdcDealershipSwitcher } from "@/components/layout/bdc-dealership-switcher"
 
@@ -74,73 +70,12 @@ function filterByDealership<T>(
     return items.filter((item) => resolveDealershipId(item) === selectedDealershipId)
 }
 
-function followUpLeadName(fu: FollowUp): string {
-    const c = fu.lead?.customer
-    if (!c) return "Lead"
-    return c.full_name || `${c.first_name || ""} ${c.last_name || ""}`.trim() || "Lead"
-}
-
-function WorkQueueCard({
-    title,
-    icon,
-    href,
-    hrefLabel,
-    accentClass,
-    headerClass,
-    emptyMessage,
-    emptyAction,
-    children,
-}: {
-    title: string
-    icon: React.ReactNode
-    href: string
-    hrefLabel: string
-    accentClass: string
-    headerClass: string
-    emptyMessage: string
-    emptyAction?: { label: string; href: string }
-    children: React.ReactNode
-}) {
-    const hasItems = React.Children.count(children) > 0
-
-    return (
-        <Card className={cn("flex flex-col overflow-hidden border-2", accentClass)}>
-            <CardHeader className={cn("flex flex-row items-center justify-between space-y-0 pb-3", headerClass)}>
-                <div className="flex items-center gap-2.5">
-                    {icon}
-                    <CardTitle className="text-base font-semibold">{title}</CardTitle>
-                </div>
-                <Button variant="secondary" size="sm" className="h-8 shrink-0" asChild>
-                    <Link href={href}>
-                        {hrefLabel}
-                        <ChevronRight className="ml-1 h-3.5 w-3.5" />
-                    </Link>
-                </Button>
-            </CardHeader>
-            <CardContent className="flex-1 pt-0">
-                {hasItems ? (
-                    <ul className="space-y-2">{children}</ul>
-                ) : (
-                    <div className="flex flex-col items-center justify-center rounded-lg border border-dashed bg-background/60 py-10 px-4 text-center">
-                        <p className="text-sm text-muted-foreground">{emptyMessage}</p>
-                        {emptyAction && (
-                            <Button variant="outline" size="sm" className="mt-4" asChild>
-                                <Link href={emptyAction.href}>{emptyAction.label}</Link>
-                            </Button>
-                        )}
-                    </div>
-                )}
-            </CardContent>
-        </Card>
-    )
-}
-
 function DealershipRow({ d, maxUnassigned }: { d: BdcDealershipBreakdown; maxUnassigned: number }) {
     const pct = maxUnassigned > 0 ? Math.min(100, Math.round((d.unassigned_leads / maxUnassigned) * 100)) : 0
     return (
         <TableRow>
             <TableCell>
-                <Link href="/leads" className="font-medium hover:text-primary hover:underline">
+                <Link href={`/partner-stores/${d.id}`} className="font-medium hover:text-primary hover:underline">
                     {d.name}
                 </Link>
                 <div className="mt-2 h-1.5 max-w-[180px] rounded-full bg-muted overflow-hidden">
@@ -188,10 +123,7 @@ function DealershipRow({ d, maxUnassigned }: { d: BdcDealershipBreakdown; maxUna
 export function BdcDashboard() {
     const { selectedDealershipId, selectedDealershipName } = useBdcDealership()
     const [stats, setStats] = React.useState<BdcStats | null>(null)
-    const [freshLeads, setFreshLeads] = React.useState<Lead[]>([])
     const [freshLeadsTop, setFreshLeadsTop] = React.useState<Lead[]>([])
-    const [overdueFollowUps, setOverdueFollowUps] = React.useState<FollowUp[]>([])
-    const [todayFollowUps, setTodayFollowUps] = React.useState<FollowUp[]>([])
     const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
     const [upcomingAppointments, setUpcomingAppointments] = React.useState<Appointment[]>([])
     const [showroomInShowroom, setShowroomInShowroom] = React.useState(0)
@@ -202,45 +134,25 @@ export function BdcDashboard() {
 
     const loadData = React.useCallback(async () => {
         const now = new Date()
-        const todayFrom = startOfDay(now).toISOString()
-        const todayTo = endOfDay(now).toISOString()
         const leadFilters = selectedDealershipId ? { dealership_id: selectedDealershipId } : {}
 
         try {
             const [
                 statsData,
                 freshData,
-                overdueFuData,
-                todayFuData,
                 todayApptData,
                 upcomingApptData,
                 showroomCurrent,
             ] = await Promise.all([
                 DashboardService.getBdcStats(),
                 LeadService.listLeads({ fresh_only: true, page_size: 8, ...leadFilters }).catch(() => ({ items: [] })),
-                FollowUpService.listFollowUps({ overdue: true, status: "pending", page_size: 8 }).catch(() => ({
-                    items: [],
-                })),
-                FollowUpService.listFollowUps({
-                    status: "pending",
-                    date_from: todayFrom,
-                    date_to: todayTo,
-                    page_size: 8,
-                }).catch(() => ({ items: [] })),
                 AppointmentService.list({ today_only: true, page_size: 10 }).catch(() => ({ items: [] })),
                 AppointmentService.list({ upcoming_only: true, page_size: 3 }).catch(() => ({ items: [] })),
                 ShowroomService.getCurrent().catch(() => ({ count: 0, visits: [] })),
             ])
             const freshItems = freshData.items || []
             setStats(statsData)
-            setFreshLeads(freshItems)
             setFreshLeadsTop(freshItems.slice(0, 5))
-            setOverdueFollowUps(
-                filterByDealership(overdueFuData.items || [], selectedDealershipId, (fu) => fu.assigned_to_user?.dealership_id)
-            )
-            setTodayFollowUps(
-                filterByDealership(todayFuData.items || [], selectedDealershipId, (fu) => fu.assigned_to_user?.dealership_id)
-            )
             setTodayAppointments(
                 filterByDealership(todayApptData.items || [], selectedDealershipId, (a) => a.dealership_id ?? a.dealership?.id)
             )
@@ -461,8 +373,8 @@ export function BdcDashboard() {
                                                                 with {apt.lead.customer.full_name || `${apt.lead.customer.first_name || ""} ${apt.lead.customer.last_name || ""}`.trim()}
                                                             </p>
                                                         )}
-                                                        {apt.dealership?.name && (
-                                                            <p className="text-xs text-muted-foreground truncate">{apt.dealership.name}</p>
+                                                        {(apt.partner_store?.name || apt.lead?.partner_store?.name) && (
+                                                            <p className="text-xs text-muted-foreground truncate">{apt.partner_store?.name || apt.lead?.partner_store?.name}</p>
                                                         )}
                                                     </div>
                                                 </div>
@@ -510,8 +422,8 @@ export function BdcDashboard() {
                                                     </div>
                                                     <div className="min-w-0">
                                                         <p className="font-medium text-sm truncate">{apt.title}</p>
-                                                        {apt.dealership?.name && (
-                                                            <p className="text-xs text-muted-foreground truncate">{apt.dealership.name}</p>
+                                                        {(apt.partner_store?.name || apt.lead?.partner_store?.name) && (
+                                                            <p className="text-xs text-muted-foreground truncate">{apt.partner_store?.name || apt.lead?.partner_store?.name}</p>
                                                         )}
                                                     </div>
                                                 </div>
@@ -581,8 +493,8 @@ export function BdcDashboard() {
                                                     <p className="text-xs text-emerald-600 dark:text-emerald-400">
                                                         {formatDateInTimezone(lead.created_at, timezone, { dateStyle: "medium", timeStyle: "short" })}
                                                     </p>
-                                                    {lead.dealership?.name && (
-                                                        <p className="text-xs text-emerald-600/80">{lead.dealership.name}</p>
+                                                    {lead.partner_store?.name && (
+                                                        <p className="text-xs text-emerald-600/80">{lead.partner_store.name}</p>
                                                     )}
                                                 </div>
                                             </div>
@@ -717,208 +629,23 @@ export function BdcDashboard() {
                 </div>
             </div>
 
-            {/* Work queues — always visible */}
-            <div>
-                <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-                    Work queues
-                </h2>
-                <div className="grid gap-6 xl:grid-cols-3">
-                    <WorkQueueCard
-                        title="Fresh leads"
-                        icon={<Sparkles className="h-5 w-5 text-emerald-600" />}
-                        href="/leads?filter=fresh"
-                        hrefLabel={`All (${freshCount})`}
-                        accentClass="border-emerald-200/80 dark:border-emerald-900"
-                        headerClass="bg-emerald-50/80 dark:bg-emerald-950/40"
-                        emptyMessage="No untouched leads right now."
-                        emptyAction={{ label: "View all leads", href: "/leads" }}
-                    >
-                        {freshLeads.map((lead) => (
-                            <li key={lead.id}>
-                                <Link
-                                    href={`/leads/${lead.id}`}
-                                    className="flex items-start justify-between gap-2 rounded-lg border bg-card p-3 transition-colors hover:border-emerald-300 hover:bg-emerald-50/50 dark:hover:bg-emerald-950/30"
-                                >
-                                    <div className="min-w-0">
-                                        <p className="font-medium text-sm">{getLeadFullName(lead)}</p>
-                                        <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
-                                            {lead.dealership?.name && (
-                                                <span className="inline-flex items-center gap-0.5">
-                                                    <Building2 className="h-3 w-3" />
-                                                    {lead.dealership.name}
-                                                </span>
-                                            )}
-                                            {getLeadPhone(lead) && (
-                                                <span className="inline-flex items-center gap-0.5">
-                                                    <Phone className="h-3 w-3" />
-                                                    {getLeadPhone(lead)}
-                                                </span>
-                                            )}
-                                        </div>
-                                    </div>
-                                    <Badge variant="outline" className="shrink-0 border-emerald-400 text-emerald-700">
-                                        Fresh
-                                    </Badge>
-                                </Link>
-                            </li>
-                        ))}
-                    </WorkQueueCard>
-
-                    <WorkQueueCard
-                        title="Follow-ups"
-                        icon={<ClipboardList className="h-5 w-5 text-purple-600" />}
-                        href="/follow-ups"
-                        hrefLabel="All follow-ups"
-                        accentClass="border-purple-200/80 dark:border-purple-900"
-                        headerClass="bg-purple-50/80 dark:bg-purple-950/40"
-                        emptyMessage="No overdue or due-today follow-ups."
-                        emptyAction={{ label: "Schedule follow-up", href: "/follow-ups" }}
-                    >
-                        {overdueFollowUps.length > 0 && (
-                            <li className="mb-3">
-                                <p className="mb-2 text-xs font-semibold uppercase text-rose-600">Overdue</p>
-                                <ul className="space-y-2">
-                                    {overdueFollowUps.map((fu) => (
-                                        <li key={fu.id}>
-                                            <Link
-                                                href={`/leads/${fu.lead_id}`}
-                                                className="flex items-center justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50/50 p-3 hover:bg-rose-50 dark:border-rose-900 dark:bg-rose-950/30"
-                                            >
-                                                <div className="min-w-0">
-                                                    <p className="font-medium text-sm">{followUpLeadName(fu)}</p>
-                                                    <p className="text-xs text-rose-600">
-                                                        Due{" "}
-                                                        {formatRelativeTimeInTimezone(fu.scheduled_at, timezone)}
-                                                    </p>
-                                                </div>
-                                                <ChevronRight className="h-4 w-4 shrink-0 text-rose-400" />
-                                            </Link>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </li>
-                        )}
-                        {todayFollowUps.length > 0 && (
-                            <li>
-                                <p className="mb-2 text-xs font-semibold uppercase text-purple-600">Due today</p>
-                                <ul className="space-y-2">
-                                    {todayFollowUps.map((fu) => (
-                                        <li key={fu.id}>
-                                            <Link
-                                                href={`/leads/${fu.lead_id}`}
-                                                className="flex items-center justify-between gap-2 rounded-lg border bg-card p-3 hover:border-purple-300 hover:bg-purple-50/50"
-                                            >
-                                                <div className="min-w-0">
-                                                    <p className="font-medium text-sm">{followUpLeadName(fu)}</p>
-                                                    <p className="text-xs text-muted-foreground">
-                                                        {formatDateInTimezone(fu.scheduled_at, timezone, {
-                                                            timeStyle: "short",
-                                                        })}
-                                                    </p>
-                                                </div>
-                                                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                                            </Link>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </li>
-                        )}
-                    </WorkQueueCard>
-
-                    <WorkQueueCard
-                        title="Appointments"
-                        icon={<CalendarClock className="h-5 w-5 text-blue-600" />}
-                        href="/appointments"
-                        hrefLabel="All appointments"
-                        accentClass="border-blue-200/80 dark:border-blue-900"
-                        headerClass="bg-blue-50/80 dark:bg-blue-950/40"
-                        emptyMessage="No appointments today or coming up."
-                        emptyAction={{ label: "Open appointments", href: "/appointments" }}
-                    >
-                        {todayAppointments.length > 0 && (
-                            <li className="mb-3">
-                                <p className="mb-2 text-xs font-semibold uppercase text-blue-600">Today</p>
-                                <ul className="space-y-2">
-                                    {todayAppointments.map((appt) => (
-                                        <li key={appt.id}>
-                                            <Link
-                                                href={appt.lead_id ? `/leads/${appt.lead_id}` : "/appointments"}
-                                                className="flex items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50/50 p-3 hover:bg-blue-50 dark:border-blue-900 dark:bg-blue-950/30"
-                                            >
-                                                <div className="min-w-0 flex items-center gap-3">
-                                                    <span className="text-sm font-bold tabular-nums text-blue-700">
-                                                        {formatDateInTimezone(appt.scheduled_at, timezone, {
-                                                            timeStyle: "short",
-                                                        })}
-                                                    </span>
-                                                    <div>
-                                                        <p className="font-medium text-sm truncate">{appt.title}</p>
-                                                        {appt.dealership?.name && (
-                                                            <p className="text-xs text-muted-foreground truncate">
-                                                                {appt.dealership.name}
-                                                            </p>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                                <Badge variant="outline" className="shrink-0 text-xs">
-                                                    {getAppointmentStatusLabel(appt.status)}
-                                                </Badge>
-                                            </Link>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </li>
-                        )}
-                        {upcomingAppointments.length > 0 && (
-                            <li>
-                                <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Upcoming</p>
-                                <ul className="space-y-2">
-                                    {upcomingAppointments.map((appt) => (
-                                        <li key={appt.id}>
-                                            <Link
-                                                href={appt.lead_id ? `/leads/${appt.lead_id}` : "/appointments"}
-                                                className="flex items-center justify-between gap-2 rounded-lg border bg-card p-3 hover:bg-muted/50"
-                                            >
-                                                <div className="min-w-0">
-                                                    <p className="text-xs text-muted-foreground">
-                                                        {formatDateInTimezone(appt.scheduled_at, timezone, {
-                                                            dateStyle: "short",
-                                                        })}
-                                                    </p>
-                                                    <p className="font-medium text-sm">{appt.title}</p>
-                                                </div>
-                                                <span className="text-sm font-semibold text-primary tabular-nums">
-                                                    {formatDateInTimezone(appt.scheduled_at, timezone, {
-                                                        timeStyle: "short",
-                                                    })}
-                                                </span>
-                                            </Link>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </li>
-                        )}
-                    </WorkQueueCard>
-                </div>
-            </div>
-
             {/* By dealership */}
             {stats.dealerships.length > 0 && (
                 <Card>
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2 text-lg">
-                            <Building2 className="h-5 w-5 text-muted-foreground" />
-                            By dealership
+                            <Store className="h-5 w-5 text-muted-foreground" />
+                            By partner store
                         </CardTitle>
                         <p className="text-sm font-normal text-muted-foreground">
-                            Click any number to open a filtered list for that store.
+                            Leads currently connected to each store, plus follow-ups still open for those leads.
                         </p>
                     </CardHeader>
                     <CardContent className="overflow-x-auto">
                         <Table>
                             <TableHeader>
                                 <TableRow>
-                                    <TableHead>Dealership</TableHead>
+                                    <TableHead>Partner store</TableHead>
                                     <TableHead className="text-right">Total</TableHead>
                                     <TableHead className="text-right">Unassigned</TableHead>
                                     <TableHead className="text-right">Fresh</TableHead>

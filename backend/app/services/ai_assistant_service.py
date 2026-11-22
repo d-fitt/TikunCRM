@@ -21,8 +21,33 @@ from app.models.ai_assistant import AiConversation, AiMessage
 from app.models.lead import Lead
 from app.models.user import User
 from app.core.permissions import UserRole
+from app.services.ai_db_query import SCHEMA as DB_SCHEMA
 
 logger = logging.getLogger(__name__)
+
+QUERY_DATABASE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "query_database",
+        "description": (
+            "Run one read-only PostgreSQL SELECT against the CRM database. "
+            "Use this whenever the answer is a number, a percentage, a list, or anything "
+            "stored in the CRM. Write the SQL yourself from the question. "
+            "If the database returns an error, fix the SQL and call this again. "
+            + DB_SCHEMA
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sql": {
+                    "type": "string",
+                    "description": "A single SELECT (or WITH ... SELECT). No writes.",
+                },
+            },
+            "required": ["sql"],
+        },
+    },
+}
 
 SEARCH_LEADS_TOOL = {
     "type": "function",
@@ -219,6 +244,92 @@ SEARCH_CRM_CONTENT_TOOL = {
     },
 }
 
+CRM_STATS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "crm_stats",
+        "description": (
+            "Count leads, compute a percentage, or average down payment from the database. "
+            "Use this for how many, what percent, conversion rate, and average questions. "
+            "Do not use search_leads or notes for a percentage. "
+            "A stip uploaded means any stip document on the lead or customer (has_stip), "
+            "not only SSN or DL. Converted means outcome=converted, and those leads stay "
+            "in the count even though they are inactive. "
+            "For 'what percent of X are Y', set denominator to X and numerator to X plus Y."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "numerator": {
+                    "type": "object",
+                    "description": "Leads that meet the success condition, e.g. stip uploaded AND converted.",
+                    "properties": {
+                        "has_stip": {"type": "boolean"},
+                        "has_ssn_stip": {"type": "boolean"},
+                        "has_dl_stip": {"type": "boolean"},
+                        "outcome": {
+                            "type": "string",
+                            "enum": ["converted", "lost", "open"],
+                        },
+                        "is_active": {"type": "boolean"},
+                        "is_business": {"type": "boolean"},
+                        "source": {"type": "string"},
+                        "stage": {"type": "string"},
+                        "created_within_days": {"type": "integer"},
+                        "pool": {"type": "string", "enum": ["mine", "unassigned", "all"]},
+                        "down_min": {"type": "number"},
+                        "down_max": {"type": "number"},
+                    },
+                },
+                "denominator": {
+                    "type": "object",
+                    "description": "The comparison group, e.g. everyone with a stip uploaded.",
+                    "properties": {
+                        "has_stip": {"type": "boolean"},
+                        "has_ssn_stip": {"type": "boolean"},
+                        "has_dl_stip": {"type": "boolean"},
+                        "outcome": {
+                            "type": "string",
+                            "enum": ["converted", "lost", "open"],
+                        },
+                        "is_active": {"type": "boolean"},
+                        "is_business": {"type": "boolean"},
+                        "source": {"type": "string"},
+                        "stage": {"type": "string"},
+                        "created_within_days": {"type": "integer"},
+                        "pool": {"type": "string", "enum": ["mine", "unassigned", "all"]},
+                        "down_min": {"type": "number"},
+                        "down_max": {"type": "number"},
+                    },
+                },
+                "filters": {
+                    "type": "object",
+                    "description": "Filters for a single count, a group_by, or an average.",
+                },
+                "counts": {
+                    "type": "array",
+                    "description": "Extra named counts when one percentage is not enough.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "filters": {"type": "object"},
+                        },
+                    },
+                },
+                "group_by": {
+                    "type": "string",
+                    "enum": ["source", "outcome", "stage"],
+                },
+                "average": {
+                    "type": "string",
+                    "enum": ["down_payment"],
+                },
+            },
+        },
+    },
+}
+
 RANK_LEADS_TOOL = {
     "type": "function",
     "function": {
@@ -243,6 +354,7 @@ RANK_LEADS_TOOL = {
 }
 
 ALL_TOOLS = [
+    QUERY_DATABASE_TOOL,
     SEARCH_LEADS_TOOL,
     SEARCH_CRM_CONTENT_TOOL,
     LIST_STAGES_TOOL,
@@ -262,8 +374,9 @@ Role / access (always honor — tools already enforce this):
 - super_admin: all dealerships.
 
 Rules:
-- Use tools to fetch real data. Never invent leads, names, counts, or quotes from notes.
-- "SSN" / "DL" / "driver license" means stip documents on file (has_ssn_stip / has_dl_stip), not storing ID numbers.
+- You are ChatGPT with this CRM's database. When a question needs facts, write a SELECT and call query_database. Use the rows it returns. If it errors, read the error and query again. Never invent a count or a percentage.
+- A salesperson's queries stay on leads assigned to them unless they ask for the whole company. Admins, owners, and BDC can query every lead.
+- "SSN" / "DL" / "driver license" means stip documents on file, not the ID number itself.
 - "Business" / "business customer" maps to is_business (trust-score Business Yes/No).
 - For anything in notes, calls, texts, emails, or "what did they say/mention/want" → use search_crm_content.
 - For pipeline filters (stips, down payment, stage, source) → use search_leads.
@@ -299,6 +412,7 @@ def _system_prompt_for_user(user: User) -> str:
         )
     else:
         extra = f"\nCurrent user role: {role}."
+    extra += f"\nCurrent user id: {user.id}."
     return SYSTEM_PROMPT + extra
 
 
@@ -617,6 +731,10 @@ class AiAssistantService:
             return await actions.propose_follow_ups(db, user, args)
         if name == "rank_leads_to_call":
             return await actions.rank_leads_to_call(db, user, args)
+        if name == "query_database":
+            from app.services.ai_db_query import run_select
+
+            return await run_select(db, str(args.get("sql") or ""))
         return {"error": f"Unknown tool: {name}"}
 
     @staticmethod
@@ -684,7 +802,9 @@ class AiAssistantService:
                 should_auto_retrieve_crm_content,
             )
 
-            if should_auto_retrieve_crm_content(message):
+            from app.services.ai_crm_stats import looks_like_crm_stat
+
+            if should_auto_retrieve_crm_content(message) and not looks_like_crm_stat(message):
                 retrieve_args = {
                     "query": message.strip(),
                     "limit": settings.crm_search_page_size,
@@ -770,7 +890,7 @@ class AiAssistantService:
         pending_confirm: List[dict] = []
         assistant_text = ""
 
-        # Tool loop (max 5 rounds)
+        # Tool loop (max 5 rounds). The model decides when to query.
         for _round in range(5):
             try:
                 completion = await client.chat.completions.create(
@@ -839,6 +959,14 @@ class AiAssistantService:
                             "ranked": result.get("ranked", [])[:10],
                             "filter_params": result.get("filter_params"),
                         }
+                    elif name == "query_database":
+                        sse_result = {
+                            "columns": result.get("columns"),
+                            "row_count": result.get("row_count"),
+                            "truncated": result.get("truncated"),
+                            "rows": (result.get("rows") or [])[:8],
+                            "error": result.get("error"),
+                        }
                     elif name == "search_crm_content":
                         sse_result = {
                             "total": result.get("total"),
@@ -859,6 +987,18 @@ class AiAssistantService:
                             "result": sse_result,
                         },
                     )
+
+                    if name == "query_database" and not result.get("error"):
+                        block = {
+                            "type": "query_result",
+                            "title": "Database",
+                            "columns": result.get("columns") or [],
+                            "rows": (result.get("rows") or [])[:8],
+                            "row_count": result.get("row_count"),
+                            "truncated": result.get("truncated"),
+                        }
+                        ui_blocks.append(block)
+                        yield _sse("ui_block", block)
 
                     if name == "search_leads" and result.get("leads") is not None:
                         block = {
@@ -996,6 +1136,8 @@ def _tool_label(name: str) -> str:
         "update_lead_stages": "Preparing stage change…",
         "create_follow_ups": "Preparing follow-ups…",
         "rank_leads_to_call": "Ranking who to call…",
+        "crm_stats": "Calculating from the database…",
+        "query_database": "Querying the database…",
     }.get(name, f"Running {name}…")
 
 
@@ -1018,4 +1160,10 @@ def _summarize_tool(name: str, result: dict) -> str:
         return f"{len(result.get('salespersons') or [])} people"
     if name == "rank_leads_to_call":
         return f"top {len(result.get('ranked') or [])} prioritized"
+    if name == "crm_stats":
+        return str(result.get("answer") or "calculated")
+    if name == "query_database":
+        if result.get("error"):
+            return f"Query failed: {result['error']}"
+        return f"{result.get('row_count', 0)} row(s) from the database"
     return "done"

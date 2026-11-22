@@ -3,6 +3,7 @@ Twilio Voice Service - WebRTC Softphone Integration
 """
 import logging
 import traceback
+import asyncio
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
 from uuid import UUID
@@ -775,7 +776,7 @@ class VoiceService:
     ) -> Optional[CallLog]:
         """
         Handle recording completion webhook.
-        Downloads recording from Twilio and uploads to Azure.
+        The live webhook copies the file to Azure and then deletes it from Twilio.
         """
         result = await self.db.execute(
             select(CallLog).where(CallLog.twilio_call_sid == call_sid)
@@ -787,8 +788,7 @@ class VoiceService:
             return None
 
         try:
-            # Store Twilio recording URL in DB. Playback uses the proxy endpoint with Twilio auth.
-            # Azure upload is skipped for now to avoid SSL/storage issues; can be re-enabled later.
+            # This method is unused. The recording webhook copies the file to Azure.
             twilio_recording_url = f"{recording_url}.wav"
             call_log.recording_url = twilio_recording_url
             call_log.recording_sid = recording_sid
@@ -1315,6 +1315,99 @@ def get_voice_service(db: AsyncSession) -> VoiceService:
     return VoiceService(db)
 
 
+async def _delete_twilio_recording(account_sid: str, auth_token: str, recording_sid: str) -> bool:
+    """Remove the file from Twilio after our copy is stored. Twilio bills for keeping it."""
+    if not account_sid or not auth_token or not recording_sid:
+        return False
+
+    def _delete() -> None:
+        from twilio.rest import Client
+        Client(account_sid, auth_token).recordings(recording_sid).delete()
+
+    try:
+        await asyncio.to_thread(_delete)
+        logger.info("Deleted Twilio recording %s", recording_sid)
+        return True
+    except Exception:
+        logger.exception("Could not delete Twilio recording %s", recording_sid)
+        return False
+
+
+async def move_twilio_recordings_to_azure(limit: int = 10) -> int:
+    """
+    Copy recordings that still live on Twilio into the call-recordings container,
+    then delete the Twilio copy. Also retries the delete when Azure already has the file.
+    """
+    from app.services.azure_storage_service import azure_storage_service
+
+    if not azure_storage_service.is_configured:
+        logger.warning("Azure storage is not configured, leaving recordings on Twilio")
+        return 0
+
+    engine = create_async_engine(settings.database_url, poolclass=NullPool)
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    moved = 0
+    try:
+        async with async_session() as db:
+            rows = (
+                await db.execute(
+                    select(CallLog)
+                    .where(
+                        CallLog.recording_sid.isnot(None),
+                        or_(
+                            CallLog.recording_url.ilike("%api.twilio.com%"),
+                            CallLog.recording_url.ilike("%blob.core.windows.net%"),
+                        ),
+                    )
+                    .order_by(CallLog.created_at.desc())
+                    .limit(80)
+                )
+            ).scalars().all()
+            pending = [
+                call for call in rows
+                if not (call.meta_data or {}).get("twilio_recording_deleted")
+            ][:limit]
+            for call_log in pending:
+                eff = await get_effective_twilio_config(db, call_log.dealership_id)
+                on_azure = "blob.core.windows.net" in (call_log.recording_url or "")
+                if not on_azure:
+                    filename = f"call_{call_log.twilio_call_sid}_{call_log.recording_sid}.wav"
+                    source = call_log.recording_url or ""
+                    if source and not source.endswith(".wav") and not source.endswith(".mp3"):
+                        source = f"{source}.wav"
+                    try:
+                        azure_url = await azure_storage_service.upload_recording_from_url(
+                            source_url=source,
+                            filename=filename,
+                            auth=(eff.account_sid, eff.auth_token),
+                            metadata={
+                                "call_sid": call_log.twilio_call_sid or "",
+                                "recording_sid": call_log.recording_sid or "",
+                            },
+                        )
+                    except Exception:
+                        logger.exception("Could not copy recording %s to Azure", call_log.recording_sid)
+                        continue
+                    if not azure_url:
+                        continue
+                    call_log.recording_url = azure_url
+                    call_log.recording_upload_status = "completed"
+                deleted = await _delete_twilio_recording(
+                    eff.account_sid, eff.auth_token, call_log.recording_sid or ""
+                )
+                meta = dict(call_log.meta_data or {})
+                meta["twilio_recording_deleted"] = deleted
+                call_log.meta_data = meta
+                await db.commit()
+                if deleted or on_azure:
+                    moved += 1
+    except Exception:
+        logger.exception("Twilio recording move failed")
+    finally:
+        await engine.dispose()
+    return moved
+
+
 async def upload_recording_to_azure_background(
     call_sid: str,
     recording_url: str,
@@ -1398,6 +1491,16 @@ async def upload_recording_to_azure_background(
                     call_log.recording_url = azure_url
                     call_log.recording_upload_status = "completed"
                     logger.info(f"Recording uploaded to Azure: {filename}")
+                    deleted = await _delete_twilio_recording(
+                        eff.account_sid, eff.auth_token, recording_sid
+                    )
+                    meta = dict(call_log.meta_data or {})
+                    meta["twilio_recording_deleted"] = deleted
+                    call_log.meta_data = meta
+                    if not deleted:
+                        logger.warning(
+                            "Recording %s is on Azure but still on Twilio", recording_sid
+                        )
                 else:
                     # Fallback to Twilio URL
                     call_log.recording_url = twilio_wav_url

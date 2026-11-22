@@ -763,6 +763,7 @@ def _build_leads_list_select(
     fresh_only: Optional[bool] = None,
     multi_campaign_only: Optional[bool] = None,
     campaign_mapping_id: Optional[UUID] = None,
+    campaign_mapping_ids: Optional[List[UUID]] = None,
     dealership_id: Optional[UUID] = None,
     down_min: Optional[float] = None,
     down_max: Optional[float] = None,
@@ -853,13 +854,20 @@ def _build_leads_list_select(
     if multi_campaign_only:
         query = query.where(Lead.is_starred.is_(True))
 
-    if campaign_mapping_id is not None:
+    selected_campaign_ids: List[UUID] = []
+    if campaign_mapping_ids:
+        for campaign_id in campaign_mapping_ids:
+            if campaign_id not in selected_campaign_ids:
+                selected_campaign_ids.append(campaign_id)
+    if campaign_mapping_id is not None and campaign_mapping_id not in selected_campaign_ids:
+        selected_campaign_ids.append(campaign_mapping_id)
+    if selected_campaign_ids:
         campaign_lead_subq = select(LeadCampaign.lead_id).where(
-            LeadCampaign.campaign_mapping_id == campaign_mapping_id
+            LeadCampaign.campaign_mapping_id.in_(selected_campaign_ids)
         )
         query = query.where(
             or_(
-                Lead.campaign_mapping_id == campaign_mapping_id,
+                Lead.campaign_mapping_id.in_(selected_campaign_ids),
                 Lead.id.in_(campaign_lead_subq),
             )
         )
@@ -923,6 +931,30 @@ def _apply_arrival_window(query, date_from: Optional[datetime], date_to: Optiona
     return query.where(or_(and_(*created_clauses), and_(*inbound_clauses)))
 
 
+def _parse_campaign_id_list(raw: Optional[str]) -> List[UUID]:
+    """Comma-separated campaign mapping ids from the leads filter."""
+    if not raw or not raw.strip():
+        return []
+    ids: List[UUID] = []
+    seen = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            campaign_id = UUID(part)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid campaign id: {part}",
+            )
+        if campaign_id in seen:
+            continue
+        seen.add(campaign_id)
+        ids.append(campaign_id)
+    return ids
+
+
 def _lead_list_order():
     """Newest arrival first: a duplicate that just came in sorts above its original created date."""
     return func.coalesce(Lead.last_inbound_at, Lead.created_at).desc()
@@ -947,6 +979,10 @@ async def list_leads(
     campaign_mapping_id: Optional[UUID] = Query(
         None,
         description="Leads tied to this campaign (primary campaign or lead_campaigns row)",
+    ),
+    campaign_mapping_ids: Optional[str] = Query(
+        None,
+        description="Comma-separated campaign mapping ids. Leads tied to any of them.",
     ),
     assigned_to: Optional[UUID] = Query(None, description="Filter by salesperson (admin/owner only). Show only leads assigned to this user."),
     bdc_agent_id: Optional[UUID] = Query(None, description="Filter by BDC agent. Show only leads assigned to this BDC agent."),
@@ -997,6 +1033,7 @@ async def list_leads(
         fresh_only=fresh_only,
         multi_campaign_only=multi_campaign_only,
         campaign_mapping_id=campaign_mapping_id,
+        campaign_mapping_ids=_parse_campaign_id_list(campaign_mapping_ids),
         dealership_id=dealership_id,
         down_min=down_min,
         down_max=down_max,
@@ -1217,6 +1254,7 @@ async def list_campaign_filter_options(
             sync_source_name=(
                 (m.sync_source.display_name or m.sync_source.name) if m.sync_source else None
             ),
+            is_active=bool(m.is_active),
         )
         for m in mappings
     ]
@@ -1264,15 +1302,22 @@ async def create_lead(
         if val is not None:
             customer_extra[f] = val
 
-    customer, customer_created = await CustomerService.find_or_create(
-        db,
-        phone=lead_in.phone,
-        email=lead_in.email,
-        first_name=lead_in.first_name,
-        last_name=lead_in.last_name,
-        source=lead_in.source.value if lead_in.source else None,
-        **customer_extra,
-    )
+    try:
+        customer, customer_created = await CustomerService.find_or_create(
+            db,
+            phone=lead_in.phone,
+            email=lead_in.email,
+            first_name=lead_in.first_name,
+            last_name=lead_in.last_name,
+            source=lead_in.source.value if lead_in.source else None,
+            **customer_extra,
+        )
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A customer with this phone or email already exists.",
+        )
 
     # Step 2: check for existing active lead in the same dealership
     active_query = select(Lead).where(
@@ -1339,7 +1384,14 @@ async def create_lead(
         bdc_assigned_to_id=current_user.id if current_user.role == UserRole.BDC else None,
     )
     db.add(lead)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A customer with this phone or email already exists.",
+        )
 
     # Log activity
     lead_name = customer.full_name
@@ -1778,6 +1830,35 @@ def _dedupe_lead_campaign_rows(campaigns: List[LeadCampaign]) -> List[LeadCampai
     return sorted(by_key.values(), key=lambda x: x.added_at, reverse=True)
 
 
+@router.get("/fresh-count")
+async def fresh_lead_count(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Untouched new leads: one activity and no salesperson yet.
+    Same set as the Fresh leads list. Header badge refetches this on websocket events.
+    """
+    accessible_ids = await get_accessible_dealership_ids(db, current_user)
+    fresh_subq = (
+        select(Activity.lead_id)
+        .where(Activity.lead_id.isnot(None))
+        .group_by(Activity.lead_id)
+        .having(func.count(Activity.id) == 1)
+    )
+    query = (
+        select(func.count())
+        .select_from(Lead)
+        .where(
+            Lead.assigned_to.is_(None),
+            Lead.id.in_(fresh_subq),
+        )
+    )
+    query = apply_dealership_scope_to_lead_query(query, accessible_ids, Lead)
+    count = (await db.execute(query)).scalar() or 0
+    return {"count": int(count)}
+
+
 @router.get("/{lead_id}", response_model=LeadDetail)
 async def get_lead(
     lead_id: UUID,
@@ -1810,7 +1891,7 @@ async def get_lead(
         note_activities = notes_result.scalars().all()
         mentioned_ids = set()
         for act in note_activities:
-            ids = act.meta_data.get("mentioned_user_ids") or []
+            ids = (act.meta_data or {}).get("mentioned_user_ids") or []
             mentioned_ids.update(str(i) for i in ids)
         if str(current_user.id) in mentioned_ids:
             access_level = "mention_only"
@@ -1990,32 +2071,58 @@ async def get_lead(
                 "name": dealership.name
             }
 
-    # Partner stores (included in lead detail — no extra client fan-out)
+    # Same stores the leads list shows: each active delivery, plus the legacy sent-to store.
+    from app.models.lead_delivery import RELEASED_STATUSES, LeadDelivery
+
+    sent_store_ids = []
+    for sent_store_id in (
+        await db.execute(
+            select(LeadDelivery.partner_store_id).where(
+                LeadDelivery.lead_id == lead.id,
+                LeadDelivery.status.notin_(list(RELEASED_STATUSES)),
+            )
+        )
+    ).scalars().all():
+        if sent_store_id not in sent_store_ids:
+            sent_store_ids.append(sent_store_id)
+    if getattr(lead, "partner_store_id", None) and lead.partner_store_id not in sent_store_ids:
+        sent_store_ids.append(lead.partner_store_id)
+
     partner_ids = [
         pid for pid in (
-            getattr(lead, "partner_store_id", None),
+            *sent_store_ids,
             getattr(lead, "sold_partner_store_id", None),
         ) if pid
     ]
+    partners = {}
     if partner_ids:
         partner_result = await db.execute(
             select(PartnerStore).where(PartnerStore.id.in_(partner_ids))
         )
         partners = {p.id: p for p in partner_result.scalars().all()}
-        sent = partners.get(lead.partner_store_id) if getattr(lead, "partner_store_id", None) else None
-        if sent:
-            response_data["partner_store"] = {
-                "id": sent.id,
-                "name": sent.name,
-                "brand": sent.brand,
-            }
-        sold = partners.get(lead.sold_partner_store_id) if getattr(lead, "sold_partner_store_id", None) else None
-        if sold:
-            response_data["sold_partner_store"] = {
-                "id": sold.id,
-                "name": sold.name,
-                "brand": sold.brand,
-            }
+    response_data["partner_sends"] = [
+        {"id": partners[store_id].id, "name": partners[store_id].name, "brand": partners[store_id].brand}
+        for store_id in sent_store_ids
+        if store_id in partners
+    ]
+    sent = partners.get(lead.partner_store_id) if getattr(lead, "partner_store_id", None) else None
+    if sent is None and response_data["partner_sends"]:
+        sent = partners.get(response_data["partner_sends"][-1]["id"])
+    if sent:
+        response_data["partner_store"] = {
+            "id": sent.id,
+            "name": sent.name,
+            "brand": sent.brand,
+        }
+        if not response_data.get("partner_store_id"):
+            response_data["partner_store_id"] = sent.id
+    sold = partners.get(lead.sold_partner_store_id) if getattr(lead, "sold_partner_store_id", None) else None
+    if sold:
+        response_data["sold_partner_store"] = {
+            "id": sold.id,
+            "name": sold.name,
+            "brand": sold.brand,
+        }
 
     # Primary campaign mapping (targeting message shown near source on lead detail)
     mapping = None
@@ -2028,7 +2135,7 @@ async def get_lead(
     # Fallback: resolve by source_display / display_name when FK is missing
     if mapping is None:
         meta = lead.meta_data if isinstance(getattr(lead, "meta_data", None), dict) else {}
-        source_label = (meta.get("source_display") or "").strip()
+        source_label = str(meta.get("source_display") or "").strip()
         if source_label:
             fallback_result = await db.execute(
                 select(CampaignMapping)
@@ -2096,7 +2203,7 @@ async def get_lead(
         response_data["campaigns"] = [_campaign_copy(campaign) for campaign in campaigns]
         if response_data["campaigns"]:
             newest = response_data["campaigns"][0]
-            latest_label = (newest.get("display_name") or newest.get("campaign_name") or "").strip()
+            latest_label = str(newest.get("display_name") or newest.get("campaign_name") or "").strip()
             response_data["latest_source_display"] = latest_label or None
 
     from app.services.eligibility_service import EligibilityService
@@ -3243,7 +3350,7 @@ async def add_lead_note(
         note_activities = notes_result.scalars().all()
         mentioned_ids = set()
         for act in note_activities:
-            ids = act.meta_data.get("mentioned_user_ids") or []
+            ids = (act.meta_data or {}).get("mentioned_user_ids") or []
             mentioned_ids.update(str(i) for i in ids)
         if str(current_user.id) not in mentioned_ids:
             raise HTTPException(status_code=403, detail="Not authorized to add notes to this lead")
@@ -3946,6 +4053,9 @@ async def export_leads_csv(
     fresh_only: Optional[bool] = Query(None, description="Only untouched/fresh leads"),
     multi_campaign_only: Optional[bool] = Query(None, description="Only multi-campaign / starred leads"),
     campaign_mapping_id: Optional[UUID] = Query(None, description="Leads tied to this campaign"),
+    campaign_mapping_ids: Optional[str] = Query(
+        None, description="Comma-separated campaign mapping ids"
+    ),
     assigned_to: Optional[UUID] = Query(
         None, description="Filter by assignee (admin/owner/super only)"
     ),
@@ -3997,6 +4107,7 @@ async def export_leads_csv(
         fresh_only=fresh_only,
         multi_campaign_only=multi_campaign_only,
         campaign_mapping_id=campaign_mapping_id,
+        campaign_mapping_ids=_parse_campaign_id_list(campaign_mapping_ids),
         down_min=down_min,
         down_max=down_max,
         has_license=has_license,

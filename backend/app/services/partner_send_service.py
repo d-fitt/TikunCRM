@@ -1,6 +1,7 @@
 """Send one lead to one or more partner stores. A person chooses the stores."""
 import logging
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 from uuid import UUID, uuid4
 
@@ -32,6 +33,24 @@ class SendError(ValueError):
 
 
 @dataclass
+class SendDetails:
+    """Optional details filled in at send time. Blank values are left unchanged."""
+    postal_code: Optional[str] = None
+    email: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    down_payment: Optional[Decimal] = None
+    clear_down_payment: bool = False
+    is_business: Optional[bool] = None
+    clear_business: bool = False
+    has_ssn_stip: Optional[bool] = None
+    has_dl_stip: Optional[bool] = None
+    interested_in: Optional[str] = None
+    interested_brand: Optional[str] = None
+    budget_range: Optional[str] = None
+
+
+@dataclass
 class StoreSendResult:
     partner_store_id: UUID
     partner_store_name: str
@@ -43,11 +62,47 @@ class StoreSendResult:
     email_error: Optional[str] = None
 
 
+def _apply_send_details(lead: Lead, customer: Optional[Customer], details: Optional[SendDetails]) -> None:
+    """Apply only the fields the sender included. A blank value removes it from the email."""
+    if details is None:
+        return
+    if customer is not None and details.postal_code is not None:
+        customer.postal_code = details.postal_code.strip()[:20] or None
+    if customer is not None and details.city is not None:
+        customer.city = details.city.strip()[:100] or None
+    if customer is not None and details.state is not None:
+        customer.state = details.state.strip()[:100] or None
+    if customer is not None and details.email is not None:
+        email = details.email.strip()
+        if email and "@" not in email:
+            raise SendError("Enter a valid email or leave it blank.")
+        customer.email = email[:255] or None
+    if details.interested_in is not None:
+        lead.interested_in = details.interested_in.strip()[:255] or None
+    if details.interested_brand is not None:
+        lead.interested_brand = details.interested_brand.strip()[:100] or None
+    if details.budget_range is not None:
+        lead.budget_range = details.budget_range.strip()[:100] or None
+    if details.down_payment is not None:
+        if details.down_payment < 0:
+            raise SendError("Down payment cannot be negative.")
+        lead.down_payment = details.down_payment
+    if details.clear_down_payment:
+        lead.down_payment = None
+    if details.is_business is not None or details.clear_business:
+        lead.is_business = None if details.clear_business else details.is_business
+    if details.has_ssn_stip is not None:
+        lead.has_ssn_stip = bool(details.has_ssn_stip)
+    if details.has_dl_stip is not None:
+        lead.has_dl_stip = bool(details.has_dl_stip)
+
+
 async def send_lead_to_stores(
     db: AsyncSession,
     lead: Lead,
     store_ids: list[UUID],
     user: User,
+    details: Optional[SendDetails] = None,
 ) -> list[StoreSendResult]:
     wanted = list(dict.fromkeys(store_ids))
     if not wanted:
@@ -99,6 +154,7 @@ async def send_lead_to_stores(
     }
 
     customer = await db.get(Customer, lead.customer_id)
+    _apply_send_details(lead, customer, details)
     pending: list[tuple[StoreSendResult, LeadDelivery]] = []
     newly_sent: list[PartnerStore] = []
     now = utc_now()
@@ -197,60 +253,70 @@ async def send_lead_to_stores(
 
     fresh = [item for item in results if item.status == "sent"]
     if fresh:
-        await _email_stores(fresh, by_id, customer, user, lead)
+        await _email_stores(db, fresh, by_id, customer, user, lead)
     return results
 
 
 async def _email_stores(
+    db: AsyncSession,
     results: list[StoreSendResult],
     stores: dict,
     customer: Optional[Customer],
     user: User,
     lead: Lead,
 ) -> None:
-    from app.services.email_notifier import EmailNotifier
+    import asyncio
 
-    notifier = EmailNotifier()
-    customer_name = customer.full_name if customer else "Customer"
-    phone = customer.phone if customer else ""
-    email = customer.email if customer else ""
-    sender = f"{user.first_name} {user.last_name}".strip() or user.email
-    interest = lead.interested_in or ""
+    from app.services.partner_lead_email import (
+        build_partner_lead_email,
+        resolve_delivery_mailbox,
+        send_partner_lead_email_sync,
+    )
+
+    mailbox = await resolve_delivery_mailbox(db)
+    if not mailbox.ready:
+        for item in results:
+            if item.recipients:
+                item.email_error = "The lead was saved. The lead-delivery mailbox is not configured yet."
+            else:
+                item.email_error = "This store has no recipient emails."
+        return
 
     for item in results:
         if not item.recipients:
             item.email_error = "This store has no recipient emails."
             continue
         store = stores[item.partner_store_id]
-        opt_in = "Leads + BDC" if item.program_type == "full_bdc" else "Leads only"
-        message = (
-            f"A lead was sent to {store.name}.\n\n"
-            f"Customer: {customer_name}\n"
-            f"Phone: {phone or '—'}\n"
-            f"Email: {email or '—'}\n"
-            f"Interested in: {interest or '—'}\n"
-            f"Sent by: {sender}\n"
-            f"Opt-in: {opt_in}"
+        subject, body_text, body_html = build_partner_lead_email(
+            store=store,
+            customer=customer,
+            user=user,
+            lead=lead,
+            program_type=item.program_type,
+            sent_at=lead.partner_connected_at,
+            from_name=mailbox.from_name,
         )
         emailed = []
         errors = []
         for address in item.recipients:
             try:
-                ok = await notifier.send_notification_email(
-                    to_email=address,
-                    to_name=store.name,
-                    subject=f"New lead for {store.name}",
-                    message=message,
+                ok, reason = await asyncio.to_thread(
+                    send_partner_lead_email_sync,
+                    mailbox,
+                    address,
+                    subject,
+                    body_text,
+                    body_html,
                 )
                 if ok:
                     emailed.append(address)
                 else:
-                    errors.append(address)
+                    errors.append(reason or "The lead was saved. Email could not be sent.")
             except Exception:
                 logger.exception("Partner lead email failed for %s", address)
-                errors.append(address)
+                errors.append("The lead was saved. Email could not be sent.")
         item.emailed = emailed
         if errors and not emailed:
-            item.email_error = "The lead was saved. Email could not be sent."
+            item.email_error = errors[0]
         elif errors:
             item.email_error = "The lead was saved. Some recipient emails could not be sent."

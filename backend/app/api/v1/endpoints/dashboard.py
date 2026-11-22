@@ -1,11 +1,11 @@
 """
 Dashboard Intelligence Endpoints
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select, func, and_, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
@@ -21,10 +21,14 @@ from app.models.lead import Lead, LeadSource
 from app.models.lead_stage import LeadStage
 from app.services.lead_stage_service import LeadStageService
 from app.models.dealership import Dealership
+from app.models.partner_store import PartnerStore
 from app.models.user import User
 from app.models.activity import Activity
 from app.models.follow_up import FollowUp, FollowUpStatus
 from app.models.appointment import Appointment, AppointmentStatus
+from app.services.bdc_attention_service import claim_lead_for_call, drop_lead_from_snapshot, snapshot_view
+from app.services.bdc_work_queue_service import WorkQueueError, apply_disposition
+from app.tasks.bdc_attention import run_shared_bdc_attention
 
 router = APIRouter()
 
@@ -145,6 +149,43 @@ class LeadsByStatus(BaseModel):
     status: str
     count: int
     percentage: float
+
+
+class BdcWorkQueueItem(BaseModel):
+    lead_id: UUID
+    rank: int
+    customer_name: str
+    phone: Optional[str] = None
+    store_name: Optional[str] = None
+    priority_band: str
+    priority_score: int
+    reason: str
+    why: Optional[str] = None
+    ask: Optional[str] = None
+    action: str
+    note_preview: Optional[str] = None
+    chips: List[str] = []
+    last_outcome: Optional[str] = None
+    attempts_today: int = 0
+
+
+class BdcWorkQueueResponse(BaseModel):
+    items: List[BdcWorkQueueItem]
+    ranked_by: str = "ai"
+    status: str = "empty"
+    generated_at: Optional[datetime] = None
+    scanned_count: int = 0
+    attention_count: int = 0
+    progress_done: int = 0
+    progress_total: int = 0
+    progress_label: Optional[str] = None
+    error: Optional[str] = None
+    model: Optional[str] = None
+
+
+class BdcWorkQueueDisposition(BaseModel):
+    outcome: Literal["no_answer", "voicemail", "spoke", "not_now"]
+    timezone: str = "America/New_York"
 
 
 @router.get("/super-admin/stats", response_model=SuperAdminStats)
@@ -554,7 +595,7 @@ async def get_bdc_stats(
             dealerships=[],
         )
 
-    cache_key = f"dash:bdc:{current_user.id}:{_scope_cache_key(accessible_ids)}"
+    cache_key = f"dash:bdc:stores:{current_user.id}:{_scope_cache_key(accessible_ids)}"
     cached = await cache_get(cache_key)
     if cached is not None:
         return BdcStats(**cached)
@@ -637,33 +678,26 @@ async def get_bdc_stats(
     ) = [n or 0 for n in counts]
     conversion_rate = (converted_leads / total_leads * 100) if total_leads > 0 else 0
 
-    if accessible_ids is None:
-        dealer_rows = await db.execute(
-            select(Dealership.id, Dealership.name)
-            .where(Dealership.is_active == True)
-            .order_by(Dealership.name)
-        )
-    else:
-        dealer_rows = await db.execute(
-            select(Dealership.id, Dealership.name)
-            .where(Dealership.id.in_(accessible_ids))
-            .order_by(Dealership.name)
-        )
-    dealers = {did: dname for did, dname in dealer_rows.fetchall()}
-    dealer_ids = list(dealers.keys())
+    store_rows = await db.execute(
+        select(PartnerStore.id, PartnerStore.name)
+        .where(PartnerStore.is_active.is_(True))
+        .order_by(PartnerStore.name)
+    )
+    stores = {store_id: store_name for store_id, store_name in store_rows.fetchall()}
+    store_ids = list(stores.keys())
 
     lead_agg_map: dict = {}
     overdue_map: dict = {}
     today_fu_map: dict = {}
 
-    if dealer_ids:
-        lead_agg_clauses = [Lead.dealership_id.in_(dealer_ids)]
+    if store_ids:
+        lead_agg_clauses = [Lead.partner_store_id.in_(store_ids)]
         if lead_scope is not None:
             lead_agg_clauses.append(lead_scope)
 
         lead_agg_result = await db.execute(
             select(
-                Lead.dealership_id,
+                Lead.partner_store_id,
                 func.count().label("total"),
                 func.count().filter(Lead.assigned_to.is_(None)).label("unassigned"),
                 func.count().filter(
@@ -671,46 +705,46 @@ async def get_bdc_stats(
                 ).label("fresh"),
             )
             .where(and_(*lead_agg_clauses))
-            .group_by(Lead.dealership_id)
+            .group_by(Lead.partner_store_id)
         )
-        lead_agg_map = {row.dealership_id: row for row in lead_agg_result.all()}
+        lead_agg_map = {row.partner_store_id: row for row in lead_agg_result.all()}
 
         fu_clauses = [
             FollowUp.status == FollowUpStatus.PENDING,
-            Lead.dealership_id.in_(dealer_ids),
+            Lead.partner_store_id.in_(store_ids),
         ]
         if lead_scope is not None:
             fu_clauses.append(lead_scope)
 
         fu_overdue_result = await db.execute(
-            select(Lead.dealership_id, func.count().label("cnt"))
+            select(Lead.partner_store_id, func.count().label("cnt"))
             .select_from(FollowUp)
             .join(Lead, FollowUp.lead_id == Lead.id)
             .where(and_(*fu_clauses, FollowUp.scheduled_at < now))
-            .group_by(Lead.dealership_id)
+            .group_by(Lead.partner_store_id)
         )
-        overdue_map = {row.dealership_id: row.cnt for row in fu_overdue_result.all()}
+        overdue_map = {row.partner_store_id: row.cnt for row in fu_overdue_result.all()}
 
         fu_today_result = await db.execute(
-            select(Lead.dealership_id, func.count().label("cnt"))
+            select(Lead.partner_store_id, func.count().label("cnt"))
             .select_from(FollowUp)
             .join(Lead, FollowUp.lead_id == Lead.id)
             .where(and_(*fu_clauses, func.date(FollowUp.scheduled_at) == today))
-            .group_by(Lead.dealership_id)
+            .group_by(Lead.partner_store_id)
         )
-        today_fu_map = {row.dealership_id: row.cnt for row in fu_today_result.all()}
+        today_fu_map = {row.partner_store_id: row.cnt for row in fu_today_result.all()}
 
     breakdown = []
-    for did, dname in sorted(dealers.items(), key=lambda item: item[1]):
-        agg = lead_agg_map.get(did)
+    for store_id, store_name in sorted(stores.items(), key=lambda item: item[1]):
+        agg = lead_agg_map.get(store_id)
         breakdown.append(
             BdcDealershipBreakdown(
-                id=did,
-                name=dname,
+                id=store_id,
+                name=store_name,
                 total_leads=agg.total if agg else 0,
                 unassigned_leads=agg.unassigned if agg else 0,
-                overdue_follow_ups=overdue_map.get(did, 0),
-                todays_follow_ups=today_fu_map.get(did, 0),
+                overdue_follow_ups=overdue_map.get(store_id, 0),
+                todays_follow_ups=today_fu_map.get(store_id, 0),
                 fresh_leads=agg.fresh if agg else 0,
             )
         )
@@ -730,6 +764,65 @@ async def get_bdc_stats(
     )
     await cache_set(cache_key, result.model_dump(mode="json"), _DASHBOARD_TTL)
     return result
+
+
+@router.get("/bdc/work-queue", response_model=BdcWorkQueueResponse)
+async def get_bdc_work_queue(
+    dealership_id: Optional[UUID] = None,
+    tz: str = "America/New_York",
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_role(UserRole.BDC)),
+) -> Any:
+    """Saved morning attention list. The model runs on the daily job or a manual recheck."""
+    payload = await snapshot_view(db, current_user, dealership_id)
+    return BdcWorkQueueResponse(**payload)
+
+
+@router.post("/bdc/work-queue/refresh", response_model=BdcWorkQueueResponse)
+async def refresh_bdc_work_queue(
+    background: BackgroundTasks,
+    dealership_id: Optional[UUID] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_role(UserRole.BDC)),
+) -> Any:
+    """Recheck every lead once. Every BDC sees the list this builds."""
+    background.add_task(run_shared_bdc_attention)
+    payload = await snapshot_view(db, current_user, dealership_id)
+    payload["status"] = "running"
+    return BdcWorkQueueResponse(**payload)
+
+
+@router.post("/bdc/work-queue/{lead_id}/claim", response_model=BdcWorkQueueResponse)
+async def claim_bdc_work_queue_lead(
+    lead_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_role(UserRole.BDC)),
+) -> Any:
+    """Remove this lead from the shared list the moment a BDC starts the call."""
+    ok = await claim_lead_for_call(db, current_user, lead_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail="Another person already started this call")
+    payload = await snapshot_view(db, current_user, None)
+    return BdcWorkQueueResponse(**payload)
+
+
+@router.post("/bdc/work-queue/{lead_id}/disposition", response_model=BdcWorkQueueResponse)
+async def post_bdc_work_queue_disposition(
+    lead_id: UUID,
+    body: BdcWorkQueueDisposition,
+    dealership_id: Optional[UUID] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_role(UserRole.BDC)),
+) -> Any:
+    """Log the call outcome, schedule the next touch, and return the new list."""
+    try:
+        await apply_disposition(db, current_user, lead_id, body.outcome, body.timezone)
+    except WorkQueueError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    await drop_lead_from_snapshot(db, lead_id)
+    await db.commit()
+    payload = await snapshot_view(db, current_user, dealership_id)
+    return BdcWorkQueueResponse(**payload)
 
 
 @router.get("/stats")

@@ -83,6 +83,8 @@ class PartnerStoreResponse(BaseModel):
     updated_at: Any
     program_type: Optional[str] = None
     program_status: Optional[str] = None
+    leads_sent: int = 0
+    leads_sent_this_month: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -131,6 +133,9 @@ async def list_partner_stores(
             )
         ).scalars().all()
         programs = {row.partner_store_id: row for row in program_rows}
+    from app.services.partner_dashboard_service import active_send_counts
+
+    send_counts = await active_send_counts(db, [store.id for store in stores])
     items = []
     for store in stores:
         item = PartnerStoreResponse.model_validate(store)
@@ -138,6 +143,9 @@ async def list_partner_stores(
         if program is not None and program.status != "cancelled":
             item.program_type = program.program_type
             item.program_status = program.status
+        active, this_month = send_counts.get(store.id, (0, 0))
+        item.leads_sent = active
+        item.leads_sent_this_month = this_month
         items.append(item)
     return PartnerStoreListResponse(items=items, total=len(items))
 
@@ -157,6 +165,66 @@ async def list_brands(
     return [row[0] for row in result.all()]
 
 
+class StoreDriveTime(BaseModel):
+    id: UUID
+    name: str
+    city: Optional[str] = None
+    miles: int
+    minutes: int
+
+
+class DriveTimesResponse(BaseModel):
+    postal_code: str
+    place: Optional[str] = None
+    stores: List[StoreDriveTime]
+
+
+@router.get("/drive-times", response_model=DriveTimesResponse)
+async def store_drive_times(
+    postal_code: str = Query(..., min_length=5, max_length=20),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Driving time from this ZIP to each store's street address."""
+    import httpx
+
+    from app.services.zip_distance import driving_leg, locate, lookup_zip, store_location_query, zip5
+
+    origin_code = zip5(postal_code)
+    if origin_code is None:
+        raise HTTPException(status_code=400, detail="Enter a 5-digit ZIP code")
+    place = await lookup_zip(origin_code)
+    stores = list(
+        (await db.execute(select(PartnerStore).where(PartnerStore.is_active.is_(True)))).scalars().all()
+    )
+    timed: List[StoreDriveTime] = []
+    async with httpx.AsyncClient(timeout=8) as client:
+        origin = await locate(client, f"{origin_code}, USA", postal_fallback=origin_code)
+        for store in stores:
+            query = store_location_query(store.address, store.city, store.state, store.postal_code)
+            if origin is None or not query:
+                continue
+            dest = await locate(client, query, postal_fallback=store.postal_code)
+            if dest is None:
+                continue
+            miles, minutes = await driving_leg(client, (origin[0], origin[1]), (dest[0], dest[1]))
+            timed.append(
+                StoreDriveTime(
+                    id=store.id,
+                    name=store.name,
+                    city=store.city,
+                    miles=miles,
+                    minutes=minutes,
+                )
+            )
+    timed.sort(key=lambda row: (row.minutes, row.name))
+    return DriveTimesResponse(
+        postal_code=origin_code,
+        place=place[2] if place else None,
+        stores=timed,
+    )
+
+
 @router.get("/{store_id}", response_model=PartnerStoreResponse)
 async def get_partner_store(
     store_id: UUID,
@@ -170,7 +238,13 @@ async def get_partner_store(
     store = result.scalar_one_or_none()
     if not store:
         raise HTTPException(status_code=404, detail="Partner store not found")
-    return store
+    from app.services.partner_dashboard_service import active_send_counts
+
+    item = PartnerStoreResponse.model_validate(store)
+    active, this_month = (await active_send_counts(db, [store.id])).get(store.id, (0, 0))
+    item.leads_sent = active
+    item.leads_sent_this_month = this_month
+    return item
 
 
 def _store_payload(data: dict) -> dict:

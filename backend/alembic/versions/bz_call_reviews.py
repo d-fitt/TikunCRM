@@ -1,7 +1,7 @@
 """AI call reviews: rubrics, reviews (transcripts), evaluations.
 
 Revision ID: bz_call_reviews
-Revises: by_partner_store_profile
+Revises: cd_bdc_attention_progress
 """
 import json
 import uuid
@@ -13,7 +13,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "bz_call_reviews"
-down_revision: Union[str, None] = "by_partner_store_profile"
+down_revision: Union[str, None] = "cd_bdc_attention_progress"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -142,7 +142,7 @@ export function AssignPartnerStore({
                 onValueChange={handleChange}
                 disabled={disabled || saving || stores.length === 0}
             >
-                <SelectTrigger className={cn("min-w-0", compact ? "h-8 w-[190px]" : "h-9")}>
+                <SelectTrigger className={cn("min-w-0", compact ? "h-8 w-[230px]" : "h-9")}>
                     <div className="flex items-center gap-1.5 min-w-0">
                         {saving ? (
                             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
@@ -165,6 +165,7 @@ export function AssignPartnerStore({
                         <SelectItem key={store.id} value={store.id}>
                             {store.name}
                             {store.brand ? ` (${store.brand})` : ""}
+                            {` · ${store.leads_sent ?? 0} sent`}
                         </SelectItem>
                     ))}
                 </SelectContent>

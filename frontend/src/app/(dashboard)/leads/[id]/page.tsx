@@ -107,6 +107,7 @@ import { LogContactModal } from "@/components/leads/log-contact-modal"
 import { StageStepper } from "@/components/leads/stage-stepper"
 import { NextBestAction } from "@/components/leads/next-best-action"
 import { NoteReminders } from "@/components/leads/note-reminders"
+import { LeadStoreDrive } from "@/components/leads/lead-store-drive"
 import { getCustomerFullName } from "@/services/customer-service"
 import { EmailComposerModal } from "@/components/emails/email-composer-modal"
 import { ScheduleFollowUpModal } from "@/components/follow-ups/schedule-follow-up-modal"
@@ -116,7 +117,7 @@ import { EligibilityPanel } from "@/components/eligibility/eligibility-panel"
 import { TrustScoreBadge } from "@/components/eligibility/trust-score-badge"
 import { GuestFormModal } from "@/components/guests/guest-form-modal"
 import { LeadCreditAppForm } from "@/components/credit-app/lead-credit-app-form"
-import { AppointmentService, Appointment, AppointmentStatus, getAppointmentStatusLabel, getAppointmentStatusColor, isAppointmentStatusTerminal, getLinkableAppointmentsForCheckIn } from "@/services/appointment-service"
+import { AppointmentService, Appointment, AppointmentStatus, getAppointmentStatusLabel, getAppointmentStatusColor, isAppointmentStatusTerminal, getLinkableAppointmentsForCheckIn, appointmentStoreLabel } from "@/services/appointment-service"
 import { FollowUpService, FollowUp, FOLLOW_UP_STATUS_INFO } from "@/services/follow-up-service"
 import { StipsService, StipsCategory, StipDocument } from "@/services/stips-service"
 import { useLeadUpdateEvents, useActivityEvents, useWebSocketEvent } from "@/hooks/use-websocket"
@@ -285,7 +286,7 @@ function LeadScheduledAppointmentQuickPanel({
     return (
         <div className="space-y-3">
             <div>
-                <p className="font-medium text-foreground">{appointment.title}</p>
+                <p className="font-medium text-foreground">{typeof appointment.title === "string" && appointment.title ? appointment.title : "Appointment"}</p>
                 <p className="text-sm text-muted-foreground mt-0.5">
                     <DealershipTime
                         date={appointment.scheduled_at}
@@ -446,7 +447,7 @@ function LeadAppointmentRescheduleForm({
 
 function LeadCampaignHistoryPanel({ lead, campaigns }: { lead: Lead; campaigns: LeadCampaign[] }) {
     const fromSource = String(lead.source ?? "").replace(/_/g, " ").trim()
-    const originalLabel = lead.source_display?.trim() || fromSource || "—"
+    const originalLabel = (typeof lead.source_display === "string" ? lead.source_display.trim() : "") || fromSource || "—"
     const originalDate =
         lead.created_at != null && lead.created_at !== ""
             ? new Date(lead.created_at).toLocaleDateString()
@@ -475,11 +476,11 @@ function LeadCampaignHistoryPanel({ lead, campaigns }: { lead: Lead; campaigns: 
                             <span className="font-medium text-left break-words">
                                 {campaign.display_name ?? campaign.campaign_name}
                             </span>
-                            {campaign.targeting_message?.trim() && (
-                                <p className="text-xs text-muted-foreground mt-0.5 whitespace-pre-wrap">
-                                    {campaign.targeting_message.trim()}
+                            {typeof campaign.targeting_message === "string" && campaign.targeting_message.trim() ? (
+                                <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                                    {campaign.targeting_message.trim().replace(/\s+/g, " ")}
                                 </p>
-                            )}
+                            ) : null}
                         </div>
                         <span className="text-xs text-muted-foreground shrink-0">
                             {new Date(campaign.added_at).toLocaleDateString()}
@@ -598,7 +599,8 @@ export default function LeadDetailsPage() {
     // Timeline lens: filter the unified timeline by channel
     const [timelineLens, setTimelineLens] = React.useState<"all" | "calls" | "emails" | "messages" | "notes" | "stages">("all")
     const lensedActivities = React.useMemo(() => {
-        const visible = activities.filter((a) => !/^Lead delivered to /i.test(a.description || ""))
+        const rows = Array.isArray(activities) ? activities : []
+        const visible = rows.filter((a) => !/^Lead delivered to /i.test(typeof a.description === "string" ? a.description : ""))
         if (timelineLens === "all") return visible
         return visible.filter((a) => {
             if (timelineLens === "calls") return a.type === "call_logged"
@@ -612,7 +614,8 @@ export default function LeadDetailsPage() {
     }, [activities, timelineLens])
     const hasBeenContacted = React.useMemo(() => {
         if (lead?.first_contacted_at || lead?.last_contacted_at) return true
-        return activities.some((a) =>
+        const rows = Array.isArray(activities) ? activities : []
+        return rows.some((a) =>
             ["call_logged", "email_sent", "sms_sent", "whatsapp_sent"].includes(a.type)
         )
     }, [lead, activities])
@@ -750,7 +753,7 @@ export default function LeadDetailsPage() {
         setIsLoadingActivities(true)
         try {
             const data = await ActivityService.getLeadTimeline(leadId)
-            setActivities(data.items)
+            setActivities(Array.isArray(data?.items) ? data.items : [])
         } catch (error) {
             console.error("Failed to fetch activities:", error)
         } finally {
@@ -783,8 +786,8 @@ export default function LeadDetailsPage() {
                 AppointmentService.list({ lead_id: leadId, page_size: 100 }),
                 FollowUpService.listFollowUps({ lead_id: leadId }).catch(() => ({ items: [], total: 0, page: 1, page_size: 100, total_pages: 0, stats: null })),
             ])
-            setLeadAppointments(appointmentsRes.items)
-            setLeadFollowUps(followUpsRes.items)
+            setLeadAppointments(Array.isArray(appointmentsRes?.items) ? appointmentsRes.items : [])
+            setLeadFollowUps(Array.isArray(followUpsRes?.items) ? followUpsRes.items : [])
         } catch (error) {
             console.error("Failed to fetch appointments/follow-ups:", error)
         } finally {
@@ -825,7 +828,9 @@ export default function LeadDetailsPage() {
         const overdueApt: Appointment[] = []
         const pastApt: Appointment[] = []
         let aptTodayOverdue = false
-        leadAppointments.forEach((a) => {
+        const appointmentRows = Array.isArray(leadAppointments) ? leadAppointments : []
+        appointmentRows.forEach((a) => {
+            if (!a?.scheduled_at) return
             const d = toDate(a.scheduled_at)
             if (isNaN(d.getTime())) return
             const isActive = ACTIVE_APPOINTMENT_STATUSES.includes(a.status as typeof ACTIVE_APPOINTMENT_STATUSES[number])
@@ -861,8 +866,9 @@ export default function LeadDetailsPage() {
         const overdueFu: FollowUp[] = []
         const pastFu: FollowUp[] = []
         let fuTodayOverdue = false
-        leadFollowUps.forEach((f) => {
-            if (f.status === "cancelled") return
+        const followUpRows = Array.isArray(leadFollowUps) ? leadFollowUps : []
+        followUpRows.forEach((f) => {
+            if (!f?.scheduled_at || f.status === "cancelled") return
             const d = toDate(f.scheduled_at)
             if (isNaN(d.getTime())) return
             if (isSameDay(d)) {
@@ -2204,13 +2210,14 @@ export default function LeadDetailsPage() {
     const latestCampaign = dedupedCampaigns[0]
     const sourceLabel = leadVisibleSource(lead)
     const campaignDisplay = sourceLabel
+    const messageText = (value: unknown) => (typeof value === "string" ? value.trim() : "")
     const primaryTargeting =
-        latestCampaign?.targeting_message?.trim()
-        || (latestCampaign ? "" : lead.campaign_mapping?.targeting_message?.trim() || "")
-    const extraTargeting = (lead.campaigns || [])
+        messageText(latestCampaign?.targeting_message)
+        || (latestCampaign ? "" : messageText(lead.campaign_mapping?.targeting_message))
+    const extraTargeting = (Array.isArray(lead.campaigns) ? lead.campaigns : [])
         .map((c) => ({
-            label: c.display_name || c.campaign_name,
-            message: c.targeting_message?.trim() || "",
+            label: c.display_name || c.campaign_name || "Campaign",
+            message: messageText(c.targeting_message),
         }))
         .filter((c) => c.message && c.message !== primaryTargeting)
 
@@ -2223,7 +2230,7 @@ export default function LeadDetailsPage() {
                     Back to Leads
                 </Link>
                 <div className="flex items-start gap-2 min-w-0 flex-wrap justify-end">
-                    <div className="inline-flex flex-col items-start min-w-0 max-w-[min(100%,18rem)] sm:max-w-[min(100%,28rem)]">
+                    <div className="inline-flex flex-col items-end min-w-0 max-w-[min(100%,16rem)] sm:max-w-[20rem]">
                         <Badge
                             variant={getSourceVariant(lead.source)}
                             className="max-w-full truncate"
@@ -2231,17 +2238,36 @@ export default function LeadDetailsPage() {
                         >
                             {campaignDisplay || sourceLabel || "—"}
                         </Badge>
-                        <p className="mt-1 text-xs sm:text-sm text-foreground/80 whitespace-pre-wrap leading-snug line-clamp-3 sm:line-clamp-none">
-                            {primaryTargeting || "no special targeting available"}
-                        </p>
-                        {extraTargeting.map((item) => (
-                            <p
-                                key={item.label}
-                                className="mt-0.5 text-sm text-foreground/70 whitespace-pre-wrap leading-snug"
-                            >
-                                <span className="font-medium">{item.label}:</span> {item.message}
-                            </p>
-                        ))}
+                        {primaryTargeting && (
+                            <Popover>
+                                <PopoverTrigger asChild>
+                                    <button
+                                        type="button"
+                                        className="mt-1 max-w-full text-right text-xs leading-snug text-muted-foreground line-clamp-2 hover:text-foreground"
+                                    >
+                                        {primaryTargeting.replace(/\s+/g, " ")}
+                                    </button>
+                                </PopoverTrigger>
+                                <PopoverContent align="end" className="w-[min(100vw-2rem,22rem)] p-3">
+                                    <p className="text-xs font-medium text-foreground">{campaignDisplay || "Campaign message"}</p>
+                                    <p className="mt-1 max-h-48 overflow-y-auto text-sm leading-snug text-muted-foreground whitespace-pre-wrap">
+                                        {primaryTargeting}
+                                    </p>
+                                    {extraTargeting.length > 0 && (
+                                        <div className="mt-3 space-y-2 border-t border-border/70 pt-3">
+                                            {extraTargeting.map((item) => (
+                                                <div key={item.label}>
+                                                    <p className="text-xs font-medium text-foreground">{item.label}</p>
+                                                    <p className="mt-0.5 max-h-32 overflow-y-auto text-sm leading-snug text-muted-foreground whitespace-pre-wrap">
+                                                        {item.message}
+                                                    </p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </PopoverContent>
+                            </Popover>
+                        )}
                     </div>
                     <span className="hidden sm:inline text-xs text-muted-foreground whitespace-nowrap pt-0.5">
                         Created <LocalTime date={lead.created_at} />
@@ -2359,6 +2385,14 @@ export default function LeadDetailsPage() {
                                     )}
                                 </h1>
                                 
+                                <LeadStoreDrive
+                                    postalCode={lead.customer?.postal_code}
+                                    onSave={isMentionOnly ? undefined : async (postalCode) => {
+                                        await LeadService.updateLead(lead.id, { postal_code: postalCode })
+                                        await fetchLead()
+                                    }}
+                                />
+
                                 {/* Multi-campaign summary — full list in popover (hover or click) */}
                                 {lead.is_starred && dedupedCampaigns.length > 0 && (
                                     <Popover modal={false} open={campaignPanelOpen} onOpenChange={setCampaignPanelOpen}>
@@ -2691,6 +2725,13 @@ export default function LeadDetailsPage() {
                             <LeadDeliveries
                                 leadId={lead.id}
                                 canManage={Boolean(!isMentionOnly && canConnectToPartner)}
+                                knownStores={
+                                    lead.partner_sends?.length
+                                        ? lead.partner_sends
+                                        : lead.partner_store
+                                          ? [lead.partner_store]
+                                          : []
+                                }
                                 onStoresChange={setSentPartnerStoreIds}
                             />
 
@@ -2794,7 +2835,7 @@ export default function LeadDetailsPage() {
                                                         {lead.assigned_to_user.role === 'dealership_owner' ? 'Owner' : 
                                                          lead.assigned_to_user.role === 'dealership_admin' ? 'Admin' : 
                                                          lead.assigned_to_user.role === 'salesperson' ? 'Sales' : 
-                                                         lead.assigned_to_user.role.replace('_', ' ')}
+                                                         String(lead.assigned_to_user.role ?? "").replace(/_/g, " ")}
                                                     </Badge>
                                                 </div>
                                             </div>
@@ -2818,7 +2859,7 @@ export default function LeadDetailsPage() {
                                                             {lead.secondary_salesperson.role === 'dealership_owner' ? 'Owner' : 
                                                              lead.secondary_salesperson.role === 'dealership_admin' ? 'Admin' : 
                                                              lead.secondary_salesperson.role === 'salesperson' ? 'Sales' : 
-                                                             lead.secondary_salesperson.role.replace('_', ' ')}
+                                                             String(lead.secondary_salesperson.role ?? "").replace(/_/g, " ")}
                                                         </Badge>
                                                     </div>
                                                 </div>
@@ -3473,7 +3514,9 @@ export default function LeadDetailsPage() {
                                                             Appointment scheduled
                                                         </span>
                                                         <span className="block text-xs text-muted-foreground truncate">
-                                                            {nextScheduledAppointment.title} ·{" "}
+                                                            {typeof nextScheduledAppointment.title === "string" && nextScheduledAppointment.title
+                                                                ? nextScheduledAppointment.title
+                                                                : "Appointment"} ·{" "}
                                                             <DealershipTime
                                                                 date={nextScheduledAppointment.scheduled_at}
                                                                 dealershipId={nextScheduledAppointment.dealership_id || lead.dealership_id}
@@ -3744,14 +3787,14 @@ export default function LeadDetailsPage() {
                                                         <div>
                                                             <p className="text-sm font-medium">
                                                                 {activity.type === "lead_updated"
-                                                                    ? activity.description
-                                                                    : (ACTIVITY_TYPE_INFO[activity.type]?.label || activity.type.replace('_', ' '))}
+                                                                    ? (typeof activity.description === "string" ? activity.description : "")
+                                                                    : (ACTIVITY_TYPE_INFO[activity.type]?.label || String(activity.type || "Activity").replace(/_/g, " "))}
                                                             </p>
-                                                            {activity.type !== "lead_updated" && !hideOutreachDescription && (
+                                                            {activity.type !== "lead_updated" && !hideOutreachDescription && typeof activity.description === "string" && activity.description ? (
                                                                 <p className="text-xs text-muted-foreground">
                                                                     {activity.description}
                                                                 </p>
-                                                            )}
+                                                            ) : null}
                                                             {activity.user && !isUnansweredCall && (
                                                                 <p className="text-xs text-muted-foreground mt-1">
                                                                     by {activity.user.first_name} {activity.user.last_name}
@@ -4103,6 +4146,7 @@ export default function LeadDetailsPage() {
                                                     <TableHeader>
                                                         <TableRow>
                                                             <TableHead>Title</TableHead>
+                                                            <TableHead>Store</TableHead>
                                                             <TableHead>Date & time</TableHead>
                                                             <TableHead>Status</TableHead>
                                                             <TableHead className="text-right">Actions</TableHead>
@@ -4112,6 +4156,9 @@ export default function LeadDetailsPage() {
                                                         {appointmentsToday.map((apt) => (
                                                             <TableRow key={apt.id}>
                                                                 <TableCell className="font-medium">{apt.title}</TableCell>
+                                                                <TableCell className="text-sm text-muted-foreground">
+                                                                    {appointmentStoreLabel(apt) || "—"}
+                                                                </TableCell>
                                                                 <TableCell>
                                                                     <DealershipTime
                                                                         date={apt.scheduled_at}
@@ -4206,6 +4253,7 @@ export default function LeadDetailsPage() {
                                                     <TableHeader>
                                                         <TableRow>
                                                             <TableHead>Title</TableHead>
+                                                            <TableHead>Store</TableHead>
                                                             <TableHead>Date & time</TableHead>
                                                             <TableHead>Status</TableHead>
                                                             <TableHead className="text-right">Actions</TableHead>
@@ -4215,6 +4263,9 @@ export default function LeadDetailsPage() {
                                                         {appointmentsUpcoming.map((apt) => (
                                                             <TableRow key={apt.id}>
                                                                 <TableCell className="font-medium">{apt.title}</TableCell>
+                                                                <TableCell className="text-sm text-muted-foreground">
+                                                                    {appointmentStoreLabel(apt) || "—"}
+                                                                </TableCell>
                                                                 <TableCell>
                                                                     <DealershipTime
                                                                         date={apt.scheduled_at}
@@ -4309,6 +4360,7 @@ export default function LeadDetailsPage() {
                                                     <TableHeader>
                                                         <TableRow>
                                                             <TableHead>Title</TableHead>
+                                                            <TableHead>Store</TableHead>
                                                             <TableHead>Date & time</TableHead>
                                                             <TableHead>Status</TableHead>
                                                             <TableHead className="text-right">Actions</TableHead>
@@ -4318,6 +4370,9 @@ export default function LeadDetailsPage() {
                                                         {appointmentsOverdue.map((apt) => (
                                                             <TableRow key={apt.id}>
                                                                 <TableCell className="font-medium">{apt.title}</TableCell>
+                                                                <TableCell className="text-sm text-muted-foreground">
+                                                                    {appointmentStoreLabel(apt) || "—"}
+                                                                </TableCell>
                                                                 <TableCell>
                                                                     <DealershipTime
                                                                         date={apt.scheduled_at}
@@ -4410,6 +4465,7 @@ export default function LeadDetailsPage() {
                                                     <TableHeader>
                                                         <TableRow>
                                                             <TableHead>Title</TableHead>
+                                                            <TableHead>Store</TableHead>
                                                             <TableHead>Date & time</TableHead>
                                                             <TableHead>Status</TableHead>
                                                             <TableHead className="text-right">Actions</TableHead>
@@ -4419,6 +4475,9 @@ export default function LeadDetailsPage() {
                                                         {appointmentsPast.map((apt) => (
                                                             <TableRow key={apt.id}>
                                                                 <TableCell className="font-medium">{apt.title}</TableCell>
+                                                                <TableCell className="text-sm text-muted-foreground">
+                                                                    {appointmentStoreLabel(apt) || "—"}
+                                                                </TableCell>
                                                                 <TableCell>
                                                                     <DealershipTime
                                                                         date={apt.scheduled_at}

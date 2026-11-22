@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import {
     Appointment,
+    appointmentStoreLabel,
     getAppointmentStatusColor,
     isAppointmentStatusTerminal,
 } from "@/services/appointment-service"
@@ -130,7 +131,7 @@ export function AppointmentCalendar({
                 e.stopPropagation()
                 onSelectAppointment?.(apt)
             }}
-            title={`${format(new Date(apt.scheduled_at), "p")} · ${getLeadName(apt)}`}
+            title={`${format(new Date(apt.scheduled_at), "p")} · ${getLeadName(apt)}${appointmentStoreLabel(apt) ? ` · ${appointmentStoreLabel(apt)}` : ""}`}
             className={cn(
                 "truncate rounded px-1.5 py-0.5 text-[11px] font-medium leading-4",
                 getAppointmentStatusColor(apt.status),
@@ -140,6 +141,9 @@ export function AppointmentCalendar({
         >
             {!compact && <span className="mr-1 tabular-nums">{format(new Date(apt.scheduled_at), "h:mm a")}</span>}
             {getLeadName(apt)}
+            {!compact && appointmentStoreLabel(apt) && (
+                <span className="ml-1 font-normal opacity-80">· {appointmentStoreLabel(apt)}</span>
+            )}
         </div>
     )
 

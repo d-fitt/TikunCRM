@@ -29,6 +29,7 @@ import {
     Download,
     Printer,
     FileText,
+    ChevronDown,
     ChevronLeft,
     ChevronRight,
     List,
@@ -47,7 +48,9 @@ import {
     getAppointmentTypeLabel,
     getAppointmentStatusLabel,
     getAppointmentStatusColor,
-    isAppointmentStatusTerminal
+    isAppointmentStatusTerminal,
+    appointmentStoreLabel,
+    type AppointmentStoreCount,
 } from "@/services/appointment-service"
 import { LeadService, Lead, getLeadFullName } from "@/services/lead-service"
 import { TeamService, UserBrief } from "@/services/team-service"
@@ -929,6 +932,7 @@ export default function AppointmentsPage() {
         [getTimezone, dealershipTimezone]
     )
     const [stats, setStats] = React.useState<AppointmentStats | null>(null)
+    const [storeCounts, setStoreCounts] = React.useState<AppointmentStoreCount[]>([])
     const [loading, setLoading] = React.useState(true)
     const [page, setPage] = React.useState(1)
     const [totalPages, setTotalPages] = React.useState(1)
@@ -1135,6 +1139,7 @@ export default function AppointmentsPage() {
             
             setAppointments(appointmentsRes.items)
             setTotalPages(appointmentsRes.total_pages)
+            setStoreCounts(appointmentsRes.store_counts || [])
             setStats(statsRes)
         } catch (err) {
             console.error("Failed to load appointments:", err)
@@ -1196,15 +1201,6 @@ export default function AppointmentsPage() {
     function handleReschedule(appointment: Appointment) {
         setSelectedAppointment(appointment)
         setShowRescheduleModal(true)
-    }
-
-    async function handleStatusUpdate(appointment: Appointment, status: AppointmentStatus) {
-        try {
-            await AppointmentService.update(appointment.id, { status })
-            loadData()
-        } catch (err) {
-            console.error("Failed to update status:", err)
-        }
     }
 
     async function handleNoShow(appointment: Appointment) {
@@ -1653,6 +1649,43 @@ export default function AppointmentsPage() {
                             </Button>
                         )}
                     </div>
+
+                    {storeCounts.length > 0 && (
+                        <div className="flex items-center gap-2 flex-wrap border-t pt-3">
+                            <span className="text-xs font-medium text-muted-foreground">By store</span>
+                            {storeCounts.map((row) => {
+                                const selected = row.partner_store_id
+                                    ? storeFilter === row.partner_store_id
+                                    : false
+                                const label = row.brand && !row.name.toLowerCase().includes(row.brand.toLowerCase())
+                                    ? `${row.name} · ${row.brand}`
+                                    : row.name
+                                return (
+                                    <button
+                                        key={row.partner_store_id || "no-store"}
+                                        type="button"
+                                        disabled={!row.partner_store_id}
+                                        onClick={() => {
+                                            if (!row.partner_store_id) return
+                                            setStoreFilter(selected ? "" : row.partner_store_id)
+                                            setPage(1)
+                                        }}
+                                        className={cn(
+                                            "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors",
+                                            selected
+                                                ? "border-primary bg-primary/10 text-foreground"
+                                                : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground",
+                                            !row.partner_store_id && "cursor-default"
+                                        )}
+                                    >
+                                        <Store className="h-3.5 w-3.5" />
+                                        <span>{label}</span>
+                                        <span className="font-semibold tabular-nums text-foreground">{row.count}</span>
+                                    </button>
+                                )
+                            })}
+                        </div>
+                    )}
                     
                     {/* Custom Date Range Section */}
                     {dateRangePreset === "custom" && (
@@ -1837,7 +1870,7 @@ export default function AppointmentsPage() {
             ) : (
             <>
             {/* Appointments List */}
-            <div className="border rounded-lg overflow-hidden bg-card">
+            <div className="border rounded-lg bg-card">
                 {/* List Header */}
                 <div className="flex items-center justify-between px-4 py-3 border-b bg-muted/30">
                     <h3 className="font-semibold">
@@ -1919,9 +1952,9 @@ export default function AppointmentsPage() {
                                     <div className="flex items-start justify-between gap-2">
                                         <div className="flex-1 min-w-0">
                                             <div className="flex items-center gap-2 mb-1">
-                                                {appointment.lead ? (
+                                                {appointment.lead && (appointment.lead_id || appointment.lead.id) ? (
                                                     <Link 
-                                                        href={`/leads/${appointment.lead_id}`} 
+                                                        href={`/leads/${appointment.lead_id || appointment.lead.id}`} 
                                                         className="font-medium hover:underline text-left"
                                                         onClick={(e) => e.stopPropagation()}
                                                     >
@@ -1930,23 +1963,69 @@ export default function AppointmentsPage() {
                                                 ) : (
                                                     <span className="font-medium">{appointment.title || "Appointment"}</span>
                                                 )}
+                                                {!isAppointmentStatusTerminal(appointment.status) ? (
+                                                    <DropdownMenu>
+                                                        <DropdownMenuTrigger asChild>
+                                                            <button
+                                                                type="button"
+                                                                className={cn(
+                                                                    "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                                                                    appointment.status === "confirmed" ? "border-transparent bg-blue-100 text-blue-800" :
+                                                                    appointment.status === "arrived" ? "border-transparent bg-cyan-100 text-cyan-800" :
+                                                                    appointment.status === "in_showroom" ? "border-transparent bg-orange-100 text-orange-800" :
+                                                                    appointment.status === "in_progress" ? "border-transparent bg-purple-100 text-purple-800" :
+                                                                    "border-border bg-background text-foreground"
+                                                                )}
+                                                                aria-label="Appointment actions"
+                                                                onClick={(e) => e.stopPropagation()}
+                                                            >
+                                                                {getAppointmentStatusLabel(appointment.status)}
+                                                                <ChevronDown className="ml-1 h-3 w-3" />
+                                                            </button>
+                                                        </DropdownMenuTrigger>
+                                                        <DropdownMenuContent align="start" className="z-[80] w-56">
+                                                            {appointment.lead_id && (
+                                                                <DropdownMenuItem onSelect={() => setGuestModal({ leadId: appointment.lead_id!, appointmentId: appointment.id })}>
+                                                                    <UserCheck className="mr-2 h-4 w-4 text-primary" />
+                                                                    Guest Profile & QR
+                                                                </DropdownMenuItem>
+                                                            )}
+                                                            <DropdownMenuItem onSelect={() => handleConfirm(appointment)}>
+                                                                <CheckCircle className="mr-2 h-4 w-4 text-blue-600" />
+                                                                Confirm
+                                                            </DropdownMenuItem>
+                                                            <DropdownMenuItem onSelect={() => handleReschedule(appointment)}>
+                                                                <CalendarClock className="mr-2 h-4 w-4" />
+                                                                Reschedule
+                                                            </DropdownMenuItem>
+                                                            <DropdownMenuItem onSelect={() => handleComplete(appointment)}>
+                                                                <CheckCircle className="mr-2 h-4 w-4 text-green-600" />
+                                                                Mark as Completed
+                                                            </DropdownMenuItem>
+                                                            <DropdownMenuItem onSelect={() => handleNoShow(appointment)}>
+                                                                <XCircle className="mr-2 h-4 w-4 text-amber-600" />
+                                                                No Show
+                                                            </DropdownMenuItem>
+                                                            <DropdownMenuItem onSelect={() => handleCancel(appointment)} className="text-red-600">
+                                                                <XCircle className="mr-2 h-4 w-4" />
+                                                                Cancel Appointment
+                                                            </DropdownMenuItem>
+                                                        </DropdownMenuContent>
+                                                    </DropdownMenu>
+                                                ) : (
                                                 <Badge variant={
                                                     appointment.status === "completed" || appointment.status === "sold" ? "default" :
                                                     appointment.status === "cancelled" ? "secondary" :
-                                                    appointment.status === "confirmed" ? "default" :
-                                                    appointment.status === "arrived" || appointment.status === "in_showroom" ? "default" :
                                                     "outline"
                                                 } className={
                                                     appointment.status === "completed" ? "bg-green-100 text-green-800 dark:bg-green-900/30" :
                                                     appointment.status === "sold" ? "bg-emerald-200 text-emerald-900 dark:bg-emerald-900/30" :
                                                     appointment.status === "cancelled" ? "bg-gray-100 text-gray-800" :
-                                                    appointment.status === "confirmed" ? "bg-blue-100 text-blue-800" :
-                                                    appointment.status === "arrived" ? "bg-cyan-100 text-cyan-800" :
-                                                    appointment.status === "in_showroom" ? "bg-orange-100 text-orange-800" :
                                                     ""
                                                 }>
                                                     {getAppointmentStatusLabel(appointment.status)}
                                                 </Badge>
+                                                )}
                                                 {isOverdue(appointment) && (
                                                     <Badge variant="destructive" className="text-xs">
                                                         Overdue
@@ -1984,6 +2063,12 @@ export default function AppointmentsPage() {
                                                         <span>{appointment.lead.customer.phone}</span>
                                                     </div>
                                                 )}
+                                                {appointmentStoreLabel(appointment) && (
+                                                    <div className="flex items-center gap-1">
+                                                        <Store className="h-4 w-4" />
+                                                        <span>{appointmentStoreLabel(appointment)}</span>
+                                                    </div>
+                                                )}
                                             </div>
                                             
                                             {appointment.title && appointment.lead && (
@@ -2010,58 +2095,47 @@ export default function AppointmentsPage() {
                                         {(!isAppointmentStatusTerminal(appointment.status) || appointment.lead_id) && (
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
-                                                    <Button variant="ghost" size="sm">
+                                                    <Button
+                                                        type="button"
+                                                        variant="outline"
+                                                        size="icon"
+                                                        className="relative z-20 h-9 w-9 shrink-0"
+                                                        aria-label="Appointment actions"
+                                                        onClick={(e) => e.stopPropagation()}
+                                                    >
                                                         <MoreVertical className="h-4 w-4" />
                                                     </Button>
                                                 </DropdownMenuTrigger>
-                                                <DropdownMenuContent align="end">
+                                                <DropdownMenuContent align="end" className="z-[80] w-56">
                                                     {appointment.lead_id && (
-                                                        <DropdownMenuItem onClick={() => setGuestModal({ leadId: appointment.lead_id!, appointmentId: appointment.id })}>
+                                                        <DropdownMenuItem onSelect={() => setGuestModal({ leadId: appointment.lead_id!, appointmentId: appointment.id })}>
                                                             <UserCheck className="mr-2 h-4 w-4 text-primary" />
                                                             Guest Profile & QR
                                                         </DropdownMenuItem>
                                                     )}
-                                                    {appointment.status === "scheduled" && (
-                                                        <DropdownMenuItem onClick={() => handleConfirm(appointment)}>
-                                                            <CheckCircle className="mr-2 h-4 w-4 text-blue-600" />
-                                                            Confirm
-                                                        </DropdownMenuItem>
-                                                    )}
-                                                    {(appointment.status === "scheduled" || appointment.status === "confirmed" || appointment.status === "arrived" || appointment.status === "in_showroom" || appointment.status === "in_progress" || appointment.status === "no_show") && (
-                                                        <DropdownMenuItem onClick={() => handleReschedule(appointment)}>
-                                                            <CalendarClock className="mr-2 h-4 w-4" />
-                                                            Reschedule
-                                                        </DropdownMenuItem>
-                                                    )}
-                                                    {appointment.status === "arrived" && (
-                                                        <DropdownMenuItem onClick={() => handleStatusUpdate(appointment, "in_showroom")}>
-                                                            <Store className="mr-2 h-4 w-4" />
-                                                            Mark as In Showroom
-                                                        </DropdownMenuItem>
-                                                    )}
-                                                    {(appointment.status === "arrived" || appointment.status === "in_showroom") && (
-                                                        <DropdownMenuItem onClick={() => handleStatusUpdate(appointment, "in_progress")}>
-                                                            <Clock className="mr-2 h-4 w-4" />
-                                                            Mark as In Progress
-                                                        </DropdownMenuItem>
-                                                    )}
-                                                    {(appointment.status === "scheduled" || appointment.status === "confirmed" || appointment.status === "arrived" || appointment.status === "in_showroom" || appointment.status === "in_progress" || appointment.status === "no_show") && (
-                                                        <DropdownMenuItem onClick={() => handleComplete(appointment)}>
-                                                            <CheckCircle className="mr-2 h-4 w-4 text-green-600" />
-                                                            Mark as Completed
-                                                        </DropdownMenuItem>
-                                                    )}
-                                                    {(appointment.status === "scheduled" || appointment.status === "confirmed" || appointment.status === "arrived" || appointment.status === "in_showroom" || appointment.status === "in_progress") && (
-                                                        <DropdownMenuItem onClick={() => handleNoShow(appointment)}>
-                                                            <XCircle className="mr-2 h-4 w-4 text-amber-600" />
-                                                            No Show
-                                                        </DropdownMenuItem>
-                                                    )}
-                                                    {(appointment.status === "scheduled" || appointment.status === "confirmed" || appointment.status === "arrived" || appointment.status === "in_showroom" || appointment.status === "in_progress" || appointment.status === "no_show") && (
-                                                        <DropdownMenuItem onClick={() => handleCancel(appointment)} className="text-red-600">
-                                                            <XCircle className="mr-2 h-4 w-4" />
-                                                            Cancel Appointment
-                                                        </DropdownMenuItem>
+                                                    {!isAppointmentStatusTerminal(appointment.status) && (
+                                                        <>
+                                                            <DropdownMenuItem onSelect={() => handleConfirm(appointment)}>
+                                                                <CheckCircle className="mr-2 h-4 w-4 text-blue-600" />
+                                                                Confirm
+                                                            </DropdownMenuItem>
+                                                            <DropdownMenuItem onSelect={() => handleReschedule(appointment)}>
+                                                                <CalendarClock className="mr-2 h-4 w-4" />
+                                                                Reschedule
+                                                            </DropdownMenuItem>
+                                                            <DropdownMenuItem onSelect={() => handleComplete(appointment)}>
+                                                                <CheckCircle className="mr-2 h-4 w-4 text-green-600" />
+                                                                Mark as Completed
+                                                            </DropdownMenuItem>
+                                                            <DropdownMenuItem onSelect={() => handleNoShow(appointment)}>
+                                                                <XCircle className="mr-2 h-4 w-4 text-amber-600" />
+                                                                No Show
+                                                            </DropdownMenuItem>
+                                                            <DropdownMenuItem onSelect={() => handleCancel(appointment)} className="text-red-600">
+                                                                <XCircle className="mr-2 h-4 w-4" />
+                                                                Cancel Appointment
+                                                            </DropdownMenuItem>
+                                                        </>
                                                     )}
                                                 </DropdownMenuContent>
                                             </DropdownMenu>

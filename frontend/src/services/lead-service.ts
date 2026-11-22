@@ -42,8 +42,12 @@ export interface LeadCampaignMappingBrief {
 }
 
 /** One row per campaign (mapping id or raw name); keeps earliest added_at. */
+function textOf(value: unknown): string {
+    return typeof value === "string" ? value.trim() : "";
+}
+
 export function dedupeLeadCampaigns(campaigns: LeadCampaign[] | undefined): LeadCampaign[] {
-    if (!campaigns?.length) return [];
+    if (!Array.isArray(campaigns) || campaigns.length === 0) return [];
     const map = new Map<string, LeadCampaign>();
     for (const c of campaigns) {
         const key = c.campaign_mapping_id ?? `raw:${c.campaign_name}`;
@@ -66,12 +70,11 @@ export function leadVisibleSource(lead: {
 }): string {
     const latestCampaign = lead.campaigns?.length ? dedupeLeadCampaigns(lead.campaigns)[0] : undefined;
     const raw =
-        lead.latest_source_display?.trim()
-        || latestCampaign?.display_name?.trim()
-        || latestCampaign?.campaign_name?.trim()
-        || lead.source_display?.trim()
-        || lead.source
-        || "";
+        textOf(lead.latest_source_display)
+        || textOf(latestCampaign?.display_name)
+        || textOf(latestCampaign?.campaign_name)
+        || textOf(lead.source_display)
+        || textOf(lead.source);
     return raw.replace(/_/g, " ");
 }
 
@@ -245,8 +248,10 @@ export interface LeadListParams {
     intake?: "new" | "duplicate";
     /** Only leads with multiple campaign submissions (is_starred) */
     multi_campaign_only?: boolean;
-    /** Filter by campaign mapping (primary or lead_campaigns) */
+    /** Filter by one campaign mapping (primary or lead_campaigns) */
     campaign_mapping_id?: string;
+    /** Comma-separated campaign mapping ids (primary or lead_campaigns) */
+    campaign_mapping_ids?: string;
     down_min?: number;
     down_max?: number;
     has_license?: boolean;
@@ -263,6 +268,7 @@ export interface CampaignFilterOption {
     display_name: string;
     match_pattern: string;
     sync_source_name?: string | null;
+    is_active?: boolean;
 }
 
 /** Data for updating a lead - customer fields are at top level (not nested) */
@@ -309,6 +315,11 @@ export const LeadService = {
 
     async getCampaignFilterOptions(): Promise<CampaignFilterOption[]> {
         const response = await apiClient.get<CampaignFilterOption[]>(`${LEADS_PREFIX}/campaign-filter-options`);
+        return response.data;
+    },
+
+    async getFreshCount(): Promise<{ count: number }> {
+        const response = await apiClient.get<{ count: number }>(`${LEADS_PREFIX}/fresh-count`);
         return response.data;
     },
 
@@ -501,7 +512,11 @@ export const LeadService = {
         if (options?.pool) params.append("pool", options.pool);
         if (options?.fresh_only === true) params.append("fresh_only", "true");
         if (options?.multi_campaign_only === true) params.append("multi_campaign_only", "true");
-        if (options?.campaign_mapping_id) params.append("campaign_mapping_id", options.campaign_mapping_id);
+        if (options?.campaign_mapping_ids) {
+            params.append("campaign_mapping_ids", options.campaign_mapping_ids);
+        } else if (options?.campaign_mapping_id) {
+            params.append("campaign_mapping_id", options.campaign_mapping_id);
+        }
         if (options?.assigned_to) params.append("assigned_to", options.assigned_to);
         if (options?.date_from) params.append("date_from", options.date_from);
         if (options?.date_to) params.append("date_to", options.date_to);

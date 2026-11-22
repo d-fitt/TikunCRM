@@ -147,23 +147,27 @@ async def get_mentionable_users(
     
     Returns active users only.
     """
-    from app.core.access_scope import get_accessible_dealership_ids
-
     extra_users: List[User] = []
     if lead_id:
         lead_result = await db.execute(select(Lead).where(Lead.id == lead_id))
         lead = lead_result.scalar_one_or_none()
-        if lead and getattr(lead, "bdc_assigned_to_id", None):
-            bdc_result = await db.execute(
-                select(User).where(
-                    User.id == lead.bdc_assigned_to_id,
-                    User.is_active == True,
-                    User.role == UserRole.BDC,
+        if lead:
+            assignee_ids = [
+                uid for uid in (
+                    lead.assigned_to,
+                    getattr(lead, "secondary_salesperson_id", None),
+                    getattr(lead, "bdc_assigned_to_id", None),
                 )
-            )
-            assigned_bdc = bdc_result.scalar_one_or_none()
-            if assigned_bdc:
-                extra_users.append(assigned_bdc)
+                if uid and uid != current_user.id
+            ]
+            if assignee_ids:
+                assigned_result = await db.execute(
+                    select(User).where(
+                        User.id.in_(assignee_ids),
+                        User.is_active == True,
+                    )
+                )
+                extra_users.extend(assigned_result.scalars().all())
     
     if current_user.role == UserRole.SUPER_ADMIN:
         target_dealership_id = dealership_id
@@ -183,8 +187,15 @@ async def get_mentionable_users(
             select(User)
             .where(
                 User.is_active == True,
-                User.dealership_id == target_dealership_id,
                 User.id != current_user.id,
+                or_(
+                    User.dealership_id == target_dealership_id,
+                    User.id.in_(
+                        select(UserDealershipAccess.user_id).where(
+                            UserDealershipAccess.dealership_id == target_dealership_id
+                        )
+                    ),
+                ),
             )
             .order_by(User.first_name, User.last_name)
         )
@@ -194,58 +205,18 @@ async def get_mentionable_users(
         )
         return _merge_mentionable_users(dealership_users, bdc_users, extra_users, exclude_user_id=current_user.id)
 
-    if current_user.role == UserRole.BDC:
-        accessible_ids = await get_accessible_dealership_ids(db, current_user)
-        if dealership_id:
-            if accessible_ids is not None and dealership_id not in accessible_ids:
-                return []
-            scope_ids = [dealership_id]
-        elif accessible_ids is None:
-            org_id = await resolve_user_dealership_id(db, current_user)
-            if not org_id:
-                return []
-            scope_ids = [org_id]
-        elif accessible_ids:
-            scope_ids = accessible_ids
-        else:
-            return []
-
-        dealership_result = await db.execute(
-            select(User)
-            .where(
-                User.is_active == True,
-                User.dealership_id.in_(scope_ids),
-                User.id != current_user.id,
-            )
-            .order_by(User.first_name, User.last_name)
-        )
-        dealership_users = list(dealership_result.scalars().all())
-        bdc_users = await _fetch_bdc_agents_for_dealerships(
-            db, scope_ids, exclude_user_id=current_user.id
-        )
-        return _merge_mentionable_users(dealership_users, bdc_users, extra_users, exclude_user_id=current_user.id)
-
-    if current_user.role in [UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER, UserRole.SALESPERSON]:
-        target_dealership_id = dealership_id or current_user.dealership_id
-        if not target_dealership_id:
-            return []
-
-        dealership_result = await db.execute(
-            select(User)
-            .where(
-                User.is_active == True,
-                User.dealership_id == target_dealership_id,
-                User.id != current_user.id,
-            )
-            .order_by(User.first_name, User.last_name)
-        )
-        dealership_users = list(dealership_result.scalars().all())
-        bdc_users = await _fetch_bdc_agents_for_dealerships(
-            db, [target_dealership_id], exclude_user_id=current_user.id
-        )
-        return _merge_mentionable_users(dealership_users, bdc_users, extra_users, exclude_user_id=current_user.id)
-
-    return []
+    # Single-org team. A rep can have a blank dealership_id or access only
+    # through user_dealership_access, so a dealership_id match hides them.
+    result = await db.execute(
+        select(User)
+        .where(User.is_active == True, User.id != current_user.id)
+        .order_by(User.first_name, User.last_name)
+    )
+    return _merge_mentionable_users(
+        list(result.scalars().all()),
+        extra_users,
+        exclude_user_id=current_user.id,
+    )
 
 
 @router.get("/team", response_model=TeamListResponse)

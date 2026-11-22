@@ -14,7 +14,6 @@ import {
   Send,
   Sparkles,
   Trash2,
-  Wrench,
   X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -75,6 +74,7 @@ const TOOL_DISPLAY: Record<string, string> = {
   assign_leads: "Prepare assignment",
   update_lead_stages: "Prepare stage change",
   create_follow_ups: "Prepare follow-ups",
+  query_database: "Checked the database",
 }
 
 function toolDisplayName(name: string) {
@@ -152,34 +152,30 @@ function ThinkingBlock({
 function ToolChips({ tools }: { tools: LiveTool[] }) {
   if (!tools.length) return null
   return (
-    <div className="mb-3 space-y-1.5">
-      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        Working
-      </p>
-      <div className="flex flex-wrap gap-1.5">
-        {tools.map((t, i) => (
-          <span
-            key={`${t.name}-${i}`}
-            className={cn(
-              "inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px]",
-              t.status === "done"
-                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200"
-                : "border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-100"
-            )}
-          >
-            {t.status === "running" ? (
-              <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
-            ) : (
-              <Wrench className="h-3 w-3 shrink-0" />
-            )}
-            <span className="truncate">
-              {t.status === "done"
-                ? `${toolDisplayName(t.name)} · ${t.summary || "done"}`
-                : t.label || toolDisplayName(t.name)}
-            </span>
+    <div className="flex flex-col gap-1.5">
+      {tools.map((t, i) => (
+        <div
+          key={`${t.name}-${i}`}
+          className={cn(
+            "flex animate-in items-center gap-2 rounded-xl border px-2.5 py-1.5 text-xs fade-in slide-in-from-bottom-1",
+            t.status === "done"
+              ? "border-border bg-muted/50 text-muted-foreground"
+              : "border-primary/20 bg-primary/5 text-foreground"
+          )}
+          style={{ animationDelay: `${i * 70}ms` }}
+        >
+          {t.status === "running" ? (
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+          ) : (
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+          )}
+          <span className="truncate">
+            {t.status === "done"
+              ? toolDisplayName(t.name)
+              : t.label || toolDisplayName(t.name)}
           </span>
-        ))}
-      </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -603,6 +599,193 @@ function ConfirmActionsBlock({
   )
 }
 
+function humanizeColumn(name: string) {
+  const words = name.replace(/_/g, " ").trim()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+function asMetric(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string" && value.trim() && !Number.isNaN(Number(value))) {
+    return Number(value)
+  }
+  return null
+}
+
+function useCountUp(target: number) {
+  const [value, setValue] = React.useState(0)
+  React.useEffect(() => {
+    const start = performance.now()
+    let frame = 0
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - start) / 800)
+      const eased = 1 - (1 - progress) ** 3
+      setValue(target * eased)
+      if (progress < 1) frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [target])
+  return value
+}
+
+function formatMetric(value: number) {
+  if (Number.isInteger(value)) return value.toLocaleString()
+  return value.toLocaleString(undefined, { maximumFractionDigits: 1 })
+}
+
+function RateRing({ percent }: { percent: number }) {
+  const shown = useCountUp(percent)
+  const radius = 32
+  const circumference = 2 * Math.PI * radius
+  const offset = circumference - (Math.max(0, Math.min(shown, 100)) / 100) * circumference
+  return (
+    <div className="relative h-20 w-20 shrink-0">
+      <svg viewBox="0 0 80 80" className="h-20 w-20 -rotate-90">
+        <circle cx="40" cy="40" r={radius} className="fill-none stroke-muted" strokeWidth="7" />
+        <circle
+          cx="40"
+          cy="40"
+          r={radius}
+          className="fill-none stroke-primary transition-[stroke-dashoffset] duration-100"
+          strokeWidth="7"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          style={{ transition: "none" }}
+        />
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center text-sm font-semibold tabular-nums">
+        {shown.toFixed(1)}%
+      </div>
+    </div>
+  )
+}
+
+function MetricValue({ value }: { value: number }) {
+  const shown = useCountUp(value)
+  return <span className="tabular-nums">{formatMetric(shown)}</span>
+}
+
+function QueryInsight({ blocks }: { blocks: AiUiBlock[] }) {
+  const metrics: Array<{ key: string; label: string; value: number }> = []
+  const tables: AiUiBlock[] = []
+
+  for (const block of blocks) {
+    const columns = block.columns || []
+    const rows = block.rows || []
+    const singleAggregate =
+      rows.length === 1 && columns.length > 0 && columns.length <= 4 &&
+      columns.every((column) => asMetric(rows[0]?.[column]) != null)
+    if (!singleAggregate) {
+      tables.push(block)
+      continue
+    }
+    for (const column of columns) {
+      const value = asMetric(rows[0]?.[column])
+      if (value != null) metrics.push({ key: column.toLowerCase(), label: humanizeColumn(column), value })
+    }
+  }
+
+  const converted = metrics.find((metric) => /convert|sold/.test(metric.key))
+  const whole = metrics
+    .filter((metric) => metric !== converted && metric.value >= (converted?.value ?? Infinity))
+    .sort((a, b) => b.value - a.value)[0]
+  const percent =
+    converted && whole && whole.value > 0 ? (converted.value / whole.value) * 100 : null
+
+  return (
+    <div className="space-y-2">
+      {metrics.length > 0 && (
+        <div className="animate-in overflow-hidden rounded-2xl border bg-card shadow-sm fade-in slide-in-from-bottom-2 duration-500">
+          <div className="flex items-center gap-2 border-b bg-muted/40 px-3.5 py-2">
+            <Sparkles className="h-3.5 w-3.5 text-primary" />
+            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              From the database
+            </p>
+          </div>
+          <div className="flex items-center gap-4 px-3.5 py-3">
+            {percent != null && <RateRing percent={percent} />}
+            <div className="grid min-w-0 flex-1 gap-2">
+              {metrics.map((metric) => (
+                <div key={metric.key} className="min-w-0">
+                  <p className="truncate text-[11px] text-muted-foreground">{metric.label}</p>
+                  <p className="text-xl font-semibold leading-tight">
+                    <MetricValue value={metric.value} />
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+      {tables.map((block, index) => (
+        <QueryTable key={index} block={block} />
+      ))}
+    </div>
+  )
+}
+
+function QueryTable({ block }: { block: AiUiBlock }) {
+  const columns = block.columns || []
+  const rows = block.rows || []
+  return (
+    <div className="animate-in overflow-hidden rounded-2xl border bg-card shadow-sm fade-in slide-in-from-bottom-2 duration-500">
+      <p className="border-b bg-muted/40 px-3.5 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        {block.row_count ?? rows.length} row{(block.row_count ?? rows.length) === 1 ? "" : "s"}
+        {block.truncated ? " · first rows" : ""}
+      </p>
+      {columns.length > 0 && rows.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr>
+                {columns.map((column) => (
+                  <th key={column} className="px-3 py-1.5 font-medium text-muted-foreground">
+                    {humanizeColumn(column)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, index) => (
+                <tr key={index} className="border-t">
+                  {columns.map((column) => (
+                    <td key={column} className="px-3 py-1.5 tabular-nums">
+                      {row[column] == null ? "—" : String(row[column])}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function StatsBlock({ block }: { block: AiUiBlock }) {
+  const pct =
+    typeof block.percentage === "number" ? `${block.percentage}%` : null
+  return (
+    <div className="rounded-xl border bg-muted/40 px-3 py-3">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        {block.title || "From the database"}
+      </p>
+      {pct ? (
+        <p className="mt-1 text-2xl font-semibold tabular-nums text-foreground">{pct}</p>
+      ) : null}
+      {block.summary ? (
+        <p className="mt-1 text-sm text-foreground">{block.summary}</p>
+      ) : null}
+      {block.scope ? (
+        <p className="mt-1 text-xs text-muted-foreground">{block.scope}</p>
+      ) : null}
+    </div>
+  )
+}
+
 function UiBlocks({
   blocks,
   conversationId,
@@ -615,33 +798,39 @@ function UiBlocks({
   onConfirmDone?: (note: string) => void
 }) {
   if (!blocks?.length) return null
-  return (
-    <div className="space-y-3">
-      {blocks.map((b, i) => {
-        if (b.type === "lead_table") {
-          return <LeadResultsBlock key={`${b.type}-${i}`} block={b} />
-        }
-        if (b.type === "ranked_leads") {
-          return <LeadResultsBlock key={`${b.type}-${i}`} block={b} ranked />
-        }
-        if (b.type === "note_hits") {
-          return <NoteHitsBlock key={`${b.type}-${i}`} block={b} />
-        }
-        if (b.type === "confirm_actions") {
-          return (
-            <ConfirmActionsBlock
-              key={`${b.type}-${i}`}
-              block={b}
-              conversationId={conversationId}
-              disabled={streaming}
-              onDone={(note) => onConfirmDone?.(note)}
-            />
-          )
-        }
-        return null
-      })}
-    </div>
-  )
+  const rendered: React.ReactNode[] = []
+  for (let i = 0; i < blocks.length; i += 1) {
+    const block = blocks[i]
+    if (block.type === "query_result") {
+      const group = [block]
+      while (blocks[i + 1]?.type === "query_result") {
+        i += 1
+        group.push(blocks[i])
+      }
+      rendered.push(<QueryInsight key={`query-${i}`} blocks={group} />)
+      continue
+    }
+    if (block.type === "lead_table") {
+      rendered.push(<LeadResultsBlock key={`${block.type}-${i}`} block={block} />)
+    } else if (block.type === "ranked_leads") {
+      rendered.push(<LeadResultsBlock key={`${block.type}-${i}`} block={block} ranked />)
+    } else if (block.type === "note_hits") {
+      rendered.push(<NoteHitsBlock key={`${block.type}-${i}`} block={block} />)
+    } else if (block.type === "crm_stats") {
+      rendered.push(<StatsBlock key={`${block.type}-${i}`} block={block} />)
+    } else if (block.type === "confirm_actions") {
+      rendered.push(
+        <ConfirmActionsBlock
+          key={`${block.type}-${i}`}
+          block={block}
+          conversationId={conversationId}
+          disabled={streaming}
+          onDone={(note) => onConfirmDone?.(note)}
+        />
+      )
+    }
+  }
+  return <div className="space-y-3">{rendered}</div>
 }
 
 function AssistantBubble({
@@ -715,6 +904,7 @@ function AssistantBubble({
 }
 
 function mergeUiBlock(blocks: AiUiBlock[], incoming: AiUiBlock): AiUiBlock[] {
+  if (incoming.type === "query_result") return [...blocks, incoming]
   const idx = blocks.findIndex((b) => b.type === incoming.type)
   if (idx >= 0) {
     const next = [...blocks]

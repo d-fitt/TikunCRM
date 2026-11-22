@@ -149,6 +149,25 @@ def ensure_partner_schema(conn) -> None:
             inventory_type VARCHAR(20) NOT NULL
         )
     """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS lead_delivery_mailbox (
+            id UUID PRIMARY KEY,
+            smtp_host VARCHAR(255) NOT NULL DEFAULT 'smtp.office365.com',
+            smtp_port INTEGER NOT NULL DEFAULT 587,
+            smtp_user VARCHAR(255) NOT NULL DEFAULT '',
+            smtp_password_encrypted TEXT NOT NULL DEFAULT '',
+            use_tls BOOLEAN NOT NULL DEFAULT true,
+            use_ssl BOOLEAN NOT NULL DEFAULT false,
+            from_name VARCHAR(255) NOT NULL DEFAULT 'Carvamonos',
+            graph_tenant_id VARCHAR(64) NOT NULL DEFAULT '',
+            graph_client_id VARCHAR(64) NOT NULL DEFAULT '',
+            graph_client_secret_encrypted TEXT NOT NULL DEFAULT '',
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """))
+    conn.execute(text("ALTER TABLE lead_delivery_mailbox ADD COLUMN IF NOT EXISTS graph_tenant_id VARCHAR(64) NOT NULL DEFAULT ''"))
+    conn.execute(text("ALTER TABLE lead_delivery_mailbox ADD COLUMN IF NOT EXISTS graph_client_id VARCHAR(64) NOT NULL DEFAULT ''"))
+    conn.execute(text("ALTER TABLE lead_delivery_mailbox ADD COLUMN IF NOT EXISTS graph_client_secret_encrypted TEXT NOT NULL DEFAULT ''"))
 
 
 def main() -> int:
