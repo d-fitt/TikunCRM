@@ -337,8 +337,8 @@ async def drop_lead_from_snapshot(db: AsyncSession, lead_id: UUID) -> None:
 
 async def claim_lead_for_call(db: AsyncSession, user: User, lead_id: UUID) -> bool:
     """
-    Take this lead off the shared list when a call starts.
-    The same agent can start it twice. A second agent cannot.
+    Take this lead off the shared Call next list when a call starts.
+    Another person can still dial the same customer.
     """
     snap = (
         await db.execute(
@@ -356,7 +356,7 @@ async def claim_lead_for_call(db: AsyncSession, user: User, lead_id: UUID) -> bo
     key = str(lead_id)
     existing = claimed.get(key)
     if existing and existing.get("user_id") != str(user.id):
-        return False
+        return True
     name = f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email
     claimed[key] = {"user_id": str(user.id), "name": name, "at": utc_now().isoformat()}
     snap.claimed = claimed

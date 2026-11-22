@@ -799,9 +799,7 @@ async def claim_bdc_work_queue_lead(
     current_user: User = Depends(deps.require_role(UserRole.BDC)),
 ) -> Any:
     """Remove this lead from the shared list the moment a BDC starts the call."""
-    ok = await claim_lead_for_call(db, current_user, lead_id)
-    if not ok:
-        raise HTTPException(status_code=409, detail="Another person already started this call")
+    await claim_lead_for_call(db, current_user, lead_id)
     payload = await snapshot_view(db, current_user, None)
     return BdcWorkQueueResponse(**payload)
 
