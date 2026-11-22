@@ -13,20 +13,19 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.timezone import utc_now
 from app.models.activity import Activity, ActivityType
-from app.models.bdc_attention import BdcAttentionSnapshot
+from app.models.bdc_attention import SHARED_ATTENTION_ID, BdcAttentionSnapshot
 from app.models.call_log import CallLog
 from app.models.lead import Lead
 from app.models.user import User
 from app.services.bdc_work_queue_service import (
     BAND_DNC,
-    _base_clauses,
     _note_bits,
     _signals_for,
     day_bounds,
@@ -220,13 +219,42 @@ def _item_from_model(lead: Lead, signals, scored: Optional[Dict[str, Any]], choi
     }
 
 
-async def _load_snapshot(db: AsyncSession, user_id: UUID) -> BdcAttentionSnapshot:
-    snap = await db.get(BdcAttentionSnapshot, user_id)
+async def _load_snapshot(db: AsyncSession) -> BdcAttentionSnapshot:
+    snap = await db.get(BdcAttentionSnapshot, SHARED_ATTENTION_ID)
     if snap is None:
-        snap = BdcAttentionSnapshot(user_id=user_id, status="empty", items=[])
+        snap = BdcAttentionSnapshot(id=SHARED_ATTENTION_ID, status="empty", items=[], claimed={})
         db.add(snap)
         await db.flush()
     return snap
+
+
+def _active_claims(claimed: Optional[dict], today_start: datetime) -> Dict[str, Any]:
+    """Claims from today stay off the list. Yesterday's claims can come back tomorrow."""
+    kept: Dict[str, Any] = {}
+    for lead_id, info in (claimed or {}).items():
+        if not isinstance(info, dict):
+            continue
+        raw = info.get("at")
+        if not raw:
+            continue
+        try:
+            when = datetime.fromisoformat(str(raw))
+        except ValueError:
+            continue
+        if when.tzinfo is None:
+            from datetime import timezone
+            when = when.replace(tzinfo=timezone.utc)
+        if when >= today_start:
+            kept[str(lead_id)] = info
+    return kept
+
+
+def _without_claimed(items: List[Dict[str, Any]], claimed: Dict[str, Any]) -> List[Dict[str, Any]]:
+    hidden = set(claimed)
+    visible = [dict(row) for row in items if str(row.get("lead_id")) not in hidden]
+    for index, row in enumerate(visible, start=1):
+        row["rank"] = index
+    return visible
 
 
 def _running_fresh(snap: BdcAttentionSnapshot, now: datetime) -> bool:
@@ -244,7 +272,7 @@ async def snapshot_view(
     user: User,
     dealership_id: Optional[UUID],
 ) -> Dict[str, Any]:
-    snap = await db.get(BdcAttentionSnapshot, user.id)
+    snap = await db.get(BdcAttentionSnapshot, SHARED_ATTENTION_ID)
     if snap is None:
         return {
             "items": [],
@@ -256,12 +284,9 @@ async def snapshot_view(
             "error": None,
             "model": settings.bdc_attention_model,
         }
-    items = [dict(row) for row in (snap.items or [])]
-    if dealership_id is not None:
-        wanted = str(dealership_id)
-        items = [row for row in items if row.get("dealership_id") == wanted]
-    for index, row in enumerate(items, start=1):
-        row["rank"] = index
+    today_start, _today_end = day_bounds(utc_now(), "America/New_York")
+    claimed = _active_claims(snap.claimed, today_start)
+    items = _without_claimed(list(snap.items or []), claimed)
     return {
         "items": items,
         "ranked_by": "ai",
@@ -274,8 +299,8 @@ async def snapshot_view(
     }
 
 
-async def drop_lead_from_snapshot(db: AsyncSession, user_id: UUID, lead_id: UUID) -> None:
-    snap = await db.get(BdcAttentionSnapshot, user_id)
+async def drop_lead_from_snapshot(db: AsyncSession, lead_id: UUID) -> None:
+    snap = await db.get(BdcAttentionSnapshot, SHARED_ATTENTION_ID)
     if snap is None or not snap.items:
         return
     target = str(lead_id)
@@ -285,6 +310,45 @@ async def drop_lead_from_snapshot(db: AsyncSession, user_id: UUID, lead_id: UUID
     snap.items = kept
     snap.attention_count = len(kept)
     await db.flush()
+
+
+async def claim_lead_for_call(db: AsyncSession, user: User, lead_id: UUID) -> bool:
+    """
+    Take this lead off the shared list when a call starts.
+    The same agent can start it twice. A second agent cannot.
+    """
+    snap = (
+        await db.execute(
+            select(BdcAttentionSnapshot)
+            .where(BdcAttentionSnapshot.id == SHARED_ATTENTION_ID)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if snap is None:
+        snap = BdcAttentionSnapshot(id=SHARED_ATTENTION_ID, status="empty", items=[], claimed={})
+        db.add(snap)
+        await db.flush()
+    today_start, _today_end = day_bounds(utc_now(), "America/New_York")
+    claimed = _active_claims(snap.claimed, today_start)
+    key = str(lead_id)
+    existing = claimed.get(key)
+    if existing and existing.get("user_id") != str(user.id):
+        return False
+    name = f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email
+    claimed[key] = {"user_id": str(user.id), "name": name, "at": utc_now().isoformat()}
+    snap.claimed = claimed
+    kept = [row for row in (snap.items or []) if str(row.get("lead_id")) != key]
+    for index, row in enumerate(kept, start=1):
+        row["rank"] = index
+    snap.items = kept
+    snap.attention_count = len(kept)
+    await db.commit()
+    try:
+        from app.services.notification_service import emit_stats_refresh
+        await emit_stats_refresh(None, db=db)
+    except Exception:
+        logger.exception("Could not refresh BDC lists after a call started")
+    return True
 
 
 async def _rank_batch(client, briefs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -310,9 +374,9 @@ async def run_attention_for_user(
     user: User,
     tz_name: str = "America/New_York",
 ) -> BdcAttentionSnapshot:
-    """Scan this agent's whole book and replace the saved attention list."""
+    """Scan every active lead once and replace the shared list."""
     now = utc_now()
-    snap = await _load_snapshot(db, user.id)
+    snap = await _load_snapshot(db)
     if _running_fresh(snap, now):
         return snap
 
@@ -321,7 +385,7 @@ async def run_attention_for_user(
     snap.error = None
     snap.model = settings.bdc_attention_model
     await db.commit()
-    snap = await _load_snapshot(db, user.id)
+    snap = await _load_snapshot(db)
 
     if not settings.ai_assistant_enabled or not settings.openai_api_key:
         snap.status = "failed"
@@ -330,18 +394,21 @@ async def run_attention_for_user(
         return snap
 
     try:
-        from app.core.access_scope import get_accessible_dealership_ids
         from app.services.ai_assistant_service import AiAssistantService
 
-        accessible = await get_accessible_dealership_ids(db, user)
-        base = _base_clauses(user.id, accessible, None)
-        lead_ids = list(
-            (
-                await db.execute(select(Lead.id).where(*base))
-            ).scalars().all()
-        )
         today_start, today_end = day_bounds(now, tz_name)
         soon_end = now + timedelta(hours=2)
+        claimed = _active_claims(snap.claimed, today_start)
+        lead_ids = list(
+            (
+                await db.execute(
+                    select(Lead.id).where(
+                        Lead.is_active.is_(True),
+                        or_(Lead.outcome.is_(None), Lead.outcome.notin_(("converted", "lost"))),
+                    )
+                )
+            ).scalars().all()
+        )
 
         catalog: Dict[str, Dict[str, Any]] = {}
         briefs: List[Dict[str, Any]] = []
@@ -362,6 +429,8 @@ async def run_attention_for_user(
                 _primary, _chips, sink, _boost = _note_bits(signals)
                 scored = score_work_item(signals, now)
                 if sink or (scored and scored.get("priority_band") == BAND_DNC):
+                    continue
+                if str(lead.id) in claimed:
                     continue
                 notes = notes_by_id.get(lead.id) or []
                 if signals.latest_note and signals.latest_note not in notes:
@@ -407,10 +476,30 @@ async def run_attention_for_user(
             if action in {"call", "confirm", "book"}:
                 item["action"] = action
             item["rank"] = row["rank"]
+            if str(item["lead_id"]) in claimed:
+                continue
             items.append(item)
 
-        snap = await _load_snapshot(db, user.id)
+        for index, row in enumerate(items, start=1):
+            row["rank"] = index
+
+        db.expire(snap)
+        snap = (
+            await db.execute(
+                select(BdcAttentionSnapshot)
+                .where(BdcAttentionSnapshot.id == SHARED_ATTENTION_ID)
+                .with_for_update()
+            )
+        ).scalar_one()
+        latest = _active_claims(snap.claimed, today_start)
+        hidden = set(claimed) | set(latest)
+        items = [row for row in items if str(row.get("lead_id")) not in hidden]
+        for index, row in enumerate(items, start=1):
+            row["rank"] = index
+        merged = dict(claimed)
+        merged.update(latest)
         snap.items = items
+        snap.claimed = merged
         snap.scanned_count = len(lead_ids)
         snap.attention_count = len(items)
         snap.generated_at = utc_now()
@@ -426,7 +515,7 @@ async def run_attention_for_user(
         return snap
     except Exception as exc:
         logger.exception("BDC attention pass failed for %s", user.id)
-        snap = await _load_snapshot(db, user.id)
+        snap = await _load_snapshot(db)
         snap.status = "failed"
         snap.error = str(exc)[:500]
         await db.commit()

@@ -572,6 +572,14 @@ async def initiate_call(
         )
     
     # Do not create call_log here; it is created in the outgoing webhook when Twilio sends the real CallSid.
+    if lead is not None:
+        from app.services.bdc_attention_service import claim_lead_for_call
+        claimed = await claim_lead_for_call(db, current_user, lead.id)
+        if not claimed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Another person already started this call",
+            )
     return InitiateCallResponse(
         call_log_id=None,
         call_sid="connecting",

@@ -1,25 +1,22 @@
-"""Stored morning attention list for one BDC agent."""
-import uuid
+"""One shared morning attention list for every BDC agent."""
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.database import Base
 
+SHARED_ATTENTION_ID = "shared"
+
 
 class BdcAttentionSnapshot(Base):
-    """Latest AI pass over this agent's book. One row per BDC user."""
+    """Latest AI pass over the whole book. Every BDC reads this same row."""
 
     __tablename__ = "bdc_attention_snapshots"
 
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=SHARED_ATTENTION_ID)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="empty")
     model: Mapped[str] = mapped_column(String(64), nullable=False, default="gpt-4o-mini")
     generated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -28,3 +25,4 @@ class BdcAttentionSnapshot(Base):
     attention_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     items: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    claimed: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)

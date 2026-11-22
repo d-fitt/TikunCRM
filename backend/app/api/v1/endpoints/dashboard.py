@@ -26,9 +26,9 @@ from app.models.user import User
 from app.models.activity import Activity
 from app.models.follow_up import FollowUp, FollowUpStatus
 from app.models.appointment import Appointment, AppointmentStatus
-from app.services.bdc_attention_service import drop_lead_from_snapshot, snapshot_view
+from app.services.bdc_attention_service import claim_lead_for_call, drop_lead_from_snapshot, snapshot_view
 from app.services.bdc_work_queue_service import WorkQueueError, apply_disposition
-from app.tasks.bdc_attention import run_attention_for_user_id
+from app.tasks.bdc_attention import run_shared_bdc_attention
 
 router = APIRouter()
 
@@ -782,10 +782,24 @@ async def refresh_bdc_work_queue(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(deps.require_role(UserRole.BDC)),
 ) -> Any:
-    """Recheck every lead with gpt-4o-mini and refresh the saved list."""
-    background.add_task(run_attention_for_user_id, str(current_user.id))
+    """Recheck every lead once. Every BDC sees the list this builds."""
+    background.add_task(run_shared_bdc_attention)
     payload = await snapshot_view(db, current_user, dealership_id)
     payload["status"] = "running"
+    return BdcWorkQueueResponse(**payload)
+
+
+@router.post("/bdc/work-queue/{lead_id}/claim", response_model=BdcWorkQueueResponse)
+async def claim_bdc_work_queue_lead(
+    lead_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_role(UserRole.BDC)),
+) -> Any:
+    """Remove this lead from the shared list the moment a BDC starts the call."""
+    ok = await claim_lead_for_call(db, current_user, lead_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail="Another person already started this call")
+    payload = await snapshot_view(db, current_user, None)
     return BdcWorkQueueResponse(**payload)
 
 
@@ -802,7 +816,7 @@ async def post_bdc_work_queue_disposition(
         await apply_disposition(db, current_user, lead_id, body.outcome, body.timezone)
     except WorkQueueError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
-    await drop_lead_from_snapshot(db, current_user.id, lead_id)
+    await drop_lead_from_snapshot(db, lead_id)
     await db.commit()
     payload = await snapshot_view(db, current_user, dealership_id)
     return BdcWorkQueueResponse(**payload)

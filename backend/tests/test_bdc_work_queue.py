@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytz
 
-from app.services.bdc_attention_service import merge_attention
+from app.services.bdc_attention_service import _active_claims, _without_claimed, merge_attention
 from app.services.bdc_work_queue_service import (
     BAND_COOLDOWN,
     BAND_DNC,
@@ -167,3 +167,21 @@ def test_merge_attention_keeps_higher_priority_and_numbers_the_list():
     assert rows[1]["reason"] == "note says call back"
     assert rows[0]["rank"] == 1
     assert rows[1]["rank"] == 2
+
+
+def test_started_call_stays_off_the_shared_list_until_tomorrow():
+    today_start = TZ.localize(datetime(2026, 11, 22, 0, 0)).astimezone(timezone.utc)
+    claimed = _active_claims(
+        {
+            "today": {"user_id": "a", "at": "2026-11-22T15:00:00+00:00"},
+            "yesterday": {"user_id": "b", "at": "2026-11-21T15:00:00+00:00"},
+        },
+        today_start,
+    )
+    assert set(claimed) == {"today"}
+    visible = _without_claimed(
+        [{"lead_id": "today", "rank": 1}, {"lead_id": "open", "rank": 2}],
+        claimed,
+    )
+    assert [row["lead_id"] for row in visible] == ["open"]
+    assert visible[0]["rank"] == 1

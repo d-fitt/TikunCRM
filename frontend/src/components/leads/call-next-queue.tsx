@@ -6,9 +6,7 @@ import { Loader2, Phone, Sparkles, Store } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { BdcDealershipSwitcher } from "@/components/layout/bdc-dealership-switcher"
 import { useCallLeadOptional } from "@/contexts/call-lead-context"
-import { useBdcDealershipOptional } from "@/contexts/bdc-dealership-context"
 import { useToast } from "@/hooks/use-toast"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { useWebSocketEvent } from "@/hooks/use-websocket"
@@ -28,8 +26,6 @@ const WORK_OUTCOMES: { id: BdcWorkOutcome; label: string }[] = [
 ]
 
 export function CallNextQueue() {
-    const dealership = useBdcDealershipOptional()
-    const selectedDealershipId = dealership?.selectedDealershipId ?? null
     const callLeadCtx = useCallLeadOptional()
     const { toast } = useToast()
     const { timezone } = useBrowserTimezone()
@@ -50,10 +46,7 @@ export function CallNextQueue() {
 
     const load = React.useCallback(async () => {
         try {
-            const data = await DashboardService.getBdcWorkQueue({
-                dealership_id: selectedDealershipId || undefined,
-                tz: timezone,
-            })
+            const data = await DashboardService.getBdcWorkQueue({ tz: timezone })
             const stamp = data.generated_at || null
             const waiting = baselineRef.current !== undefined
             const stillOld = waiting && stamp === baselineRef.current && data.status !== "failed" && data.status !== "running"
@@ -75,7 +68,7 @@ export function CallNextQueue() {
         } finally {
             setLoading(false)
         }
-    }, [selectedDealershipId, timezone])
+    }, [timezone])
 
     React.useEffect(() => {
         setLoading(true)
@@ -107,7 +100,7 @@ export function CallNextQueue() {
     useWebSocketEvent("badges:refresh", refresh, [refresh])
     useWebSocketEvent("stats:refresh", refresh, [refresh])
 
-    function callLead(item: BdcWorkQueueItem) {
+    async function callLead(item: BdcWorkQueueItem) {
         if (!item.phone) {
             toast({
                 title: "No phone number",
@@ -115,6 +108,27 @@ export function CallNextQueue() {
                 variant: "destructive",
             })
             return
+        }
+        setBusyLeadId(item.lead_id)
+        try {
+            const next = await DashboardService.claimBdcWorkQueue(item.lead_id)
+            setItems(next.items || [])
+            setStatus(next.status || "ready")
+            setGeneratedAt(next.generated_at || null)
+            setScannedCount(next.scanned_count || 0)
+        } catch (error) {
+            const taken = (error as { response?: { status?: number } })?.response?.status === 409
+            toast({
+                title: taken ? "Already being called" : "Could not start the call",
+                description: taken
+                    ? "Someone else just started this call. The list has been updated."
+                    : "This lead is still on the list. Try again.",
+                variant: "destructive",
+            })
+            void load()
+            return
+        } finally {
+            setBusyLeadId(null)
         }
         if (voiceEnabled && callLeadCtx) {
             callLeadCtx.setCallLead({
@@ -132,7 +146,7 @@ export function CallNextQueue() {
         setRechecking(true)
         setStatus("running")
         try {
-            const data = await DashboardService.refreshBdcWorkQueue(selectedDealershipId)
+            const data = await DashboardService.refreshBdcWorkQueue()
             setItems(data.items || [])
             setStatus("running")
             setGeneratedAt(data.generated_at || null)
@@ -155,7 +169,6 @@ export function CallNextQueue() {
             const next = await DashboardService.dispositionBdcWorkQueue(
                 item.lead_id,
                 { outcome, timezone },
-                selectedDealershipId,
             )
             setItems(next.items || [])
             setStatus(next.status || "ready")
@@ -185,7 +198,7 @@ export function CallNextQueue() {
                         <p className="mt-1 text-sm text-muted-foreground">
                             {status === "running" || rechecking
                                 ? "Checking every lead: notes, missed follow-ups, appointments, and calls."
-                                : "gpt-4o-mini reads the whole book each morning before 8 AM Eastern. Start at the top."}
+                                : "One list for the whole BDC team. A lead leaves this list as soon as a call starts."}
                         </p>
                         <p className="mt-1 text-xs text-muted-foreground">
                             {checkedLabel}
@@ -194,7 +207,6 @@ export function CallNextQueue() {
                         </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                        <BdcDealershipSwitcher className="min-w-[180px]" />
                         <Button variant="outline" size="sm" disabled={status === "running" || rechecking} onClick={() => void recheck()}>
                             {(status === "running" || rechecking) && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
                             Recheck all leads

@@ -170,6 +170,13 @@ export const DashboardService = {
         return response.data;
     },
 
+    async claimBdcWorkQueue(leadId: string): Promise<BdcWorkQueueResponse> {
+        const response = await apiClient.post<BdcWorkQueueResponse>(
+            `/dashboard/bdc/work-queue/${leadId}/claim`,
+        );
+        return response.data;
+    },
+
     async dispositionBdcWorkQueue(
         leadId: string,
         body: { outcome: BdcWorkOutcome; timezone: string },
