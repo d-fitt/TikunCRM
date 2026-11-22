@@ -45,6 +45,28 @@ export interface BdcDealershipBreakdown {
     fresh_leads: number;
 }
 
+export type BdcWorkOutcome = "no_answer" | "voicemail" | "spoke" | "not_now";
+
+export interface BdcWorkQueueItem {
+    lead_id: string;
+    rank: number;
+    customer_name: string;
+    phone?: string | null;
+    store_name?: string | null;
+    priority_band: string;
+    priority_score: number;
+    reason: string;
+    action: "call" | "confirm" | "book" | string;
+    note_preview?: string | null;
+    chips: string[];
+    last_outcome?: string | null;
+    attempts_today: number;
+}
+
+export interface BdcWorkQueueResponse {
+    items: BdcWorkQueueItem[];
+}
+
 export interface BdcStats {
     total_leads: number;
     active_leads: number;
@@ -122,6 +144,24 @@ export const DashboardService = {
 
     async getBdcStats(): Promise<BdcStats> {
         const response = await apiClient.get("/dashboard/bdc/stats");
+        return response.data;
+    },
+
+    async getBdcWorkQueue(params: { dealership_id?: string; tz?: string } = {}): Promise<BdcWorkQueueResponse> {
+        const response = await apiClient.get<BdcWorkQueueResponse>("/dashboard/bdc/work-queue", { params });
+        return response.data;
+    },
+
+    async dispositionBdcWorkQueue(
+        leadId: string,
+        body: { outcome: BdcWorkOutcome; timezone: string },
+        dealershipId?: string | null,
+    ): Promise<BdcWorkQueueResponse> {
+        const response = await apiClient.post<BdcWorkQueueResponse>(
+            `/dashboard/bdc/work-queue/${leadId}/disposition`,
+            body,
+            { params: dealershipId ? { dealership_id: dealershipId } : {} },
+        );
         return response.data;
     },
 

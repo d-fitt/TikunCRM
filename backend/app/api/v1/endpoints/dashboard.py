@@ -1,7 +1,7 @@
 """
 Dashboard Intelligence Endpoints
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 from datetime import datetime, timedelta
 
@@ -26,6 +26,11 @@ from app.models.user import User
 from app.models.activity import Activity
 from app.models.follow_up import FollowUp, FollowUpStatus
 from app.models.appointment import Appointment, AppointmentStatus
+from app.services.bdc_work_queue_service import (
+    WorkQueueError,
+    apply_disposition,
+    build_work_queue,
+)
 
 router = APIRouter()
 
@@ -146,6 +151,31 @@ class LeadsByStatus(BaseModel):
     status: str
     count: int
     percentage: float
+
+
+class BdcWorkQueueItem(BaseModel):
+    lead_id: UUID
+    rank: int
+    customer_name: str
+    phone: Optional[str] = None
+    store_name: Optional[str] = None
+    priority_band: str
+    priority_score: int
+    reason: str
+    action: str
+    note_preview: Optional[str] = None
+    chips: List[str] = []
+    last_outcome: Optional[str] = None
+    attempts_today: int = 0
+
+
+class BdcWorkQueueResponse(BaseModel):
+    items: List[BdcWorkQueueItem]
+
+
+class BdcWorkQueueDisposition(BaseModel):
+    outcome: Literal["no_answer", "voicemail", "spoke", "not_now"]
+    timezone: str = "America/New_York"
 
 
 @router.get("/super-admin/stats", response_model=SuperAdminStats)
@@ -724,6 +754,36 @@ async def get_bdc_stats(
     )
     await cache_set(cache_key, result.model_dump(mode="json"), _DASHBOARD_TTL)
     return result
+
+
+@router.get("/bdc/work-queue", response_model=BdcWorkQueueResponse)
+async def get_bdc_work_queue(
+    dealership_id: Optional[UUID] = None,
+    tz: str = "America/New_York",
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_role(UserRole.BDC)),
+) -> Any:
+    """Ranked call list for the signed-in BDC agent."""
+    items = await build_work_queue(db, current_user, dealership_id, tz)
+    return BdcWorkQueueResponse(items=items)
+
+
+@router.post("/bdc/work-queue/{lead_id}/disposition", response_model=BdcWorkQueueResponse)
+async def post_bdc_work_queue_disposition(
+    lead_id: UUID,
+    body: BdcWorkQueueDisposition,
+    dealership_id: Optional[UUID] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.require_role(UserRole.BDC)),
+) -> Any:
+    """Log the call outcome, schedule the next touch, and return the new list."""
+    try:
+        await apply_disposition(db, current_user, lead_id, body.outcome, body.timezone)
+    except WorkQueueError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    await db.commit()
+    items = await build_work_queue(db, current_user, dealership_id, body.timezone)
+    return BdcWorkQueueResponse(items=items)
 
 
 @router.get("/stats")

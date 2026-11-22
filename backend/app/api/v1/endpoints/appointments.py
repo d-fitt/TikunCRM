@@ -6,6 +6,8 @@ from typing import Any, Optional
 from uuid import UUID
 import logging
 
+import pytz
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select, func, and_, or_, literal
@@ -16,6 +18,7 @@ from app.api import deps
 from app.core.permissions import UserRole
 from app.core.access_scope import get_accessible_dealership_ids, apply_dealership_scope_to_query, user_can_access_dealership
 from app.core.timezone import utc_now
+from app.utils.timezone import DEFAULT_DEALERSHIP_TIMEZONE, resolve_dealership_timezone
 from app.db.database import get_db
 from app.models.user import User
 from app.models.lead import Lead
@@ -78,18 +81,19 @@ def _apply_appointment_list_filters(
         stmt = stmt.where(Appointment.scheduled_at <= date_to)
 
     now = utc_now()
+    start_of_day, start_of_tomorrow = get_date_range_for_today()
     if today_only:
-        start_of_day, end_of_day = get_date_range_for_today()
         stmt = stmt.where(
             and_(
                 Appointment.scheduled_at >= start_of_day,
-                Appointment.scheduled_at < end_of_day,
+                Appointment.scheduled_at < start_of_tomorrow,
             )
         )
     if upcoming_only:
+        # Tomorrow onward. Later today stays on Today, not Upcoming.
         stmt = stmt.where(
             and_(
-                Appointment.scheduled_at > now,
+                Appointment.scheduled_at >= start_of_tomorrow,
                 Appointment.status.in_([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED]),
             )
         )
@@ -103,12 +107,14 @@ def _apply_appointment_list_filters(
     return stmt
 
 
-def get_date_range_for_today():
-    """Get start and end of today (UTC)"""
-    now = utc_now()
-    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_of_day = start_of_day + timedelta(days=1)
-    return start_of_day, end_of_day
+def get_date_range_for_today(tz_name: str = DEFAULT_DEALERSHIP_TIMEZONE):
+    """Start of today and start of tomorrow in the dealership timezone, as UTC."""
+    tz = pytz.timezone(resolve_dealership_timezone(tz_name))
+    local = utc_now().astimezone(tz)
+    start_of_day = tz.localize(datetime(local.year, local.month, local.day))
+    tomorrow = local.date() + timedelta(days=1)
+    start_of_tomorrow = tz.localize(datetime(tomorrow.year, tomorrow.month, tomorrow.day))
+    return start_of_day.astimezone(pytz.UTC), start_of_tomorrow.astimezone(pytz.UTC)
 
 
 def get_start_of_week():
@@ -507,12 +513,13 @@ async def get_appointment_stats(
     )
     today = today_result.scalar() or 0
     
-    # Upcoming (future, scheduled/confirmed)
+    # Upcoming is tomorrow onward. The rest of today is counted in Today.
+    _, start_of_tomorrow = get_date_range_for_today()
     upcoming_result = await db.execute(
         select(func.count(Appointment.id)).where(
             and_(
                 base_filter,
-                Appointment.scheduled_at > now,
+                Appointment.scheduled_at >= start_of_tomorrow,
                 Appointment.status.in_([AppointmentStatus.SCHEDULED, AppointmentStatus.CONFIRMED])
             )
         )

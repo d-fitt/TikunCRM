@@ -7,6 +7,7 @@ import { Command, Menu, Sparkles } from "lucide-react"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { NotificationBell } from "@/components/layout/notification-bell"
 import { MissedCallsBell } from "@/components/layout/missed-calls-bell"
+import { NewLeadsBell } from "@/components/layout/new-leads-bell"
 import { HeaderClock } from "@/components/time-tracking/header-clock"
 import { useSidebarOptional } from "@/contexts/sidebar-context"
 import { useAiCopilotOptional } from "@/contexts/ai-copilot-context"
@@ -138,6 +139,7 @@ export function Header() {
                 </div>
 
                 <HeaderClock />
+                <NewLeadsBell />
                 <MissedCallsBell />
                 <NotificationBell />
 

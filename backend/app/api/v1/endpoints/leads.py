@@ -1816,6 +1816,35 @@ def _dedupe_lead_campaign_rows(campaigns: List[LeadCampaign]) -> List[LeadCampai
     return sorted(by_key.values(), key=lambda x: x.added_at, reverse=True)
 
 
+@router.get("/fresh-count")
+async def fresh_lead_count(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Untouched new leads: one activity and no salesperson yet.
+    Same set as the Fresh leads list. Header badge refetches this on websocket events.
+    """
+    accessible_ids = await get_accessible_dealership_ids(db, current_user)
+    fresh_subq = (
+        select(Activity.lead_id)
+        .where(Activity.lead_id.isnot(None))
+        .group_by(Activity.lead_id)
+        .having(func.count(Activity.id) == 1)
+    )
+    query = (
+        select(func.count())
+        .select_from(Lead)
+        .where(
+            Lead.assigned_to.is_(None),
+            Lead.id.in_(fresh_subq),
+        )
+    )
+    query = apply_dealership_scope_to_lead_query(query, accessible_ids, Lead)
+    count = (await db.execute(query)).scalar() or 0
+    return {"count": int(count)}
+
+
 @router.get("/{lead_id}", response_model=LeadDetail)
 async def get_lead(
     lead_id: UUID,

@@ -315,6 +315,11 @@ export const LeadService = {
         return response.data;
     },
 
+    async getFreshCount(): Promise<{ count: number }> {
+        const response = await apiClient.get<{ count: number }>(`${LEADS_PREFIX}/fresh-count`);
+        return response.data;
+    },
+
     async listUnassignedLeads(params: LeadListParams = {}): Promise<LeadListResponse> {
         const response = await apiClient.get(`${LEADS_PREFIX}/unassigned`, { params });
         return response.data;
