@@ -2370,7 +2370,13 @@ export default function LeadDetailsPage() {
                                     )}
                                 </h1>
                                 
-                                <LeadStoreDrive postalCode={lead.customer?.postal_code} />
+                                <LeadStoreDrive
+                                    postalCode={lead.customer?.postal_code}
+                                    onSave={isMentionOnly ? undefined : async (postalCode) => {
+                                        await LeadService.updateLead(lead.id, { postal_code: postalCode })
+                                        await fetchLead()
+                                    }}
+                                />
 
                                 {/* Multi-campaign summary — full list in popover (hover or click) */}
                                 {lead.is_starred && dedupedCampaigns.length > 0 && (
