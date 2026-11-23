@@ -420,6 +420,87 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
+_RECENT_TURNS = 12
+_MEMORY_BUDGET = 14_000
+
+
+def _clip(text: str, limit: int) -> str:
+    flat = " ".join((text or "").split())
+    if len(flat) <= limit:
+        return flat
+    return flat[: limit - 1].rstrip() + "…"
+
+
+def _tool_facts(message: AiMessage) -> str:
+    bits: List[str] = []
+    for trace in message.tool_traces or []:
+        if not isinstance(trace, dict):
+            continue
+        summary = str(trace.get("result_summary") or "").strip()
+        if summary:
+            bits.append(summary)
+    return "; ".join(bits[:4])
+
+
+def pack_chat_history(messages: List[AiMessage]) -> tuple[str, List[dict]]:
+    """
+    Older turns become a compact memory. The latest turns stay verbatim.
+    The memory grows with the chat until a fixed budget, so later questions
+    still see earlier answers and database facts.
+    """
+    turns = [
+        message
+        for message in messages
+        if message.role in ("user", "assistant") and (message.content or "").strip()
+    ]
+    recent = turns[-_RECENT_TURNS:]
+    older = turns[:-_RECENT_TURNS] if len(turns) > _RECENT_TURNS else []
+
+    bullets: List[str] = []
+    for message in older:
+        if message.role == "user":
+            bullets.append(f"User: {_clip(message.content, 180)}")
+            continue
+        line = f"Assistant: {_clip(message.content, 280)}"
+        facts = _tool_facts(message)
+        if facts:
+            line += f" Data: {_clip(facts, 220)}"
+        bullets.append(line)
+
+    memory = ""
+    if bullets:
+        kept: List[str] = []
+        used = 0
+        dropped = 0
+        for bullet in reversed(bullets):
+            extra = len(bullet) + 1
+            if used + extra > _MEMORY_BUDGET:
+                dropped += 1
+                continue
+            kept.append(bullet)
+            used += extra
+        kept.reverse()
+        prefix = (
+            f"{dropped} older turns are folded into the lines below.\n"
+            if dropped
+            else ""
+        )
+        memory = prefix + "\n".join(kept)
+
+    packed: List[dict] = []
+    for message in recent:
+        text = message.content.strip()
+        if message.role == "assistant":
+            facts = _tool_facts(message)
+            if facts:
+                text = f"{text}\n\nDatabase facts: {facts}"
+            text = _clip(text, 2500)
+        else:
+            text = _clip(text, 2000)
+        packed.append({"role": message.role, "content": text})
+    return memory, packed
+
+
 def build_thinking_plan(user_text: str, role: str) -> str:
     """User-safe thinking summary (ChatGPT-style panel)."""
     t = user_text.lower()
@@ -864,15 +945,22 @@ class AiAssistantService:
                     yield _sse("ui_block", note_block)
                 rag_context = CrmContentSearchService.format_rag_context(retrieve_result)
 
-        # Build chat history for OpenAI
+        # Newest 200 turns. Older ones are packed into a compact memory.
         hist_res = await db.execute(
             select(AiMessage)
             .where(AiMessage.conversation_id == conv.id)
-            .order_by(AiMessage.created_at.asc())
-            .limit(40)
+            .order_by(AiMessage.created_at.desc())
+            .limit(200)
         )
-        history = list(hist_res.scalars().all())
+        history = list(reversed(hist_res.scalars().all()))
+        memory, packed_history = pack_chat_history(history)
         system_content = _system_prompt_for_user(user)
+        if memory:
+            system_content += (
+                "\n\nEarlier in this same chat. Use it when the user says "
+                "\"that\", \"those\", or asks a follow-up:\n"
+                + memory
+            )
         if rag_context:
             system_content += (
                 "\n\n--- Retrieved CRM timeline context (use ONLY this for note/call/message claims) ---\n"
@@ -881,9 +969,7 @@ class AiAssistantService:
         oai_messages: List[dict] = [
             {"role": "system", "content": system_content}
         ]
-        for m in history:
-            if m.role in ("user", "assistant") and m.content:
-                oai_messages.append({"role": m.role, "content": m.content})
+        oai_messages.extend(packed_history)
 
         client = AiAssistantService._client()
         tools = ALL_TOOLS
