@@ -1,6 +1,7 @@
 """
 Voice API Endpoints - Twilio WebRTC Softphone
 """
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional, List
@@ -53,24 +54,25 @@ async def _notify_incoming_ring_background(
     from app.db.database import async_session_maker
     from app.services.push_service import push_service
 
-    try:
-        for uid in user_ids:
-            await ws_manager.send_to_user(
-                uid,
-                {
-                    "type": "call:incoming",
-                    "payload": {
-                        "call_log_id": call_log_id,
-                        "call_sid": call_sid,
-                        "from_number": from_number,
-                        "lead_id": lead_id,
-                        "lead_name": lead_name,
-                        "is_ring_group": len(user_ids) > 1,
-                    },
-                },
-            )
-    except Exception as e:
-        logger.warning("Incoming-call WebSocket notify failed: %s", e)
+    payload = {
+        "type": "call:incoming",
+        "payload": {
+            "call_log_id": call_log_id,
+            "call_sid": call_sid,
+            "from_number": from_number,
+            "lead_id": lead_id,
+            "lead_name": lead_name,
+            "is_ring_group": len(user_ids) > 1,
+        },
+    }
+
+    async def _ring_one(uid: str) -> None:
+        try:
+            await ws_manager.send_to_user(uid, payload)
+        except Exception as e:
+            logger.warning("Incoming-call WebSocket notify failed for %s: %s", uid, e)
+
+    await asyncio.gather(*[_ring_one(uid) for uid in user_ids])
 
     try:
         async with async_session_maker() as db:

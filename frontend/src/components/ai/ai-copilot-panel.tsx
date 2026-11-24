@@ -906,7 +906,10 @@ function AssistantBubble({
 }
 
 function mergeUiBlock(blocks: AiUiBlock[], incoming: AiUiBlock): AiUiBlock[] {
-  if (incoming.type === "query_result") return [...blocks, incoming]
+  if (incoming.type === "query_result") {
+    const withoutCounts = blocks.filter((block) => block.type !== "query_result")
+    return [...withoutCounts, incoming]
+  }
   const idx = blocks.findIndex((b) => b.type === incoming.type)
   if (idx >= 0) {
     const next = [...blocks]
@@ -1056,22 +1059,31 @@ export function AiCopilotPanel() {
             )
           },
           onToolStart: (d) => {
-            setLive((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    tools: [
-                      ...prev.tools,
-                      {
-                        name: d.name,
-                        label: d.label,
-                        args: d.args,
-                        status: "running",
-                      },
-                    ],
-                  }
-                : prev
-            )
+            setLive((prev) => {
+              if (!prev) return prev
+              const existing = prev.tools.findIndex((tool) => tool.name === d.name)
+              if (existing >= 0) {
+                const tools = [...prev.tools]
+                tools[existing] = {
+                  ...tools[existing],
+                  status: "running",
+                  label: d.label || tools[existing].label,
+                }
+                return { ...prev, tools }
+              }
+              return {
+                ...prev,
+                tools: [
+                  ...prev.tools,
+                  {
+                    name: d.name,
+                    label: d.label,
+                    args: d.args,
+                    status: "running",
+                  },
+                ],
+              }
+            })
           },
           onToolResult: (d) => {
             setLive((prev) => {

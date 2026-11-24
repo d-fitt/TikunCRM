@@ -30,7 +30,7 @@ class EmailNotifier:
     
     @property
     def is_configured(self) -> bool:
-        """Check if email service is configured (system SMTP)."""
+        """TikunCRM staff mail uses the system Hostinger mailbox, not Carvamonos."""
         return bool(settings.smtp_user and settings.smtp_password)
     
     async def send_notification_email(
@@ -110,7 +110,6 @@ This is an automated notification from TikunCRM.
 </html>
             """
             
-            # Send via system SMTP (thread pool — smtplib blocks the event loop)
             return await asyncio.to_thread(
                 EmailNotifier._send_via_system,
                 to_email,

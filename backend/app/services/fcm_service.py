@@ -2,6 +2,7 @@
 Firebase Cloud Messaging (FCM) HTTP V1 API Service
 Sends push notifications via FCM using a service account.
 """
+import asyncio
 import json
 import logging
 import os
@@ -30,6 +31,7 @@ class FCMService:
     def __init__(self) -> None:
         self._credentials = None
         self._project_id: Optional[str] = None
+        self._token_lock = asyncio.Lock()
 
     @property
     def is_configured(self) -> bool:
@@ -116,7 +118,8 @@ class FCMService:
             logger.error("FCM project_id not found")
             return False
 
-        access_token = self._get_access_token()
+        async with self._token_lock:
+            access_token = self._get_access_token()
         if not access_token:
             logger.error("FCM failed to get access token")
             return False
