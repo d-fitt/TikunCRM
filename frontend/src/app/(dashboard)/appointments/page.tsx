@@ -51,6 +51,7 @@ import {
     isAppointmentStatusTerminal,
     appointmentStoreLabel,
     type AppointmentStoreCount,
+    type AppointmentStatusCount,
 } from "@/services/appointment-service"
 import { LeadService, Lead, getLeadFullName } from "@/services/lead-service"
 import { TeamService, UserBrief } from "@/services/team-service"
@@ -92,6 +93,46 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
+
+const STATUS_COUNT_TONE: Record<string, string> = {
+    completed: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    sold: "border-emerald-200 bg-emerald-50 text-emerald-900",
+    no_show: "border-amber-200 bg-amber-50 text-amber-800",
+    cancelled: "border-gray-200 bg-gray-100 text-gray-700",
+    scheduled: "border-blue-200 bg-blue-50 text-blue-800",
+    confirmed: "border-sky-200 bg-sky-50 text-sky-800",
+    arrived: "border-cyan-200 bg-cyan-50 text-cyan-800",
+    in_showroom: "border-orange-200 bg-orange-50 text-orange-800",
+    in_progress: "border-yellow-200 bg-yellow-50 text-yellow-800",
+    rescheduled: "border-violet-200 bg-violet-50 text-violet-800",
+}
+
+function statusCountTone(status: string): string {
+    return STATUS_COUNT_TONE[status] || "border-border bg-muted text-foreground"
+}
+
+const STATUS_COUNT_ORDER = [
+    "completed",
+    "no_show",
+    "cancelled",
+    "sold",
+    "scheduled",
+    "confirmed",
+    "arrived",
+    "in_showroom",
+    "in_progress",
+    "rescheduled",
+]
+
+function countsFromAppointments(items: Appointment[]): AppointmentStatusCount[] {
+    const totals = new Map<string, number>()
+    for (const item of items) {
+        totals.set(item.status, (totals.get(item.status) || 0) + 1)
+    }
+    return STATUS_COUNT_ORDER
+        .filter((status) => (totals.get(status) || 0) > 0)
+        .map((status) => ({ status, count: totals.get(status) || 0 }))
+}
 
 // Stats Card Component
 function StatsCard({ 
@@ -933,9 +974,12 @@ export default function AppointmentsPage() {
     )
     const [stats, setStats] = React.useState<AppointmentStats | null>(null)
     const [storeCounts, setStoreCounts] = React.useState<AppointmentStoreCount[]>([])
+    const [statusCounts, setStatusCounts] = React.useState<AppointmentStatusCount[]>([])
+    const visibleStatusCounts = statusCounts.length > 0 ? statusCounts : countsFromAppointments(appointments)
     const [loading, setLoading] = React.useState(true)
     const [page, setPage] = React.useState(1)
     const [totalPages, setTotalPages] = React.useState(1)
+    const [listTotal, setListTotal] = React.useState(0)
 
     // Filters - initial from URL or localStorage
     const [filter, setFilterState] = React.useState<FilterType>("all")
@@ -1139,7 +1183,9 @@ export default function AppointmentsPage() {
             
             setAppointments(appointmentsRes.items)
             setTotalPages(appointmentsRes.total_pages)
+            setListTotal(appointmentsRes.total || 0)
             setStoreCounts(appointmentsRes.store_counts || [])
+            setStatusCounts(appointmentsRes.status_counts || [])
             setStats(statsRes)
         } catch (err) {
             console.error("Failed to load appointments:", err)
@@ -1872,19 +1918,35 @@ export default function AppointmentsPage() {
             {/* Appointments List */}
             <div className="border rounded-lg bg-card">
                 {/* List Header */}
-                <div className="flex items-center justify-between px-4 py-3 border-b bg-muted/30">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b bg-muted/30">
                     <h3 className="font-semibold">
                         {filter === "today" ? "Today's Appointments" :
                          filter === "upcoming" ? "Upcoming Appointments" :
                          filter === "overdue" ? "Overdue Appointments" :
                          filter === "completed" ? "Completed Appointments" :
                          "All Appointments"}
-                        {!loading && appointments.length > 0 && (
+                        {!loading && listTotal > 0 && (
                             <span className="ml-2 text-sm font-normal text-muted-foreground">
-                                ({appointments.length} {appointments.length === 1 ? "appointment" : "appointments"})
+                                ({listTotal} {listTotal === 1 ? "appointment" : "appointments"})
                             </span>
                         )}
                     </h3>
+                    {!loading && visibleStatusCounts.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                            {visibleStatusCounts.map((row) => (
+                                <span
+                                    key={row.status}
+                                    className={cn(
+                                        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                                        statusCountTone(row.status)
+                                    )}
+                                >
+                                    {getAppointmentStatusLabel(row.status as AppointmentStatus)}
+                                    <span className="tabular-nums">{row.count}</span>
+                                </span>
+                            ))}
+                        </div>
+                    )}
                     {totalPages > 1 && !loading && (
                         <span className="text-sm text-muted-foreground">
                             Page {page} of {totalPages}

@@ -36,6 +36,7 @@ from app.schemas.appointment import (
     AppointmentResponse,
     AppointmentListResponse,
     AppointmentStats,
+    AppointmentStatusCount,
     AppointmentStoreCount,
 )
 
@@ -399,15 +400,24 @@ async def list_appointments(
     count_query = _apply_appointment_list_filters(count_query, **filter_kwargs)
     store_count_query = _apply_appointment_list_filters(store_count_query, **filter_kwargs)
 
+    status_count_query = select(Appointment.status, func.count(Appointment.id))
+    status_count_query, _ = await _scope_appointment_queries(
+        status_count_query, status_count_query, db, current_user
+    )
+    status_count_query = _apply_appointment_list_filters(status_count_query, **filter_kwargs)
+
     if partner_store_id:
         query = query.outerjoin(Lead, Appointment.lead_id == Lead.id)
         count_query = count_query.outerjoin(Lead, Appointment.lead_id == Lead.id)
+        status_count_query = status_count_query.outerjoin(Lead, Appointment.lead_id == Lead.id)
         store_match = or_(
             Appointment.partner_store_id == partner_store_id,
             Lead.partner_store_id == partner_store_id,
         )
         query = query.where(store_match)
         count_query = count_query.where(store_match)
+        status_count_query = status_count_query.where(store_match)
+    status_count_query = status_count_query.group_by(Appointment.status)
     
     # Get total count
     total_result = await db.execute(count_query)
@@ -466,6 +476,29 @@ async def list_appointments(
         )
     store_counts.sort(key=lambda row: (-row.count, row.name.lower()))
     
+    status_order = [
+        AppointmentStatus.COMPLETED,
+        AppointmentStatus.NO_SHOW,
+        AppointmentStatus.CANCELLED,
+        AppointmentStatus.SOLD,
+        AppointmentStatus.SCHEDULED,
+        AppointmentStatus.CONFIRMED,
+        AppointmentStatus.ARRIVED,
+        AppointmentStatus.IN_SHOWROOM,
+        AppointmentStatus.IN_PROGRESS,
+        AppointmentStatus.RESCHEDULED,
+    ]
+    status_rows = (await db.execute(status_count_query)).all()
+    counts_by_status = {}
+    for status_value, status_count in status_rows:
+        key = status_value.value if hasattr(status_value, "value") else str(status_value)
+        counts_by_status[key] = status_count
+    status_counts = [
+        AppointmentStatusCount(status=status.value, count=counts_by_status[status.value])
+        for status in status_order
+        if counts_by_status.get(status.value, 0) > 0
+    ]
+
     total_pages = (total + page_size - 1) // page_size
     
     return AppointmentListResponse(
@@ -475,6 +508,7 @@ async def list_appointments(
         page_size=page_size,
         total_pages=total_pages,
         store_counts=store_counts,
+        status_counts=status_counts,
     )
 
 

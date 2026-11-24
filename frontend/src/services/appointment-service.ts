@@ -102,6 +102,11 @@ export interface AppointmentStoreCount {
     count: number
 }
 
+export interface AppointmentStatusCount {
+    status: AppointmentStatus | string
+    count: number
+}
+
 export interface AppointmentListResponse {
     items: Appointment[]
     total: number
@@ -109,6 +114,7 @@ export interface AppointmentListResponse {
     page_size: number
     total_pages: number
     store_counts?: AppointmentStoreCount[]
+    status_counts?: AppointmentStatusCount[]
 }
 
 /** Store on the appointment, or the lead's store when the appointment was booked before one was saved. */

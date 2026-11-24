@@ -149,6 +149,12 @@ class AppointmentStoreCount(BaseModel):
     count: int
 
 
+class AppointmentStatusCount(BaseModel):
+    """How many appointments in the current list have this status."""
+    status: str
+    count: int
+
+
 class AppointmentListResponse(BaseModel):
     """Paginated list of appointments"""
     items: List[AppointmentResponse]
@@ -157,6 +163,7 @@ class AppointmentListResponse(BaseModel):
     page_size: int
     total_pages: int
     store_counts: List[AppointmentStoreCount] = []
+    status_counts: List[AppointmentStatusCount] = []
 
 
 class AppointmentStats(BaseModel):
