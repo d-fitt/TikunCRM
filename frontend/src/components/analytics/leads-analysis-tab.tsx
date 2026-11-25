@@ -56,13 +56,24 @@ import {
 } from "@/components/ui/table"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { AdvancedFiltersMenu, FilterField } from "@/components/ui/filter-bar"
 import { cn } from "@/lib/utils"
+import Link from "next/link"
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
 import {
     ReportsService,
     type LeadCohortAnalysisResponse,
     type LeadsCohortFilters,
     type CampaignMatrixRow,
+    type CohortDrillLead,
 } from "@/services/reports-service"
+import { ActivityService, ACTIVITY_TYPE_INFO, type Activity } from "@/services/activity-service"
 import type { PartnerStore } from "@/services/partner-store-service"
 import type { LeadStage } from "@/services/lead-stage-service"
 
@@ -267,6 +278,7 @@ function KpiTile({
     sub,
     icon: Icon,
     accent = "default",
+    onClick,
 }: {
     title: string
     value: string | number
@@ -274,6 +286,7 @@ function KpiTile({
     sub?: string
     icon: React.ComponentType<{ className?: string }>
     accent?: "default" | "good" | "warn" | "bad" | "primary"
+    onClick?: () => void
 }) {
     const borderCls =
         accent === "good"
@@ -286,7 +299,18 @@ function KpiTile({
                         ? "border-primary/30"
                         : ""
     return (
-        <Card className={cn("shadow-none", borderCls)}>
+        <Card
+            className={cn("shadow-none text-left", borderCls, onClick && "cursor-pointer transition hover:bg-muted/40")}
+            onClick={onClick}
+            role={onClick ? "button" : undefined}
+            tabIndex={onClick ? 0 : undefined}
+            onKeyDown={onClick ? (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault()
+                    onClick()
+                }
+            } : undefined}
+        >
             <CardContent className="p-4">
                 <div className="flex items-center justify-between gap-2 text-xs font-medium text-muted-foreground">
                     <span className="truncate">{title}</span>
@@ -306,6 +330,204 @@ function KpiTile({
                 {sub && <p className="mt-1 text-[11px] text-muted-foreground">{sub}</p>}
             </CardContent>
         </Card>
+    )
+}
+
+function logDetail(activity: Activity): string {
+    const meta = activity.meta_data || {}
+    const bits = [meta.content, meta.notes, meta.body, meta.body_preview, meta.summary, meta.subject]
+    for (const bit of bits) {
+        if (typeof bit === "string" && bit.trim() && bit.trim() !== (activity.description || "").trim()) {
+            return bit.trim()
+        }
+    }
+    return ""
+}
+
+function CohortDrillDialog({
+    metric,
+    label,
+    filters,
+    onClose,
+}: {
+    metric: string | null
+    label: string
+    filters: LeadsCohortFilters | undefined
+    onClose: () => void
+}) {
+    const [leads, setLeads] = React.useState<CohortDrillLead[]>([])
+    const [loading, setLoading] = React.useState(false)
+    const [error, setError] = React.useState<string | null>(null)
+    const [query, setQuery] = React.useState("")
+    const [selectedId, setSelectedId] = React.useState<string | null>(null)
+    const [logs, setLogs] = React.useState<Activity[]>([])
+    const [logsLoading, setLogsLoading] = React.useState(false)
+    const [logFilter, setLogFilter] = React.useState<"all" | "notes" | "calls">("all")
+
+    React.useEffect(() => {
+        if (!metric || !filters) return
+        let cancelled = false
+        setLoading(true)
+        setError(null)
+        setQuery("")
+        setSelectedId(null)
+        setLogs([])
+        ReportsService.getLeadsCohortDrill(metric, filters)
+            .then((data) => {
+                if (cancelled) return
+                setLeads(data.leads || [])
+                setSelectedId(data.leads?.[0]?.id ?? null)
+            })
+            .catch(() => {
+                if (!cancelled) setError("Could not load these leads.")
+            })
+            .finally(() => {
+                if (!cancelled) setLoading(false)
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [metric, filters])
+
+    React.useEffect(() => {
+        if (!selectedId) return
+        let cancelled = false
+        setLogsLoading(true)
+        setLogs([])
+        const load = async () => {
+            const collected: Activity[] = []
+            let page = 1
+            let total = 0
+            do {
+                const response = await ActivityService.getLeadTimeline(selectedId, { page, page_size: 100 })
+                total = response.total || 0
+                collected.push(...(response.items || []))
+                page += 1
+            } while (collected.length < total && page <= 15)
+            return collected
+        }
+        load()
+            .then((items) => {
+                if (!cancelled) setLogs(items)
+            })
+            .catch(() => {
+                if (!cancelled) setLogs([])
+            })
+            .finally(() => {
+                if (!cancelled) setLogsLoading(false)
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [selectedId])
+
+    const filteredLeads = leads.filter((lead) => {
+        const haystack = `${lead.name} ${lead.phone || ""} ${lead.email || ""}`.toLowerCase()
+        return haystack.includes(query.trim().toLowerCase())
+    })
+    const selected = leads.find((lead) => lead.id === selectedId) || null
+    const visibleLogs = logs.filter((log) => {
+        if (logFilter === "notes") return log.type === "note_added"
+        if (logFilter === "calls") return log.type === "call_logged"
+        return true
+    })
+
+    return (
+        <Dialog open={Boolean(metric)} onOpenChange={(open) => { if (!open) onClose() }}>
+            <DialogContent className="flex max-h-[85vh] w-[min(960px,calc(100vw-2rem))] max-w-none flex-col gap-3 overflow-hidden p-4 sm:p-5">
+                <DialogHeader>
+                    <DialogTitle>{label}</DialogTitle>
+                    <DialogDescription>
+                        {loading ? "Loading leads…" : `${leads.length.toLocaleString()} leads. Open one to read notes and the full activity log.`}
+                    </DialogDescription>
+                </DialogHeader>
+                {error ? <p className="text-sm text-destructive">{error}</p> : null}
+                <div className="grid min-h-0 flex-1 gap-3 md:grid-cols-[280px_1fr]">
+                    <div className="flex min-h-0 flex-col gap-2">
+                        <input
+                            value={query}
+                            onChange={(event) => setQuery(event.target.value)}
+                            placeholder="Search name or phone"
+                            className="h-9 rounded-md border bg-background px-3 text-sm"
+                        />
+                        <div className="min-h-[220px] flex-1 overflow-y-auto rounded-md border">
+                            {filteredLeads.length === 0 && !loading ? (
+                                <p className="p-3 text-sm text-muted-foreground">No leads in this number.</p>
+                            ) : filteredLeads.map((lead) => (
+                                <button
+                                    key={lead.id}
+                                    type="button"
+                                    onClick={() => setSelectedId(lead.id)}
+                                    className={cn(
+                                        "block w-full border-b px-3 py-2 text-left last:border-b-0 hover:bg-muted/60",
+                                        lead.id === selectedId && "bg-muted"
+                                    )}
+                                >
+                                    <span className="block truncate text-sm font-medium">{lead.name}</span>
+                                    <span className="block truncate text-[11px] text-muted-foreground">
+                                        {[lead.phone, lead.stage, lead.repeat_submission ? "Came in again" : null].filter(Boolean).join(" · ")}
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    <div className="flex min-h-0 flex-col gap-2">
+                        {selected ? (
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                    <p className="font-medium">{selected.name}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                        {[selected.phone, selected.email, selected.outcome, selected.stage].filter(Boolean).join(" · ") || "No contact details"}
+                                    </p>
+                                </div>
+                                <Link href={`/leads/${selected.id}`} className="text-sm font-medium text-primary hover:underline">
+                                    Open lead
+                                </Link>
+                            </div>
+                        ) : null}
+                        <div className="flex gap-1">
+                            {(["all", "notes", "calls"] as const).map((key) => (
+                                <button
+                                    key={key}
+                                    type="button"
+                                    onClick={() => setLogFilter(key)}
+                                    className={cn(
+                                        "rounded-md px-2.5 py-1 text-xs font-medium",
+                                        logFilter === key ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                                    )}
+                                >
+                                    {key === "all" ? "All logs" : key === "notes" ? "Notes" : "Calls"}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="min-h-[220px] flex-1 overflow-y-auto rounded-md border">
+                            {logsLoading ? (
+                                <p className="p-3 text-sm text-muted-foreground">Loading logs…</p>
+                            ) : visibleLogs.length === 0 ? (
+                                <p className="p-3 text-sm text-muted-foreground">No logs for this view.</p>
+                            ) : visibleLogs.map((log) => {
+                                const info = ACTIVITY_TYPE_INFO[log.type]
+                                const detail = logDetail(log)
+                                const who = log.user ? `${log.user.first_name || ""} ${log.user.last_name || ""}`.trim() : ""
+                                return (
+                                    <div key={log.id} className="border-b px-3 py-2 last:border-b-0">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="text-xs font-medium">{info?.label || log.type}</span>
+                                            <span className="text-[11px] text-muted-foreground">
+                                                {log.created_at ? new Date(log.created_at).toLocaleString() : ""}
+                                            </span>
+                                        </div>
+                                        {log.description ? <p className="mt-1 text-sm">{log.description}</p> : null}
+                                        {detail ? <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{detail}</p> : null}
+                                        {who ? <p className="mt-1 text-[11px] text-muted-foreground">{who}</p> : null}
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    </div>
+                </div>
+            </DialogContent>
+        </Dialog>
     )
 }
 
@@ -555,6 +777,7 @@ export function LeadsAnalysisTab({
     const [stageIds, setStageIds] = React.useState<string[]>([])
     const [hasStip, setHasStip] = React.useState<"yes" | "no" | null>(null)
     const [includeReturning, setIncludeReturning] = React.useState<boolean>(true)
+    const [drill, setDrill] = React.useState<{ metric: string; label: string; filters: LeadsCohortFilters } | null>(null)
     const [bdcMode, setBdcMode] = React.useState<"activity" | "cohort">("activity")
     const [showInactiveBdc, setShowInactiveBdc] = React.useState<boolean>(false)
 
@@ -612,6 +835,10 @@ export function LeadsAnalysisTab({
         includeReturning,
         bdcMode,
     ])
+
+    const openDrill = (metric: string, label: string) => {
+        setDrill({ metric, label, filters: buildQueryFilters() })
+    }
 
     const fetchData = React.useCallback(async () => {
         setLoading(true)
@@ -796,94 +1023,120 @@ export function LeadsAnalysisTab({
                             </>
                         )}
 
-                        <MultiFilterSelect
-                            label="Campaign"
-                            emptyLabel="All active campaigns"
-                            className="w-[190px]"
-                            options={(data?.available_campaigns ?? []).map((name) => ({ value: name, label: name }))}
-                            selected={campaigns}
-                            onChange={setCampaigns}
-                        />
+                        <AdvancedFiltersMenu
+                            align="start"
+                            contentClassName="w-[min(92vw,480px)]"
+                            activeCount={
+                                (campaigns.length > 0 ? 1 : 0) +
+                                (partnerStoreIds.length > 0 ? 1 : 0) +
+                                (bdcAgentIds.length > 0 ? 1 : 0) +
+                                (assignedToIds.length > 0 ? 1 : 0) +
+                                (sources.length > 0 ? 1 : 0) +
+                                (stageIds.length > 0 ? 1 : 0) +
+                                (hasStip ? 1 : 0) +
+                                (!includeReturning ? 1 : 0)
+                            }
+                            onReset={() => {
+                                setCampaigns([])
+                                setPartnerStoreIds([])
+                                setBdcAgentIds([])
+                                setAssignedToIds([])
+                                setSources([])
+                                setStageIds([])
+                                setHasStip(null)
+                                setIncludeReturning(true)
+                            }}
+                        >
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                <MultiFilterSelect
+                                    label="Campaign"
+                                    emptyLabel="All active campaigns"
+                                    className="w-full"
+                                    options={(data?.available_campaigns ?? []).map((name) => ({ value: name, label: name }))}
+                                    selected={campaigns}
+                                    onChange={setCampaigns}
+                                />
 
-                        <MultiFilterSelect
-                            label="Partner Store"
-                            emptyLabel="All stores"
-                            className="w-[185px]"
-                            options={partnerStores.map((ps) => ({
-                                value: ps.id,
-                                label: ps.brand ? `${ps.name} (${ps.brand})` : ps.name,
-                            }))}
-                            selected={partnerStoreIds}
-                            onChange={setPartnerStoreIds}
-                        />
+                                <MultiFilterSelect
+                                    label="Partner Store"
+                                    emptyLabel="All stores"
+                                    className="w-full"
+                                    options={partnerStores.map((ps) => ({
+                                        value: ps.id,
+                                        label: ps.brand ? `${ps.name} (${ps.brand})` : ps.name,
+                                    }))}
+                                    selected={partnerStoreIds}
+                                    onChange={setPartnerStoreIds}
+                                />
 
-                        {bdcAgents.length > 0 && (
-                            <MultiFilterSelect
-                                label="BDC Agent"
-                                emptyLabel="All BDC"
-                                className="w-[160px]"
-                                options={bdcAgents.map((agent) => ({
-                                    value: agent.id,
-                                    label: `${agent.first_name} ${agent.last_name}`.trim(),
-                                }))}
-                                selected={bdcAgentIds}
-                                onChange={setBdcAgentIds}
-                            />
-                        )}
+                                {bdcAgents.length > 0 && (
+                                    <MultiFilterSelect
+                                        label="BDC Agent"
+                                        emptyLabel="All BDC"
+                                        className="w-full"
+                                        options={bdcAgents.map((agent) => ({
+                                            value: agent.id,
+                                            label: `${agent.first_name} ${agent.last_name}`.trim(),
+                                        }))}
+                                        selected={bdcAgentIds}
+                                        onChange={setBdcAgentIds}
+                                    />
+                                )}
 
-                        <MultiFilterSelect
-                            label="Salesperson"
-                            emptyLabel="All"
-                            className="w-[155px]"
-                            options={salespersons.map((person) => ({
-                                value: person.id,
-                                label: `${person.first_name} ${person.last_name}`.trim(),
-                            }))}
-                            selected={assignedToIds}
-                            onChange={setAssignedToIds}
-                        />
+                                <MultiFilterSelect
+                                    label="Salesperson"
+                                    emptyLabel="All"
+                                    className="w-full"
+                                    options={salespersons.map((person) => ({
+                                        value: person.id,
+                                        label: `${person.first_name} ${person.last_name}`.trim(),
+                                    }))}
+                                    selected={assignedToIds}
+                                    onChange={setAssignedToIds}
+                                />
 
-                        <MultiFilterSelect
-                            label="Source"
-                            emptyLabel="All sources"
-                            className="w-[140px]"
-                            options={LEAD_SOURCES}
-                            selected={sources}
-                            onChange={setSources}
-                        />
+                                <MultiFilterSelect
+                                    label="Source"
+                                    emptyLabel="All sources"
+                                    className="w-full"
+                                    options={LEAD_SOURCES}
+                                    selected={sources}
+                                    onChange={setSources}
+                                />
 
-                        <MultiFilterSelect
-                            label="Stage"
-                            emptyLabel="All stages"
-                            className="w-[145px]"
-                            options={stages.map((stage) => ({ value: stage.id, label: stage.display_name }))}
-                            selected={stageIds}
-                            onChange={setStageIds}
-                        />
+                                <MultiFilterSelect
+                                    label="Stage"
+                                    emptyLabel="All stages"
+                                    className="w-full"
+                                    options={stages.map((stage) => ({ value: stage.id, label: stage.display_name }))}
+                                    selected={stageIds}
+                                    onChange={setStageIds}
+                                />
 
-                        <div className="flex flex-col gap-1">
-                            <label className="text-xs text-muted-foreground">Stips</label>
-                            <Select value={hasStip ?? "all"} onValueChange={(v) => setHasStip(v === "all" ? null : (v as "yes" | "no"))}>
-                                <SelectTrigger className="w-[130px] h-9">
-                                    <SelectValue placeholder="All" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All leads</SelectItem>
-                                    <SelectItem value="yes">Has stip</SelectItem>
-                                    <SelectItem value="no">No stip</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
+                                <FilterField label="Stips">
+                                    <Select value={hasStip ?? "all"} onValueChange={(v) => setHasStip(v === "all" ? null : (v as "yes" | "no"))}>
+                                        <SelectTrigger className="w-full h-9">
+                                            <SelectValue placeholder="All" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">All leads</SelectItem>
+                                            <SelectItem value="yes">Has stip</SelectItem>
+                                            <SelectItem value="no">No stip</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </FilterField>
+                            </div>
 
-                        <label className="inline-flex items-center gap-2 h-9 px-2 text-xs text-muted-foreground cursor-pointer select-none">
-                            <input
-                                type="checkbox"
-                                checked={includeReturning}
-                                onChange={(e) => setIncludeReturning(e.target.checked)}
-                                className="rounded border-input"
-                            />
-                            Count repeat submissions
-                        </label>
+                            <label className="inline-flex items-center gap-2 pt-1 text-xs text-muted-foreground cursor-pointer select-none">
+                                <input
+                                    type="checkbox"
+                                    checked={includeReturning}
+                                    onChange={(e) => setIncludeReturning(e.target.checked)}
+                                    className="rounded border-input"
+                                />
+                                Count repeat submissions
+                            </label>
+                        </AdvancedFiltersMenu>
                     </div>
                 </CardContent>
             </Card>
@@ -940,6 +1193,7 @@ export function LeadsAnalysisTab({
                                 sub={`${data.summary.active_leads} active · ${data.summary.lost_leads} lost (${formatPct(data.summary.lost_pct)})`}
                                 icon={Users}
                                 accent="primary"
+                                onClick={() => openDrill("total", "Total Leads")}
                             />
                             <KpiTile
                                 title="Worked / Contacted"
@@ -948,6 +1202,7 @@ export function LeadsAnalysisTab({
                                 sub={`${data.summary.untouched_leads} untouched (${formatPct(data.summary.untouched_pct)})`}
                                 icon={PhoneCall}
                                 accent={data.summary.untouched_pct > 15 ? "warn" : "good"}
+                                onClick={() => openDrill("worked", "Worked / Contacted")}
                             />
                             <KpiTile
                                 title="Interested / Engaged"
@@ -955,6 +1210,7 @@ export function LeadsAnalysisTab({
                                 pct={data.summary.interested_pct}
                                 sub={`${formatPct(data.summary.interested_of_worked_pct)} of worked leads`}
                                 icon={TrendingUp}
+                                onClick={() => openDrill("interested", "Interested / Engaged")}
                             />
                             <KpiTile
                                 title="Stips Uploaded"
@@ -962,6 +1218,7 @@ export function LeadsAnalysisTab({
                                 pct={data.summary.stips_pct}
                                 sub={`${formatPct(data.summary.stips_of_interested_pct)} of interested`}
                                 icon={FileCheck}
+                                onClick={() => openDrill("stips", "Stips Uploaded")}
                             />
                             <KpiTile
                                 title="Sent to Partner Store"
@@ -969,6 +1226,7 @@ export function LeadsAnalysisTab({
                                 pct={data.summary.partner_sent_pct}
                                 sub="Connected to a partner dealership"
                                 icon={Store}
+                                onClick={() => openDrill("partner_sent", "Sent to Partner Store")}
                             />
                             <KpiTile
                                 title="Appointment Set"
@@ -976,6 +1234,7 @@ export function LeadsAnalysisTab({
                                 pct={data.summary.appointment_set_pct}
                                 sub={`${data.appointments.total_appointments} total appts booked`}
                                 icon={CalendarCheck}
+                                onClick={() => openDrill("appt_set", "Appointment Set")}
                             />
                             <KpiTile
                                 title="Showed Up (Arrived)"
@@ -984,6 +1243,7 @@ export function LeadsAnalysisTab({
                                 sub={`Show rate of appt set · ${formatPct(data.summary.showed_up_pct)} of leads`}
                                 icon={UserCheck}
                                 accent="good"
+                                onClick={() => openDrill("showed_up", "Showed Up (Arrived)")}
                             />
                             <KpiTile
                                 title="No Show"
@@ -992,6 +1252,7 @@ export function LeadsAnalysisTab({
                                 sub="% of leads with appointment set"
                                 icon={AlertCircle}
                                 accent={data.summary.no_show_pct > 35 ? "warn" : "default"}
+                                onClick={() => openDrill("no_show", "No Show")}
                             />
                             <KpiTile
                                 title="Converted / Sold"
@@ -1000,6 +1261,7 @@ export function LeadsAnalysisTab({
                                 sub={`Close rate of showed up: ${formatPct(data.summary.close_rate_of_showed_pct)}`}
                                 icon={CheckCircle2}
                                 accent="good"
+                                onClick={() => openDrill("converted", "Converted / Sold")}
                             />
                             <KpiTile
                                 title="Untouched Leads"
@@ -1008,6 +1270,7 @@ export function LeadsAnalysisTab({
                                 sub="No call, note, or message yet"
                                 icon={AlertCircle}
                                 accent={data.summary.untouched_leads > 0 ? "bad" : "good"}
+                                onClick={() => openDrill("untouched", "Untouched Leads")}
                             />
                         </div>
 
@@ -1021,7 +1284,12 @@ export function LeadsAnalysisTab({
                             </CardHeader>
                             <CardContent className="space-y-2.5">
                                 {data.funnel.map((step) => (
-                                    <div key={step.key} className="grid grid-cols-12 items-center gap-3 text-sm">
+                                    <button
+                                        key={step.key}
+                                        type="button"
+                                        onClick={() => openDrill(step.key, step.label)}
+                                        className="grid w-full grid-cols-12 items-center gap-3 rounded-md px-1 py-1 text-left text-sm hover:bg-muted/50"
+                                    >
                                         <div className="col-span-4 sm:col-span-3 truncate font-medium">
                                             {step.label}
                                         </div>
@@ -1051,7 +1319,7 @@ export function LeadsAnalysisTab({
                                                 </span>
                                             )}
                                         </div>
-                                    </div>
+                                    </button>
                                 ))}
                             </CardContent>
                         </Card>
@@ -1521,7 +1789,11 @@ export function LeadsAnalysisTab({
                                             {data.appointments.cancelled} / {data.appointments.total_appointments}
                                         </div>
                                     </div>
-                                    <div className="rounded-md border border-emerald-200/70 bg-emerald-50/40 dark:bg-emerald-950/20 p-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => openDrill("converted", "Converted / Sold")}
+                                        className="rounded-md border border-emerald-200/70 bg-emerald-50/40 p-2 text-center hover:bg-emerald-50 dark:bg-emerald-950/20"
+                                    >
                                         <div className="text-[11px] text-emerald-700 dark:text-emerald-300">Sold</div>
                                         <div className="text-base font-semibold tabular-nums">
                                             {data.summary.converted_leads.toLocaleString()}
@@ -1529,7 +1801,7 @@ export function LeadsAnalysisTab({
                                         <div className="text-[10px] text-muted-foreground">
                                             leads in this cohort
                                         </div>
-                                    </div>
+                                    </button>
                                 </div>
 
                                 <Table>
@@ -1667,6 +1939,12 @@ export function LeadsAnalysisTab({
                             </div>
                         </CardContent>
                     </Card>
+                    <CohortDrillDialog
+                        metric={drill?.metric ?? null}
+                        label={drill?.label ?? ""}
+                        filters={drill?.filters}
+                        onClose={() => setDrill(null)}
+                    />
                 </>
             ) : null}
         </div>

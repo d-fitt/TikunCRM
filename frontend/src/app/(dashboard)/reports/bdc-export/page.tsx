@@ -24,6 +24,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
+import { AdvancedFiltersMenu, FilterField } from "@/components/ui/filter-bar"
 import {
     Table,
     TableBody,
@@ -466,9 +467,13 @@ export default function BdcExportReportPage() {
                         <Filter className="h-4 w-4" /> Filters
                     </CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-5">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                        <div className="space-y-1.5">
+                <CardContent className="space-y-4">
+                    <div className="flex flex-wrap items-end gap-3">
+                        <div className="space-y-1.5 min-w-[200px] flex-1 max-w-xs">
+                            <Label>Search</Label>
+                            <Input placeholder="Name, email, phone…" value={search} onChange={(e) => setSearch(e.target.value)} />
+                        </div>
+                        <div className="space-y-1.5 w-[200px]">
                             <Label>Dealership</Label>
                             <Select
                                 value={allDealerships ? ALL_DEALERSHIPS : (dealershipId ?? "")}
@@ -495,81 +500,6 @@ export default function BdcExportReportPage() {
                             </Select>
                         </div>
                         <div className="space-y-1.5">
-                            <Label>BDC agent</Label>
-                            <Select value={bdcAgentId ?? "all"} onValueChange={(v) => setBdcAgentId(v === "all" ? null : v)}>
-                                <SelectTrigger><SelectValue placeholder="All BDC agents" /></SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All BDC agents</SelectItem>
-                                    {bdcAgents.map((a) => (
-                                        <SelectItem key={a.id} value={a.id}>{a.first_name} {a.last_name}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-1.5">
-                            <Label>Salesperson</Label>
-                            <Select value={assignedTo ?? "all"} onValueChange={(v) => setAssignedTo(v === "all" ? null : v)}>
-                                <SelectTrigger><SelectValue placeholder="All salespeople" /></SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All salespeople</SelectItem>
-                                    {salespersons.map((s) => (
-                                        <SelectItem key={s.id} value={s.id}>{s.first_name} {s.last_name}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-1.5">
-                            <Label>Stage</Label>
-                            <Select value={stageId ?? "all"} onValueChange={(v) => setStageId(v === "all" ? null : v)}>
-                                <SelectTrigger><SelectValue placeholder="All stages" /></SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All stages</SelectItem>
-                                    {stages.map((s) => (
-                                        <SelectItem key={s.id} value={s.id}>{s.display_name}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-1.5">
-                            <Label>Source</Label>
-                            <Select value={source ?? "all"} onValueChange={(v) => setSource(v === "all" ? null : v)}>
-                                <SelectTrigger><SelectValue placeholder="All sources" /></SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All sources</SelectItem>
-                                    {LEAD_SOURCES.map((s) => (
-                                        <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-1.5">
-                            <Label>Search</Label>
-                            <Input placeholder="Name, email, phone…" value={search} onChange={(e) => setSearch(e.target.value)} />
-                        </div>
-                        <div className="space-y-1.5">
-                            <Label>Active leads</Label>
-                            <Select
-                                value={activeOnly === null ? "all" : activeOnly ? "yes" : "no"}
-                                onValueChange={(v) => setActiveOnly(v === "all" ? null : v === "yes")}
-                            >
-                                <SelectTrigger><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All</SelectItem>
-                                    <SelectItem value="yes">Active only</SelectItem>
-                                    <SelectItem value="no">Inactive only</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="flex items-end gap-2">
-                            <label className="flex items-center gap-2 text-sm cursor-pointer pb-2">
-                                <Checkbox checked={soldOnly} onCheckedChange={(c) => setSoldOnly(c === true)} />
-                                Sold / converted only
-                            </label>
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-2 border-t">
-                        <div className="space-y-1.5">
                             <Label>Lead created from</Label>
                             <Input type="date" value={leadDateFrom} onChange={(e) => setLeadDateFrom(e.target.value)} />
                         </div>
@@ -577,66 +507,159 @@ export default function BdcExportReportPage() {
                             <Label>Lead created to</Label>
                             <Input type="date" value={leadDateTo} onChange={(e) => setLeadDateTo(e.target.value)} />
                         </div>
-                        <div className="space-y-1.5">
-                            <Label>Sold date from</Label>
-                            <Input type="date" value={soldDateFrom} onChange={(e) => setSoldDateFrom(e.target.value)} />
-                        </div>
-                        <div className="space-y-1.5">
-                            <Label>Sold date to</Label>
-                            <Input type="date" value={soldDateTo} onChange={(e) => setSoldDateTo(e.target.value)} />
-                        </div>
-                    </div>
 
-                    <div className="space-y-3 pt-2 border-t">
-                        <p className="text-xs font-semibold uppercase text-muted-foreground">Appointment filters</p>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                            <div className="space-y-1.5">
-                                <Label>Appointment funnel</Label>
-                                <Select value={apptFunnel || "any"} onValueChange={(v) => setApptFunnel(v === "any" ? "" : v)}>
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                        {APPOINTMENT_FUNNELS.map((f) => (
-                                            <SelectItem key={f.value || "any"} value={f.value || "any"}>{f.label}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
+                        <AdvancedFiltersMenu
+                            align="start"
+                            contentClassName="w-[min(94vw,540px)]"
+                            activeCount={
+                                (bdcAgentId ? 1 : 0) +
+                                (assignedTo ? 1 : 0) +
+                                (stageId ? 1 : 0) +
+                                (source ? 1 : 0) +
+                                (activeOnly !== null ? 1 : 0) +
+                                (soldOnly ? 1 : 0) +
+                                (soldDateFrom || soldDateTo ? 1 : 0) +
+                                (apptFunnel ? 1 : 0) +
+                                (hasAppointment !== "any" ? 1 : 0) +
+                                (apptDateFrom || apptDateTo ? 1 : 0) +
+                                (selectedApptStatuses.length > 0 ? 1 : 0)
+                            }
+                            onReset={() => {
+                                setBdcAgentId(null)
+                                setAssignedTo(null)
+                                setStageId(null)
+                                setSource(null)
+                                setActiveOnly(null)
+                                setSoldOnly(false)
+                                setSoldDateFrom("")
+                                setSoldDateTo("")
+                                setApptFunnel("")
+                                setHasAppointment("any")
+                                setApptDateFrom("")
+                                setApptDateTo("")
+                                setSelectedApptStatuses([])
+                            }}
+                        >
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                <FilterField label="BDC agent">
+                                    <Select value={bdcAgentId ?? "all"} onValueChange={(v) => setBdcAgentId(v === "all" ? null : v)}>
+                                        <SelectTrigger className="w-full h-9"><SelectValue placeholder="All BDC agents" /></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">All BDC agents</SelectItem>
+                                            {bdcAgents.map((a) => (
+                                                <SelectItem key={a.id} value={a.id}>{a.first_name} {a.last_name}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </FilterField>
+                                <FilterField label="Salesperson">
+                                    <Select value={assignedTo ?? "all"} onValueChange={(v) => setAssignedTo(v === "all" ? null : v)}>
+                                        <SelectTrigger className="w-full h-9"><SelectValue placeholder="All salespeople" /></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">All salespeople</SelectItem>
+                                            {salespersons.map((s) => (
+                                                <SelectItem key={s.id} value={s.id}>{s.first_name} {s.last_name}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </FilterField>
+                                <FilterField label="Stage">
+                                    <Select value={stageId ?? "all"} onValueChange={(v) => setStageId(v === "all" ? null : v)}>
+                                        <SelectTrigger className="w-full h-9"><SelectValue placeholder="All stages" /></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">All stages</SelectItem>
+                                            {stages.map((s) => (
+                                                <SelectItem key={s.id} value={s.id}>{s.display_name}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </FilterField>
+                                <FilterField label="Source">
+                                    <Select value={source ?? "all"} onValueChange={(v) => setSource(v === "all" ? null : v)}>
+                                        <SelectTrigger className="w-full h-9"><SelectValue placeholder="All sources" /></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">All sources</SelectItem>
+                                            {LEAD_SOURCES.map((s) => (
+                                                <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </FilterField>
+                                <FilterField label="Active leads">
+                                    <Select
+                                        value={activeOnly === null ? "all" : activeOnly ? "yes" : "no"}
+                                        onValueChange={(v) => setActiveOnly(v === "all" ? null : v === "yes")}
+                                    >
+                                        <SelectTrigger className="w-full h-9"><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">All</SelectItem>
+                                            <SelectItem value="yes">Active only</SelectItem>
+                                            <SelectItem value="no">Inactive only</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </FilterField>
+                                <div className="flex items-end pb-1">
+                                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                                        <Checkbox checked={soldOnly} onCheckedChange={(c) => setSoldOnly(c === true)} />
+                                        Sold / converted only
+                                    </label>
+                                </div>
+                                <FilterField label="Sold date from">
+                                    <Input type="date" value={soldDateFrom} onChange={(e) => setSoldDateFrom(e.target.value)} />
+                                </FilterField>
+                                <FilterField label="Sold date to">
+                                    <Input type="date" value={soldDateTo} onChange={(e) => setSoldDateTo(e.target.value)} />
+                                </FilterField>
                             </div>
-                            <div className="space-y-1.5">
-                                <Label>Has appointment</Label>
-                                <Select value={hasAppointment} onValueChange={setHasAppointment}>
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="any">Any</SelectItem>
-                                        <SelectItem value="yes">Has appointment</SelectItem>
-                                        <SelectItem value="no">No appointment</SelectItem>
-                                    </SelectContent>
-                                </Select>
+
+                            <div className="space-y-3 border-t pt-3">
+                                <p className="text-xs font-semibold uppercase text-muted-foreground">Appointment filters</p>
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                    <FilterField label="Appointment funnel">
+                                        <Select value={apptFunnel || "any"} onValueChange={(v) => setApptFunnel(v === "any" ? "" : v)}>
+                                            <SelectTrigger className="w-full h-9"><SelectValue /></SelectTrigger>
+                                            <SelectContent>
+                                                {APPOINTMENT_FUNNELS.map((f) => (
+                                                    <SelectItem key={f.value || "any"} value={f.value || "any"}>{f.label}</SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </FilterField>
+                                    <FilterField label="Has appointment">
+                                        <Select value={hasAppointment} onValueChange={setHasAppointment}>
+                                            <SelectTrigger className="w-full h-9"><SelectValue /></SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="any">Any</SelectItem>
+                                                <SelectItem value="yes">Has appointment</SelectItem>
+                                                <SelectItem value="no">No appointment</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </FilterField>
+                                    <FilterField label="Appt date from">
+                                        <Input type="date" value={apptDateFrom} onChange={(e) => setApptDateFrom(e.target.value)} />
+                                    </FilterField>
+                                    <FilterField label="Appt date to">
+                                        <Input type="date" value={apptDateTo} onChange={(e) => setApptDateTo(e.target.value)} />
+                                    </FilterField>
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {APPOINTMENT_STATUSES.map((s) => (
+                                        <button
+                                            key={s}
+                                            type="button"
+                                            onClick={() => toggleApptStatus(s)}
+                                            className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                                                selectedApptStatuses.includes(s)
+                                                    ? "border-primary bg-primary/10 text-primary"
+                                                    : "border-muted-foreground/30 text-muted-foreground hover:border-primary/50"
+                                            }`}
+                                        >
+                                            {getAppointmentStatusLabel(s)}
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
-                            <div className="space-y-1.5">
-                                <Label>Appt date from</Label>
-                                <Input type="date" value={apptDateFrom} onChange={(e) => setApptDateFrom(e.target.value)} />
-                            </div>
-                            <div className="space-y-1.5">
-                                <Label>Appt date to</Label>
-                                <Input type="date" value={apptDateTo} onChange={(e) => setApptDateTo(e.target.value)} />
-                            </div>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                            {APPOINTMENT_STATUSES.map((s) => (
-                                <button
-                                    key={s}
-                                    type="button"
-                                    onClick={() => toggleApptStatus(s)}
-                                    className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
-                                        selectedApptStatuses.includes(s)
-                                            ? "border-primary bg-primary/10 text-primary"
-                                            : "border-muted-foreground/30 text-muted-foreground hover:border-primary/50"
-                                    }`}
-                                >
-                                    {getAppointmentStatusLabel(s)}
-                                </button>
-                            ))}
-                        </div>
+                        </AdvancedFiltersMenu>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2 pt-2">

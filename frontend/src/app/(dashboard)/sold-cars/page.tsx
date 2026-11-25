@@ -19,6 +19,7 @@ import {
     PopoverContent,
     PopoverTrigger,
 } from "@/components/ui/popover"
+import { AdvancedFiltersMenu, FilterField } from "@/components/ui/filter-bar"
 import {
     Table,
     TableBody,
@@ -536,62 +537,70 @@ export default function SoldCarsPage() {
                             </>
                         )}
                         
-                        {/* Dealership Filter (super admin / BDC) */}
-                        {(isSuperAdmin || isBdc) && dealerships.length > 0 && (
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">Dealership</label>
-                                <Select value={selectedDealershipId} onValueChange={setSelectedDealershipId}>
-                                    <SelectTrigger className="w-[200px]">
-                                        <SelectValue placeholder="Select dealership" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {dealerships.map((d) => (
-                                            <SelectItem key={d.id} value={d.id}>
-                                                {d.name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
+                        <AdvancedFiltersMenu
+                            align="start"
+                            activeCount={
+                                (selectedSalesperson !== "all" ? 1 : 0) +
+                                (selectedBdcAgent !== "all" ? 1 : 0)
+                            }
+                            onReset={() => {
+                                setSelectedSalesperson("all")
+                                setSelectedBdcAgent("all")
+                            }}
+                        >
+                            <div className="grid grid-cols-1 gap-3">
+                                {(isSuperAdmin || isBdc) && dealerships.length > 0 && (
+                                    <FilterField label="Dealership">
+                                        <Select value={selectedDealershipId} onValueChange={setSelectedDealershipId}>
+                                            <SelectTrigger className="w-full h-9">
+                                                <SelectValue placeholder="Select dealership" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {dealerships.map((d) => (
+                                                    <SelectItem key={d.id} value={d.id}>
+                                                        {d.name}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </FilterField>
+                                )}
+
+                                <FilterField label="Salesperson">
+                                    <Select value={selectedSalesperson} onValueChange={setSelectedSalesperson}>
+                                        <SelectTrigger className="w-full h-9">
+                                            <SelectValue placeholder="All salespeople" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">All Salespeople</SelectItem>
+                                            {salespersons.map((sp) => (
+                                                <SelectItem key={sp.id} value={sp.id}>
+                                                    {sp.first_name} {sp.last_name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </FilterField>
+
+                                {bdcAgents.length > 0 && (
+                                    <FilterField label="BDC Agent">
+                                        <Select value={selectedBdcAgent} onValueChange={setSelectedBdcAgent}>
+                                            <SelectTrigger className="w-full h-9">
+                                                <SelectValue placeholder="All BDC agents" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="all">All BDC Agents</SelectItem>
+                                                {bdcAgents.map((a) => (
+                                                    <SelectItem key={a.id} value={a.id}>
+                                                        {a.first_name} {a.last_name}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </FilterField>
+                                )}
                             </div>
-                        )}
-                        
-                        {/* Salesperson Filter */}
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">Salesperson</label>
-                            <Select value={selectedSalesperson} onValueChange={setSelectedSalesperson}>
-                                <SelectTrigger className="w-[200px]">
-                                    <SelectValue placeholder="All salespeople" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All Salespeople</SelectItem>
-                                    {salespersons.map((sp) => (
-                                        <SelectItem key={sp.id} value={sp.id}>
-                                            {sp.first_name} {sp.last_name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        
-                        {/* BDC Agent Filter */}
-                        {bdcAgents.length > 0 && (
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">BDC Agent</label>
-                                <Select value={selectedBdcAgent} onValueChange={setSelectedBdcAgent}>
-                                    <SelectTrigger className="w-[200px]">
-                                        <SelectValue placeholder="All BDC agents" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All BDC Agents</SelectItem>
-                                        {bdcAgents.map((a) => (
-                                            <SelectItem key={a.id} value={a.id}>
-                                                {a.first_name} {a.last_name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                        )}
+                        </AdvancedFiltersMenu>
                         
                         {/* Actions */}
                         <div className="flex items-center gap-2 ml-auto">

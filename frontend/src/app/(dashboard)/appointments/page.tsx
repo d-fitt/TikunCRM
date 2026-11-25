@@ -68,6 +68,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Calendar as CalendarPicker } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { AdvancedFiltersMenu, FilterField } from "@/components/ui/filter-bar"
 import {
     Select,
     SelectContent,
@@ -1601,7 +1602,7 @@ export default function AppointmentsPage() {
                         
                         {/* Quick Filter */}
                         <Select value={filter} onValueChange={(v) => setFilter(v as FilterType)}>
-                            <SelectTrigger className="w-[130px] h-9">
+                            <SelectTrigger className="w-[145px] h-9">
                                 <SelectValue placeholder="All" />
                             </SelectTrigger>
                             <SelectContent>
@@ -1610,27 +1611,6 @@ export default function AppointmentsPage() {
                                 <SelectItem value="upcoming">Upcoming</SelectItem>
                                 <SelectItem value="overdue">Overdue</SelectItem>
                                 <SelectItem value="completed">Completed</SelectItem>
-                            </SelectContent>
-                        </Select>
-                        
-                        <Select
-                            value={storeFilter || "all_stores"}
-                            onValueChange={(v) => {
-                                setStoreFilter(v === "all_stores" ? "" : v)
-                                setPage(1)
-                            }}
-                        >
-                            <SelectTrigger className="w-[180px] h-9">
-                                <Store className="mr-2 h-4 w-4 shrink-0" />
-                                <SelectValue placeholder="All stores" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all_stores">All stores</SelectItem>
-                                {pagePartnerStores.map((store) => (
-                                    <SelectItem key={store.id} value={store.id}>
-                                        {store.brand ? `${store.name} · ${store.brand}` : store.name}
-                                    </SelectItem>
-                                ))}
                             </SelectContent>
                         </Select>
 
@@ -1653,9 +1633,7 @@ export default function AppointmentsPage() {
                                 <SelectItem value="rescheduled">Rescheduled</SelectItem>
                             </SelectContent>
                         </Select>
-                        
-                        <div className="h-6 w-px bg-border" />
-                        
+
                         {/* Date Range Preset */}
                         <Select value={dateRangePreset} onValueChange={(v) => handleDatePresetChange(v as DateRangePreset)}>
                             <SelectTrigger className="w-[140px] h-9">
@@ -1670,6 +1648,38 @@ export default function AppointmentsPage() {
                                 ))}
                             </SelectContent>
                         </Select>
+
+                        <AdvancedFiltersMenu
+                            align="start"
+                            activeCount={storeFilter ? 1 : 0}
+                            onReset={() => {
+                                setStoreFilter("")
+                                setPage(1)
+                            }}
+                        >
+                            <FilterField label="Partner Store">
+                                <Select
+                                    value={storeFilter || "all_stores"}
+                                    onValueChange={(v) => {
+                                        setStoreFilter(v === "all_stores" ? "" : v)
+                                        setPage(1)
+                                    }}
+                                >
+                                    <SelectTrigger className="w-full h-9">
+                                        <Store className="mr-2 h-4 w-4 shrink-0" />
+                                        <SelectValue placeholder="All stores" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all_stores">All stores</SelectItem>
+                                        {pagePartnerStores.map((store) => (
+                                            <SelectItem key={store.id} value={store.id}>
+                                                {store.brand ? `${store.name} · ${store.brand}` : store.name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </FilterField>
+                        </AdvancedFiltersMenu>
                         
                         {/* Clear Filters */}
                         {(dateRangePreset !== "all_time" || filter !== "all" || statusFilter || storeFilter) && (

@@ -131,6 +131,42 @@ def _status_str(val: Any) -> str:
     return val.value if hasattr(val, "value") else str(val)
 
 
+class CohortDrillLead(BaseModel):
+    id: str
+    name: str
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    outcome: Optional[str] = None
+    stage: Optional[str] = None
+    source: Optional[str] = None
+    created_at: Optional[datetime] = None
+    last_inbound_at: Optional[datetime] = None
+    repeat_submission: bool = False
+
+
+class CohortDrillResponse(BaseModel):
+    metric: str
+    label: str
+    total: int
+    leads: List[CohortDrillLead]
+
+
+COHORT_DRILL_LABELS: Dict[str, str] = {
+    "total": "Total Leads",
+    "worked": "Worked / Contacted",
+    "interested": "Interested / Engaged",
+    "stips": "Stips Uploaded",
+    "partner_sent": "Sent to Partner Store",
+    "appt_set": "Appointment Set",
+    "showed_up": "Showed Up (Arrived)",
+    "no_show": "No Show",
+    "converted": "Converted / Sold",
+    "untouched": "Untouched Leads",
+    "lost": "Lost",
+    "active": "Active",
+}
+
+
 class CohortFunnelStep(BaseModel):
     key: str
     label: str
@@ -374,6 +410,72 @@ async def _get_bdc_users(
     )
 
 
+def _in_window(moment: Optional[datetime], start: Optional[datetime], end: Optional[datetime]) -> bool:
+    if moment is None:
+        return False
+    if start is not None and moment < start:
+        return False
+    if end is not None and moment > end:
+        return False
+    return True
+
+
+async def _cohort_drill_response(
+    db: AsyncSession,
+    metric: str,
+    leads: List[Lead],
+    stages_by_id: Dict[UUID, LeadStage],
+    date_from: Optional[datetime],
+    date_to: Optional[datetime],
+) -> CohortDrillResponse:
+    from app.models.customer import Customer
+
+    customer_ids = [lead.customer_id for lead in leads if lead.customer_id]
+    customers: Dict[UUID, Customer] = {}
+    if customer_ids:
+        result = await db.execute(select(Customer).where(Customer.id.in_(customer_ids)))
+        customers = {customer.id: customer for customer in result.scalars().all()}
+
+    rows: List[CohortDrillLead] = []
+    for lead in leads:
+        customer = customers.get(lead.customer_id) if lead.customer_id else None
+        name = " ".join(
+            part for part in (
+                (customer.first_name if customer else None) or "",
+                (customer.last_name if customer else None) or "",
+            ) if part
+        ).strip() or "Unknown"
+        stage = stages_by_id.get(lead.stage_id) if lead.stage_id else None
+        created_in = _in_window(lead.created_at, date_from, date_to)
+        inbound_in = _in_window(lead.last_inbound_at, date_from, date_to)
+        rows.append(
+            CohortDrillLead(
+                id=str(lead.id),
+                name=name,
+                phone=customer.phone if customer else None,
+                email=customer.email if customer else None,
+                outcome=lead.outcome,
+                stage=stage.display_name if stage else None,
+                source=_status_str(lead.source) if lead.source else None,
+                created_at=lead.created_at,
+                last_inbound_at=lead.last_inbound_at,
+                repeat_submission=inbound_in and not created_in,
+            )
+        )
+    rows.sort(
+        key=lambda row: (row.last_inbound_at or row.created_at or datetime.min.replace(tzinfo=None)).timestamp()
+        if (row.last_inbound_at or row.created_at) is not None
+        else 0,
+        reverse=True,
+    )
+    return CohortDrillResponse(
+        metric=metric,
+        label=COHORT_DRILL_LABELS.get(metric, metric),
+        total=len(rows),
+        leads=rows,
+    )
+
+
 async def build_lead_cohort_analysis(
     db: AsyncSession,
     *,
@@ -389,7 +491,8 @@ async def build_lead_cohort_analysis(
     has_stip: Optional[str] = None,
     include_returning: bool = False,
     bdc_mode: str = "activity",
-) -> LeadCohortAnalysisResponse:
+    drill_metric: Optional[str] = None,
+) -> Any:
     """Build the full lead cohort + BDC productivity report."""
     mode = "cohort" if bdc_mode == "cohort" else "activity"
 
@@ -523,9 +626,7 @@ async def build_lead_cohort_analysis(
 
     def _lead_has_stip(l: Lead) -> bool:
         return bool(
-            l.has_ssn_stip
-            or l.has_dl_stip
-            or l.id in leads_with_stip_doc
+            l.id in leads_with_stip_doc
             or l.customer_id in customers_with_stip_doc
             or (l.secondary_customer_id and l.secondary_customer_id in customers_with_stip_doc)
         )
@@ -675,6 +776,7 @@ async def build_lead_cohort_analysis(
 
     speed_minutes: List[float] = []
     days_to_appt: List[float] = []
+    drill_leads: List[Lead] = []
 
     # Buckets for Campaign, Stage, Partner Store
     campaign_buckets: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -709,7 +811,26 @@ async def build_lead_cohort_analysis(
                     break
         is_sent = eff_store_id is not None
 
-        if l.is_active and not is_conv and not is_lst:
+        is_active_open = bool(l.is_active and not is_conv and not is_lst)
+        if drill_metric:
+            matched = (
+                drill_metric == "total"
+                or (drill_metric == "worked" and is_worked)
+                or (drill_metric == "interested" and is_int)
+                or (drill_metric == "stips" and has_st)
+                or (drill_metric == "partner_sent" and is_sent)
+                or (drill_metric == "appt_set" and has_appt)
+                or (drill_metric == "showed_up" and has_show)
+                or (drill_metric == "no_show" and has_ns)
+                or (drill_metric == "converted" and is_conv)
+                or (drill_metric == "untouched" and not is_worked)
+                or (drill_metric == "lost" and is_lst)
+                or (drill_metric == "active" and is_active_open)
+            )
+            if matched:
+                drill_leads.append(l)
+
+        if is_active_open:
             active_count += 1
         if is_worked:
             worked_count += 1
@@ -774,6 +895,11 @@ async def build_lead_cohort_analysis(
             sb["cancelled"] += 1
         if is_conv:
             sb["sold"] += 1
+
+    if drill_metric:
+        return await _cohort_drill_response(
+            db, drill_metric, drill_leads, stages_by_id, date_from, date_to
+        )
 
     untouched_count = max(0, total_leads - worked_count)
     median_speed = round(median(speed_minutes), 1) if speed_minutes else None
@@ -1158,6 +1284,38 @@ async def _build_bdc_productivity(
                 )
             }
 
+    # Actual stip documents uploaded for any worked lead (ignore eligibility checkboxes)
+    worked_lead_ids_list = list(worked_leads_map.keys())
+    worked_customer_ids = {
+        cid
+        for lead in worked_leads_map.values()
+        for cid in (lead.customer_id, lead.secondary_customer_id)
+        if cid is not None
+    }
+    worked_leads_with_stip_doc: Set[UUID] = set()
+    worked_customers_with_stip_doc: Set[UUID] = set()
+    if worked_lead_ids_list:
+        wlsd_res = await db.execute(
+            select(LeadStipDocument.lead_id)
+            .where(LeadStipDocument.lead_id.in_(worked_lead_ids_list))
+            .distinct()
+        )
+        worked_leads_with_stip_doc = {row[0] for row in wlsd_res.all()}
+    if worked_customer_ids:
+        wcsd_res = await db.execute(
+            select(CustomerStipDocument.customer_id)
+            .where(CustomerStipDocument.customer_id.in_(worked_customer_ids))
+            .distinct()
+        )
+        worked_customers_with_stip_doc = {row[0] for row in wcsd_res.all()}
+
+    def _worked_lead_has_stip_doc(lead: Lead) -> bool:
+        return bool(
+            lead.id in worked_leads_with_stip_doc
+            or lead.customer_id in worked_customers_with_stip_doc
+            or (lead.secondary_customer_id and lead.secondary_customer_id in worked_customers_with_stip_doc)
+        )
+
     # Sold is the cohort's converted leads, credited to each BDC agent who worked
     # that lead. This is the same set as Converted / Sold on the cohort card, so
     # an older sale the agent merely touched this period is not counted again.
@@ -1218,7 +1376,7 @@ async def _build_bdc_productivity(
             lead = worked_leads_map.get(lid)
             if not lead:
                 continue
-            if lead.has_ssn_stip or lead.has_dl_stip:
+            if _worked_lead_has_stip_doc(lead):
                 stips_n += 1
                 team_stips_leads.add(lid)
             ft = first_touch_by_agent_lead.get((uid, lid))

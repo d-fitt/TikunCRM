@@ -884,14 +884,41 @@ async def _resolve_dealership_and_lead_filters(
 ):
     """Returns (resolved_dealership_id, list of Lead filter conditions)."""
     resolved = await _http_resolve_dealership(db, current_user, dealership_id, required=False)
-    
+
     lead_filters = [Lead.dealership_id == resolved] if resolved else []
     has_lead_specific_filters = False
+
+    async def _worked_lead_ids(uid: UUID) -> List[UUID]:
+        ids = set()
+        for stmt in (
+            select(Activity.lead_id).where(Activity.user_id == uid, Activity.lead_id.isnot(None)).distinct(),
+            select(CallLog.lead_id).where(CallLog.user_id == uid, CallLog.lead_id.isnot(None)).distinct(),
+            select(Appointment.lead_id).where(
+                or_(Appointment.scheduled_by == uid, Appointment.assigned_to == uid),
+                Appointment.lead_id.isnot(None),
+            ).distinct(),
+            select(FollowUp.lead_id).where(FollowUp.assigned_to == uid, FollowUp.lead_id.isnot(None)).distinct(),
+        ):
+            res = await db.execute(stmt)
+            ids.update(row[0] for row in res.all() if row[0])
+        return list(ids)
+
     if assigned_to is not None:
-        lead_filters.append(Lead.assigned_to == assigned_to)
+        worked_ids = await _worked_lead_ids(assigned_to)
+        assigned_conds = [
+            Lead.assigned_to == assigned_to,
+            Lead.secondary_salesperson_id == assigned_to,
+        ]
+        if worked_ids:
+            assigned_conds.append(Lead.id.in_(worked_ids))
+        lead_filters.append(or_(*assigned_conds))
         has_lead_specific_filters = True
     if bdc_agent_id is not None:
-        lead_filters.append(Lead.bdc_assigned_to_id == bdc_agent_id)
+        bdc_worked_ids = await _worked_lead_ids(bdc_agent_id)
+        bdc_conds = [Lead.bdc_assigned_to_id == bdc_agent_id]
+        if bdc_worked_ids:
+            bdc_conds.append(Lead.id.in_(bdc_worked_ids))
+        lead_filters.append(or_(*bdc_conds))
         has_lead_specific_filters = True
     if source is not None:
         try:
@@ -1026,6 +1053,8 @@ async def get_dealership_analysis(
         converted_leads = converted_result.scalar() or 0
 
     activity_filters = [Activity.dealership_id == resolved_dealership_id]
+    if assigned_to is not None:
+        activity_filters.append(Activity.user_id == assigned_to)
     if lead_ids:
         activity_filters.append(Activity.lead_id.in_(lead_ids))
     if activity_date_from is not None:
@@ -1044,6 +1073,8 @@ async def get_dealership_analysis(
         total_notes = total_notes_result.scalar() or 0
 
     appt_filters = [Appointment.dealership_id == resolved_dealership_id]
+    if assigned_to is not None:
+        appt_filters.append(or_(Appointment.scheduled_by == assigned_to, Appointment.assigned_to == assigned_to))
     appt_lead_scope = _matching_lead_scope(Appointment.lead_id)
     if appt_lead_scope is not None:
         appt_filters.append(appt_lead_scope)
@@ -1082,6 +1113,9 @@ async def get_dealership_analysis(
     if lead_ids:
         fu_scheduled_filters = [FollowUp.lead_id.in_(lead_ids)]
         fu_completed_filters = [FollowUp.lead_id.in_(lead_ids), FollowUp.status == FollowUpStatus.COMPLETED]
+        if assigned_to is not None:
+            fu_scheduled_filters.append(FollowUp.assigned_to == assigned_to)
+            fu_completed_filters.append(FollowUp.assigned_to == assigned_to)
         if activity_date_from is not None:
             fu_scheduled_filters.append(FollowUp.created_at >= activity_date_from)
             fu_completed_filters.append(FollowUp.completed_at >= activity_date_from)
@@ -2600,4 +2634,63 @@ async def get_leads_cohort_analysis(
         has_stip=has_stip,
         include_returning=include_returning,
         bdc_mode=bdc_mode,
+    )
+
+
+@router.get("/analytics/leads-cohort/drill")
+async def get_leads_cohort_drill(
+    metric: str = Query(..., description="Cohort slice: total, worked, interested, stips, partner_sent, appt_set, showed_up, no_show, converted, untouched"),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    dealership_id: Optional[UUID] = Query(None),
+    assigned_to: Optional[List[UUID]] = Query(None),
+    bdc_agent_id: Optional[List[UUID]] = Query(None),
+    source: Optional[List[str]] = Query(None),
+    stage_id: Optional[List[UUID]] = Query(None),
+    partner_store_id: Optional[List[UUID]] = Query(None),
+    campaign: Optional[List[str]] = Query(None),
+    has_stip: Optional[str] = Query(None),
+    include_returning: bool = Query(True),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_owner),
+) -> Any:
+    """Leads behind one cohort number, using the same filters as the report."""
+    from app.services.lead_cohort_analytics_service import (
+        COHORT_DRILL_LABELS,
+        build_lead_cohort_analysis,
+    )
+
+    if metric not in COHORT_DRILL_LABELS:
+        raise HTTPException(status_code=400, detail="Unknown cohort metric")
+
+    resolved_dealership_id = await _http_resolve_dealership(
+        db, current_user, dealership_id, required=False
+    )
+    dt_from: Optional[datetime] = None
+    dt_to: Optional[datetime] = None
+    if date_from:
+        try:
+            dt_from = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            dt_to = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+
+    return await build_lead_cohort_analysis(
+        db,
+        dealership_id=resolved_dealership_id,
+        date_from=dt_from,
+        date_to=dt_to,
+        assigned_to=assigned_to,
+        bdc_agent_id=bdc_agent_id,
+        source=source,
+        stage_id=stage_id,
+        partner_store_id=partner_store_id,
+        campaign=campaign,
+        has_stip=has_stip,
+        include_returning=include_returning,
+        drill_metric=metric,
     )

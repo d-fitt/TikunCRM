@@ -32,6 +32,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
+import { AdvancedFiltersMenu, FilterField } from "@/components/ui/filter-bar"
 import {
     BarChart3,
     Users,
@@ -641,88 +642,104 @@ function AnalyticsPageContent() {
                             </div>
                         </>
                     )}
-                    <div className="flex flex-col gap-1">
-                        <label className="text-xs text-muted-foreground">Salesperson</label>
-                        <Select value={assignedTo ?? "all"} onValueChange={(v) => setAssignedTo(v === "all" ? null : v)}>
-                            <SelectTrigger className="w-[160px]">
-                                <SelectValue placeholder="All" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All</SelectItem>
-                                {salespersons.map((s) => (
-                                    <SelectItem key={s.id} value={s.id}>
-                                        {s.first_name} {s.last_name}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    {bdcAgents.length > 0 && (
-                        <div className="flex flex-col gap-1">
-                            <label className="text-xs text-muted-foreground">BDC Agent</label>
-                            <Select value={bdcAgentId ?? "all"} onValueChange={(v) => setBdcAgentId(v === "all" ? null : v)}>
-                                <SelectTrigger className="w-[160px]">
-                                    <SelectValue placeholder="All" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All</SelectItem>
-                                    {bdcAgents.map((a) => (
-                                        <SelectItem key={a.id} value={a.id}>
-                                            {a.first_name} {a.last_name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                    <AdvancedFiltersMenu
+                        align="start"
+                        contentClassName="w-[min(92vw,460px)]"
+                        activeCount={
+                            (assignedTo ? 1 : 0) +
+                            (bdcAgentId ? 1 : 0) +
+                            (source ? 1 : 0) +
+                            (partnerStoreId ? 1 : 0) +
+                            (stageId ? 1 : 0)
+                        }
+                        onReset={() => {
+                            setAssignedTo(null)
+                            setBdcAgentId(null)
+                            setSource(null)
+                            setPartnerStoreId(null)
+                            setStageId(null)
+                        }}
+                    >
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <FilterField label="Salesperson">
+                                <Select value={assignedTo ?? "all"} onValueChange={(v) => setAssignedTo(v === "all" ? null : v)}>
+                                    <SelectTrigger className="w-full h-9">
+                                        <SelectValue placeholder="All" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All</SelectItem>
+                                        {salespersons.map((s) => (
+                                            <SelectItem key={s.id} value={s.id}>
+                                                {s.first_name} {s.last_name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </FilterField>
+                            {bdcAgents.length > 0 && (
+                                <FilterField label="BDC Agent">
+                                    <Select value={bdcAgentId ?? "all"} onValueChange={(v) => setBdcAgentId(v === "all" ? null : v)}>
+                                        <SelectTrigger className="w-full h-9">
+                                            <SelectValue placeholder="All" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">All</SelectItem>
+                                            {bdcAgents.map((a) => (
+                                                <SelectItem key={a.id} value={a.id}>
+                                                    {a.first_name} {a.last_name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </FilterField>
+                            )}
+                            <FilterField label="Source">
+                                <Select value={source ?? "all"} onValueChange={(v) => setSource(v === "all" ? null : v)}>
+                                    <SelectTrigger className="w-full h-9">
+                                        <SelectValue placeholder="All" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All</SelectItem>
+                                        {LEAD_SOURCES.map((s) => (
+                                            <SelectItem key={s.value} value={s.value}>
+                                                {s.label}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </FilterField>
+                            <FilterField label="Partner store">
+                                <Select value={partnerStoreId ?? "all"} onValueChange={(v) => setPartnerStoreId(v === "all" ? null : v)}>
+                                    <SelectTrigger className="w-full h-9">
+                                        <SelectValue placeholder="All" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All stores</SelectItem>
+                                        {partnerStores.map((store) => (
+                                            <SelectItem key={store.id} value={store.id}>
+                                                {store.brand ? `${store.name} (${store.brand})` : store.name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </FilterField>
+                            <FilterField label="Stage">
+                                <Select value={stageId ?? "all"} onValueChange={(v) => setStageId(v === "all" ? null : v)}>
+                                    <SelectTrigger className="w-full h-9">
+                                        <SelectValue placeholder="All" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All</SelectItem>
+                                        {stages.map((s) => (
+                                            <SelectItem key={s.id} value={s.id}>
+                                                {s.display_name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </FilterField>
                         </div>
-                    )}
-                    <div className="flex flex-col gap-1">
-                        <label className="text-xs text-muted-foreground">Source</label>
-                        <Select value={source ?? "all"} onValueChange={(v) => setSource(v === "all" ? null : v)}>
-                            <SelectTrigger className="w-[130px]">
-                                <SelectValue placeholder="All" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All</SelectItem>
-                                {LEAD_SOURCES.map((s) => (
-                                    <SelectItem key={s.value} value={s.value}>
-                                        {s.label}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                        <label className="text-xs text-muted-foreground">Partner store</label>
-                        <Select value={partnerStoreId ?? "all"} onValueChange={(v) => setPartnerStoreId(v === "all" ? null : v)}>
-                            <SelectTrigger className="w-[200px]">
-                                <SelectValue placeholder="All" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All stores</SelectItem>
-                                {partnerStores.map((store) => (
-                                    <SelectItem key={store.id} value={store.id}>
-                                        {store.brand ? `${store.name} (${store.brand})` : store.name}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                        <label className="text-xs text-muted-foreground">Stage</label>
-                        <Select value={stageId ?? "all"} onValueChange={(v) => setStageId(v === "all" ? null : v)}>
-                            <SelectTrigger className="w-[160px]">
-                                <SelectValue placeholder="All" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All</SelectItem>
-                                {stages.map((s) => (
-                                    <SelectItem key={s.id} value={s.id}>
-                                        {s.display_name}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
+                    </AdvancedFiltersMenu>
                     <Button onClick={fetchAll} disabled={loading}>
                         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                         <span className="ml-2">{loading ? "Loading..." : "Apply"}</span>

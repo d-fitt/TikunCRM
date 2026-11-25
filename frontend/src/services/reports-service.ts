@@ -175,6 +175,26 @@ export interface LeadsCohortFilters {
     bdc_mode?: "activity" | "cohort";
 }
 
+export interface CohortDrillLead {
+    id: string;
+    name: string;
+    phone?: string | null;
+    email?: string | null;
+    outcome?: string | null;
+    stage?: string | null;
+    source?: string | null;
+    created_at?: string | null;
+    last_inbound_at?: string | null;
+    repeat_submission: boolean;
+}
+
+export interface CohortDrillResponse {
+    metric: string;
+    label: string;
+    total: number;
+    leads: CohortDrillLead[];
+}
+
 export interface CohortFunnelStep {
     key: string;
     label: string;
@@ -616,6 +636,14 @@ export const ReportsService = {
     async getLeadsCohortAnalysis(filters?: LeadsCohortFilters): Promise<LeadCohortAnalysisResponse> {
         const response = await apiClient.get("/reports/analytics/leads-cohort", {
             params: filters,
+            paramsSerializer: { indexes: null },
+        });
+        return response.data;
+    },
+
+    async getLeadsCohortDrill(metric: string, filters?: LeadsCohortFilters): Promise<CohortDrillResponse> {
+        const response = await apiClient.get("/reports/analytics/leads-cohort/drill", {
+            params: { ...filters, metric },
             paramsSerializer: { indexes: null },
         });
         return response.data;
