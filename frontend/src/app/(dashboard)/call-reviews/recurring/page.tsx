@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { EmptyState } from "@/components/ui/empty-state"
 import { PageHeader } from "@/components/ui/page-header"
+import { AllCallsTabs } from "@/components/call-reviews/all-calls-tabs"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 import { CallReviewService, RecurringIssues, RecurringRow, apiErrorMessage } from "@/services/call-review-service"
@@ -290,8 +291,8 @@ export default function CallPatternsPage() {
     return (
         <div className="space-y-6">
             <PageHeader
-                title="Call patterns"
-                description="A running record across every reviewed call: what customers object to, what they don't say, what reps do well and what they don't. Most common first."
+                title="All Calls"
+                description="What keeps coming up across every reviewed call: what customers object to, what they don't say, what reps do well and what they don't. Most common first."
                 actions={
                     <div className="flex flex-wrap items-center gap-2">
                         <div className="flex flex-wrap gap-1" role="group" aria-label="Time period">
@@ -320,6 +321,8 @@ export default function CallPatternsPage() {
                 }
             />
 
+            <AllCallsTabs active="/call-reviews/recurring" />
+
             {error && (
                 <Alert variant="destructive">
                     <AlertCircle className="h-4 w-4" />
@@ -338,7 +341,7 @@ export default function CallPatternsPage() {
                             icon={<PhoneCall />}
                             title="No reviewed calls in this period"
                             description="The lists fill up as calls are reviewed."
-                            action={{ label: "Go to Call Reviews", onClick: () => router.push("/call-reviews") }}
+                            action={{ label: "Go to Each Call", onClick: () => router.push("/call-reviews") }}
                         />
                     </CardContent>
                 </Card>

@@ -121,15 +121,15 @@ export default function CallReviewsPage() {
     return (
         <div className="space-y-6">
             <PageHeader
-                title="Call Reviews"
-                description="AI feedback on recorded customer calls, scored against your rubric."
+                title="Each Call"
+                description="Every recorded call, one at a time, with the AI's feedback. Open a call to see the details."
                 actions={
                     data?.can_manage ? (
                         <>
                             <Button variant="outline" asChild>
                                 <Link href="/call-reviews/dashboard">
                                     <BarChart3 className="mr-2 h-4 w-4" />
-                                    Team dashboard
+                                    All Calls
                                 </Link>
                             </Button>
                             <Button variant="outline" asChild>

@@ -35,7 +35,6 @@ import {
     QrCode,
     Timer,
     PhoneCall,
-    Repeat,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
@@ -161,7 +160,15 @@ const allSidebarItems: SidebarItem[] = [
     {
         name: "Call Reviews",
         icon: PhoneCall,
-        href: "/call-reviews",
+        children: [
+            { name: "Each Call", icon: PhoneCall, href: "/call-reviews" },
+            {
+                name: "All Calls",
+                icon: BarChart3,
+                href: "/call-reviews/dashboard",
+                roles: ["super_admin", "dealership_admin", "dealership_owner", "bdc"],
+            },
+        ],
     },
     { 
         name: "Notifications", 
@@ -174,8 +181,6 @@ const allSidebarItems: SidebarItem[] = [
         roles: ["super_admin", "dealership_admin", "dealership_owner", "bdc"],
         children: [
             { name: "Analytics", icon: BarChart3, href: "/analytics" },
-            { name: "Call Intelligence", icon: PhoneCall, href: "/call-reviews/dashboard" },
-            { name: "Call Patterns", icon: Repeat, href: "/call-reviews/recurring" },
             { name: "Team Activity", icon: Activity, href: "/team-activity" },
             { name: "Sold Cars", icon: Car, href: "/sold-cars" },
             { name: "BDC Export", icon: QrCode, href: "/reports/bdc-export" },
@@ -215,7 +220,14 @@ interface BadgeCounts {
     whatsappUnread: number
 }
 
+const ALL_CALLS_PATHS = ["/call-reviews/dashboard", "/call-reviews/recurring"]
+
 function isSidebarLinkActive(pathname: string, searchParams: URLSearchParams, href: string): boolean {
+    // "All Calls" covers both overview views; "Each Call" covers the list and single-call pages
+    if (href === "/call-reviews/dashboard") return ALL_CALLS_PATHS.some((p) => pathname.startsWith(p))
+    if (href === "/call-reviews") {
+        return pathname.startsWith("/call-reviews") && !ALL_CALLS_PATHS.some((p) => pathname.startsWith(p))
+    }
     if (href === "/leads" || href === "/leads?filter=all") {
         const onLeads = pathname === "/leads" || pathname.startsWith("/leads/")
         if (!onLeads) return false
@@ -484,9 +496,12 @@ export function Sidebar() {
         (p) => pathname === p || pathname.startsWith(`${p}/`)
     )
     const isLeadsSectionActive = pathname === "/leads" || pathname.startsWith("/leads/")
+    const isCallReviewsActive = pathname === "/call-reviews" || pathname.startsWith("/call-reviews/")
     const activeGroup = isConversationsActive
         ? "Conversations"
-        : isReportsSectionActive
+        : isCallReviewsActive
+            ? "Call Reviews"
+            : isReportsSectionActive
             ? "Reports"
             : isLeadsSectionActive
                 ? "Leads"

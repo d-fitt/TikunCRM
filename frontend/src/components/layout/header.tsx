@@ -28,7 +28,7 @@ const SEGMENT_LABELS: Record<string, string> = {
     calls: "Calls",
     "call-reviews": "Call Reviews",
     "call-scoring": "Call Scoring",
-    recurring: "Call Patterns",
+    recurring: "All Calls · Patterns",
     inbox: "Inbox",
     communications: "Communications",
     "auto-whatsapp": "Auto WhatsApp",
@@ -79,7 +79,7 @@ export function Header() {
     const segments = (pathname || "/dashboard").split("/").filter(Boolean)
 
     const crumbs = segments.map((segment, i) => ({
-        label: labelFor(segment),
+        label: segments[0] === "call-reviews" && segment === "dashboard" ? "All Calls" : labelFor(segment),
         href: "/" + segments.slice(0, i + 1).join("/"),
         isLast: i === segments.length - 1,
     }))

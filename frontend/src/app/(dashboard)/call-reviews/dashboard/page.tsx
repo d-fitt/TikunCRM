@@ -2,8 +2,8 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import Link from "next/link"
-import { AlertCircle, Loader2, Mail, PhoneCall, Repeat, Target } from "lucide-react"
+import { AlertCircle, Loader2, Mail, PhoneCall, Target } from "lucide-react"
+import { AllCallsTabs } from "@/components/call-reviews/all-calls-tabs"
 import { AskAboutCalls } from "@/components/call-reviews/ask-about-calls"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -358,16 +358,10 @@ export default function CallIntelligencePage() {
     return (
         <div className="space-y-6">
             <PageHeader
-                title="Call Intelligence"
-                description="How the team is doing on calls: AI quality scores next to what actually happened in the CRM."
+                title="All Calls"
+                description="How the team is doing across every reviewed call: AI scores next to what actually happened in the CRM."
                 actions={
                     <div className="flex flex-wrap items-center gap-3">
-                    <Button size="sm" variant="outline" asChild>
-                        <Link href="/call-reviews/recurring">
-                            <Repeat className="mr-2 h-4 w-4" />
-                            Call patterns
-                        </Link>
-                    </Button>
                     <Button size="sm" variant="outline" onClick={emailReport} disabled={reportState === "sending"}>
                         {reportState === "sending" ? (
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -392,6 +386,8 @@ export default function CallIntelligencePage() {
                     </div>
                 }
             />
+
+            <AllCallsTabs active="/call-reviews/dashboard" />
 
             {reportNote && (
                 <Alert variant={reportNote.ok ? "default" : "destructive"}>
@@ -420,7 +416,7 @@ export default function CallIntelligencePage() {
                             icon={<PhoneCall />}
                             title="No reviewed calls in this period"
                             description="Numbers appear here once calls have been reviewed."
-                            action={{ label: "Go to Call Reviews", onClick: () => router.push("/call-reviews") }}
+                            action={{ label: "Go to Each Call", onClick: () => router.push("/call-reviews") }}
                         />
                     </CardContent>
                 </Card>
