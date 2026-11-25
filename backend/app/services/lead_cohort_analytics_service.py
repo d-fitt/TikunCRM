@@ -32,6 +32,7 @@ from app.models.call_log import CallDirection, CallLog, CallStatus
 from app.models.campaign_mapping import CampaignMapping
 from app.models.campaign_mapping_version import CampaignMappingVersion
 from app.models.customer_stip_document import CustomerStipDocument
+from app.models.follow_up import FollowUp
 from app.models.lead import Lead, LeadSource
 from app.models.lead_stage import LeadStage
 from app.models.lead_stip_document import LeadStipDocument
@@ -501,8 +502,6 @@ async def build_lead_cohort_analysis(
     if dealership_id:
         lead_conds.append(Lead.dealership_id == dealership_id)
     assigned_ids = list(dict.fromkeys(aid for aid in (assigned_to or []) if aid))
-    if assigned_ids:
-        lead_conds.append(Lead.assigned_to.in_(assigned_ids))
     source_values: List[LeadSource] = []
     for raw_source in source or []:
         try:
@@ -635,6 +634,51 @@ async def build_lead_cohort_analysis(
         leads = [l for l in leads if _lead_has_stip(l)]
     elif has_stip == "no":
         leads = [l for l in leads if not _lead_has_stip(l)]
+
+    # If filtering by Salesperson / Manager, include leads assigned to OR worked by any selected user
+    if assigned_ids and leads:
+        candidate_ids = [l.id for l in leads]
+        assigned_id_set = set(assigned_ids)
+        sp_acted_ids: Set[UUID] = set()
+        sp_act_res = await db.execute(
+            select(Activity.lead_id)
+            .where(
+                Activity.lead_id.in_(candidate_ids),
+                Activity.user_id.in_(assigned_ids),
+            )
+            .distinct()
+        )
+        sp_acted_ids.update(row[0] for row in sp_act_res.all() if row[0])
+        sp_call_res = await db.execute(
+            select(CallLog.lead_id)
+            .where(CallLog.lead_id.in_(candidate_ids), CallLog.user_id.in_(assigned_ids))
+            .distinct()
+        )
+        sp_acted_ids.update(row[0] for row in sp_call_res.all() if row[0])
+        sp_appt_res = await db.execute(
+            select(Appointment.lead_id)
+            .where(
+                Appointment.lead_id.in_(candidate_ids),
+                or_(
+                    Appointment.scheduled_by.in_(assigned_ids),
+                    Appointment.assigned_to.in_(assigned_ids),
+                ),
+            )
+            .distinct()
+        )
+        sp_acted_ids.update(row[0] for row in sp_appt_res.all() if row[0])
+        sp_fu_res = await db.execute(
+            select(FollowUp.lead_id)
+            .where(FollowUp.lead_id.in_(candidate_ids), FollowUp.assigned_to.in_(assigned_ids))
+            .distinct()
+        )
+        sp_acted_ids.update(row[0] for row in sp_fu_res.all() if row[0])
+        leads = [
+            l for l in leads
+            if l.assigned_to in assigned_id_set
+            or l.secondary_salesperson_id in assigned_id_set
+            or l.id in sp_acted_ids
+        ]
 
     # If filtering by BDC agents, include leads assigned to OR worked by any selected agent
     bdc_agent_ids = list(dict.fromkeys(aid for aid in (bdc_agent_id or []) if aid))
