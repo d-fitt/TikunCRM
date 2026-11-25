@@ -428,29 +428,19 @@ function downloadCohortPdf(data: LeadCohortAnalysisResponse, periodLabel: string
 }
 
 export interface LeadsAnalysisTabProps {
-    dealershipId: string | null
     orgDealershipId: string | null
-    isSuperAdmin: boolean
-    isBdc: boolean
-    dealerships: Array<{ id: string; name: string }>
     salespersons: Array<{ id: string; first_name: string; last_name: string }>
     bdcAgents: Array<{ id: string; first_name: string; last_name: string }>
     partnerStores: PartnerStore[]
     stages: LeadStage[]
-    onDealershipChange?: (id: string | null) => void
 }
 
 export function LeadsAnalysisTab({
-    dealershipId,
     orgDealershipId,
-    isSuperAdmin,
-    isBdc,
-    dealerships,
     salespersons,
     bdcAgents,
     partnerStores,
     stages,
-    onDealershipChange,
 }: LeadsAnalysisTabProps) {
     const [dateMode, setDateMode] = React.useState<CohortDateMode>("mtd")
     const [dateFrom, setDateFrom] = React.useState<string>(() => getPresetDates("mtd").dateFrom)
@@ -497,8 +487,7 @@ export function LeadsAnalysisTab({
             if (dateFrom) filters.date_from = startOfDay(parseISO(dateFrom)).toISOString()
             if (dateTo) filters.date_to = endOfDay(parseISO(dateTo)).toISOString()
         }
-        const effectiveDealershipId = dealershipId || (isBdc ? orgDealershipId : null)
-        if (effectiveDealershipId) filters.dealership_id = effectiveDealershipId
+        if (orgDealershipId) filters.dealership_id = orgDealershipId
         if (campaign) filters.campaign = campaign
         if (partnerStoreId) filters.partner_store_id = partnerStoreId
         if (bdcAgentId) filters.bdc_agent_id = bdcAgentId
@@ -512,8 +501,6 @@ export function LeadsAnalysisTab({
         singleDate,
         dateFrom,
         dateTo,
-        dealershipId,
-        isBdc,
         orgDealershipId,
         campaign,
         partnerStoreId,
@@ -700,28 +687,6 @@ export function LeadsAnalysisTab({
                                     />
                                 </div>
                             </>
-                        )}
-
-                        {(isSuperAdmin || isBdc) && dealerships.length > 0 && onDealershipChange && (
-                            <div className="flex flex-col gap-1">
-                                <label className="text-xs text-muted-foreground">Dealership</label>
-                                <Select
-                                    value={dealershipId ?? (isBdc && dealerships.length === 1 ? dealerships[0].id : "all")}
-                                    onValueChange={(v) => onDealershipChange(v === "all" ? null : v)}
-                                >
-                                    <SelectTrigger className="w-[165px] h-9">
-                                        <SelectValue placeholder="All" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {isSuperAdmin && <SelectItem value="all">All Dealerships</SelectItem>}
-                                        {dealerships.map((d) => (
-                                            <SelectItem key={d.id} value={d.id}>
-                                                {d.name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
                         )}
 
                         <div className="flex flex-col gap-1">

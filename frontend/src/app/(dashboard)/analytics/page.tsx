@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
+import { useRouter, useSearchParams } from "next/navigation"
 import {
     startOfDay,
     endOfDay,
@@ -397,13 +398,25 @@ function downloadAnalysisPdf(
     doc.save(`analytics-report-${new Date().toISOString().slice(0, 10)}.pdf`)
 }
 
-export default function AnalyticsPage() {
+function AnalyticsPageContent() {
+    const router = useRouter()
+    const searchParams = useSearchParams()
     const { isDealershipAdmin, isDealershipOwner, isSuperAdmin, isBdc } = useRole()
     const { user } = useAuthStore()
     const orgDealershipId = useOrgDealershipId()
     const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin || isBdc
 
-    const [activeTab, setActiveTab] = React.useState<"overview" | "leads">("overview")
+    const urlTab = searchParams.get("tab") === "leads" ? "leads" : "overview"
+    const [activeTab, setActiveTab] = React.useState<"overview" | "leads">(urlTab)
+
+    React.useEffect(() => {
+        setActiveTab(urlTab)
+    }, [urlTab])
+
+    const handleTabChange = (next: "overview" | "leads") => {
+        setActiveTab(next)
+        router.replace(next === "leads" ? "/analytics?tab=leads" : "/analytics", { scroll: false })
+    }
     const [analysis, setAnalysis] = React.useState<DealershipAnalysisResponse | null>(null)
     const [leadsOverTime, setLeadsOverTime] = React.useState<LeadsOverTimeResponse | null>(null)
     const [leadsByStage, setLeadsByStage] = React.useState<LeadsByStageResponse | null>(null)
@@ -490,7 +503,7 @@ export default function AnalyticsPage() {
 
     const fetchAll = React.useCallback(async () => {
         if (!canView) return
-        const effectiveDealershipId = dealershipId || (isBdc ? orgDealershipId : null)
+        const effectiveDealershipId = dealershipId || orgDealershipId || null
         setLoading(true)
         setError(null)
         const filters = buildFilters(dateFrom, dateTo, singleDate, dateMode, effectiveDealershipId, assignedTo, bdcAgentId, source, stageId, partnerStoreId)
@@ -549,24 +562,19 @@ export default function AnalyticsPage() {
                 </div>
             </div>
 
-            <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "overview" | "leads")} className="space-y-6">
+            <Tabs value={activeTab} onValueChange={(v) => handleTabChange(v as "overview" | "leads")} className="space-y-6">
                 <TabsList>
                     <TabsTrigger value="overview">Overview</TabsTrigger>
-                    <TabsTrigger value="leads">Leads</TabsTrigger>
+                    <TabsTrigger value="leads">Leads Analysis</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="leads" className="mt-0">
                     <LeadsAnalysisTab
-                        dealershipId={dealershipId}
-                        orgDealershipId={orgDealershipId}
-                        isSuperAdmin={isSuperAdmin}
-                        isBdc={isBdc}
-                        dealerships={dealerships}
+                        orgDealershipId={dealershipId || orgDealershipId}
                         salespersons={salespersons}
                         bdcAgents={bdcAgents}
                         partnerStores={partnerStores}
                         stages={stages}
-                        onDealershipChange={setDealershipId}
                     />
                 </TabsContent>
 
@@ -632,27 +640,6 @@ export default function AnalyticsPage() {
                                 />
                             </div>
                         </>
-                    )}
-                    {(isSuperAdmin || isBdc) && dealerships.length > 0 && (
-                        <div className="flex flex-col gap-1">
-                            <label className="text-xs text-muted-foreground">Dealership</label>
-                            <Select 
-                                value={dealershipId ?? (isBdc && dealerships.length === 1 ? dealerships[0].id : "all")} 
-                                onValueChange={(v) => setDealershipId(v === "all" ? null : v)}
-                            >
-                                <SelectTrigger className="w-[180px]">
-                                    <SelectValue placeholder={isBdc ? "Select dealership" : "All"} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {isSuperAdmin && <SelectItem value="all">All</SelectItem>}
-                                    {dealerships.map((d) => (
-                                        <SelectItem key={d.id} value={d.id}>
-                                            {d.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
                     )}
                     <div className="flex flex-col gap-1">
                         <label className="text-xs text-muted-foreground">Salesperson</label>
@@ -1133,5 +1120,19 @@ export default function AnalyticsPage() {
                 </TabsContent>
             </Tabs>
         </div>
+    )
+}
+
+export default function AnalyticsPage() {
+    return (
+        <React.Suspense
+            fallback={
+                <div className="flex items-center justify-center py-20">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+            }
+        >
+            <AnalyticsPageContent />
+        </React.Suspense>
     )
 }

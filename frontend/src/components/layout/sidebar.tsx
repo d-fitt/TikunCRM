@@ -167,6 +167,7 @@ const allSidebarItems: SidebarItem[] = [
         roles: ["super_admin", "dealership_admin", "dealership_owner", "bdc"],
         children: [
             { name: "Analytics", icon: BarChart3, href: "/analytics" },
+            { name: "Leads Analysis", icon: Users, href: "/analytics?tab=leads" },
             { name: "Team Activity", icon: Activity, href: "/team-activity" },
             { name: "Sold Cars", icon: Car, href: "/sold-cars" },
             { name: "BDC Export", icon: QrCode, href: "/reports/bdc-export" },
@@ -213,6 +214,9 @@ function isSidebarLinkActive(pathname: string, searchParams: URLSearchParams, hr
         if (pathname.startsWith("/leads/")) return true
         const filter = searchParams.get("filter")
         return !filter || filter === "all"
+    }
+    if (href === "/analytics") {
+        return pathname === "/analytics" && searchParams.get("tab") !== "leads"
     }
     if (href.includes("?")) {
         const [path, query] = href.split("?", 2)

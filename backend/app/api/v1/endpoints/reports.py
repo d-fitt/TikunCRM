@@ -19,7 +19,7 @@ from sqlalchemy.orm import aliased
 
 from app.api import deps
 from app.core.timezone import utc_now
-from app.core.access_scope import is_org_wide_role, resolve_report_dealership_id
+from app.core.access_scope import is_org_wide_role, resolve_report_dealership_id, resolve_user_dealership_id
 from app.db.database import get_db
 from app.models.user import User, UserRole
 from app.models.appointment import Appointment, AppointmentStatus
@@ -935,6 +935,10 @@ async def get_dealership_analysis(
     resolved_dealership_id, lead_filters, has_lead_specific_filters = await _resolve_dealership_and_lead_filters(
         db, current_user, dealership_id, assigned_to, source, stage_id, bdc_agent_id, partner_store_id
     )
+    if not resolved_dealership_id:
+        resolved_dealership_id = await resolve_user_dealership_id(db, current_user)
+        if resolved_dealership_id:
+            lead_filters = [Lead.dealership_id == resolved_dealership_id, *lead_filters]
     if not resolved_dealership_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
