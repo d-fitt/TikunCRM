@@ -2559,7 +2559,7 @@ async def get_leads_cohort_analysis(
     partner_store_id: Optional[List[UUID]] = Query(None, description="Filter by partner store. Repeat for multiple."),
     campaign: Optional[List[str]] = Query(None, description="Filter by campaign display name. Repeat for multiple."),
     has_stip: Optional[str] = Query(None, description="Filter by stip presence: yes | no"),
-    include_returning: bool = Query(False, description="Include returning leads (last_inbound_at in period)"),
+    include_returning: bool = Query(True, description="Include returning leads (last_inbound_at in period)"),
     bdc_mode: str = Query("activity", description="BDC productivity mode: activity | cohort"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin_or_owner),

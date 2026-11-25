@@ -33,6 +33,7 @@ import {
 } from "lucide-react"
 import { jsPDF } from "jspdf"
 import autoTable from "jspdf-autotable"
+import { useDealershipTimezone } from "@/hooks/use-dealership-timezone"
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -539,6 +540,8 @@ export function LeadsAnalysisTab({
     partnerStores,
     stages,
 }: LeadsAnalysisTabProps) {
+    const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Kolkata"
+    const { dealershipTimezone } = useDealershipTimezone(orgDealershipId)
     const [dateMode, setDateMode] = React.useState<CohortDateMode>("mtd")
     const [dateFrom, setDateFrom] = React.useState<string>(() => getPresetDates("mtd").dateFrom)
     const [dateTo, setDateTo] = React.useState<string>(() => getPresetDates("mtd").dateTo)
@@ -551,7 +554,7 @@ export function LeadsAnalysisTab({
     const [sources, setSources] = React.useState<string[]>([])
     const [stageIds, setStageIds] = React.useState<string[]>([])
     const [hasStip, setHasStip] = React.useState<"yes" | "no" | null>(null)
-    const [includeReturning, setIncludeReturning] = React.useState<boolean>(false)
+    const [includeReturning, setIncludeReturning] = React.useState<boolean>(true)
     const [bdcMode, setBdcMode] = React.useState<"activity" | "cohort">("activity")
     const [showInactiveBdc, setShowInactiveBdc] = React.useState<boolean>(false)
 
@@ -879,7 +882,7 @@ export function LeadsAnalysisTab({
                                 onChange={(e) => setIncludeReturning(e.target.checked)}
                                 className="rounded border-input"
                             />
-                            Include returning leads
+                            Count repeat submissions
                         </label>
                     </div>
                 </CardContent>
@@ -903,7 +906,11 @@ export function LeadsAnalysisTab({
                             <div>
                                 <h2 className="text-lg font-semibold">Lead Cohort Overview</h2>
                                 <p className="text-xs text-muted-foreground">
-                                    Distinct leads received during {periodLabel} and where they stand across the funnel.
+                                    Leads from {periodLabel}, midnight to midnight in {browserTimezone}.
+                                    {includeReturning
+                                        ? " Includes people who already existed and submitted again."
+                                        : " Repeat submissions are not included."}
+                                    {" "}Dealership clock is {dealershipTimezone}.
                                 </p>
                             </div>
                             <div className="flex items-center gap-4 text-xs text-muted-foreground">
