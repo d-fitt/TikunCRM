@@ -24,6 +24,7 @@ import {
     Loader2,
     RefreshCw,
     Download,
+    ChevronDown,
     Filter,
     X,
     Megaphone,
@@ -52,6 +53,8 @@ import {
     TableRow,
     TableEmpty,
 } from "@/components/ui/table"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
 import {
     ReportsService,
@@ -158,6 +161,100 @@ function CountWithPct({
         <div className="inline-flex items-center justify-end gap-1.5 tabular-nums">
             <span className="font-medium">{count.toLocaleString()}</span>
             <PctBadge value={pct} tone={tone} />
+        </div>
+    )
+}
+
+function toggleValue(list: string[], value: string): string[] {
+    return list.includes(value) ? list.filter((item) => item !== value) : [...list, value]
+}
+
+function MultiFilterSelect({
+    label,
+    emptyLabel,
+    className,
+    options,
+    selected,
+    onChange,
+}: {
+    label: string
+    emptyLabel: string
+    className?: string
+    options: Array<{ value: string; label: string }>
+    selected: string[]
+    onChange: (next: string[]) => void
+}) {
+    const [open, setOpen] = React.useState(false)
+    const [query, setQuery] = React.useState("")
+    const selectedSet = React.useMemo(() => new Set(selected), [selected])
+    const summary = React.useMemo(() => {
+        if (selected.length === 0) return emptyLabel
+        if (selected.length === 1) {
+            return options.find((option) => option.value === selected[0])?.label ?? "1 selected"
+        }
+        return `${selected.length} selected`
+    }, [emptyLabel, options, selected])
+    const visibleOptions = React.useMemo(() => {
+        const q = query.trim().toLowerCase()
+        if (!q) return options
+        return options.filter((option) => option.label.toLowerCase().includes(q))
+    }, [options, query])
+
+    return (
+        <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">{label}</label>
+            <Popover
+                open={open}
+                onOpenChange={(next) => {
+                    setOpen(next)
+                    if (!next) setQuery("")
+                }}
+            >
+                <PopoverTrigger asChild>
+                    <Button type="button" variant="outline" className={cn("h-9 justify-between px-3 font-normal", className)}>
+                        <span className="truncate">{summary}</span>
+                        <ChevronDown className="h-4 w-4 opacity-50" />
+                    </Button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-[260px] p-2">
+                    {options.length > 8 && (
+                        <input
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
+                            placeholder={`Search ${label.toLowerCase()}`}
+                            className="mb-2 h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+                        />
+                    )}
+                    <div className="max-h-64 overflow-y-auto">
+                        {visibleOptions.length === 0 ? (
+                            <p className="px-2 py-3 text-xs text-muted-foreground">
+                                {options.length === 0 ? "No options" : "No matches"}
+                            </p>
+                        ) : (
+                            visibleOptions.map((option) => (
+                                <button
+                                    key={option.value}
+                                    type="button"
+                                    className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted"
+                                    onClick={() => onChange(toggleValue(selected, option.value))}
+                                >
+                                    <Checkbox checked={selectedSet.has(option.value)} className="pointer-events-none" tabIndex={-1} />
+                                    <span className="truncate">{option.label}</span>
+                                </button>
+                            ))
+                        )}
+                    </div>
+                    {selected.length > 0 && (
+                        <button
+                            type="button"
+                            className="mt-1 w-full rounded-sm px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                            onClick={() => onChange([])}
+                        >
+                            Clear selection
+                        </button>
+                    )}
+                </PopoverContent>
+            </Popover>
         </div>
     )
 }
@@ -447,12 +544,12 @@ export function LeadsAnalysisTab({
     const [dateTo, setDateTo] = React.useState<string>(() => getPresetDates("mtd").dateTo)
     const [singleDate, setSingleDate] = React.useState<string>(() => getPresetDates("mtd").singleDate)
 
-    const [campaign, setCampaign] = React.useState<string | null>(null)
-    const [partnerStoreId, setPartnerStoreId] = React.useState<string | null>(null)
-    const [bdcAgentId, setBdcAgentId] = React.useState<string | null>(null)
-    const [assignedTo, setAssignedTo] = React.useState<string | null>(null)
-    const [source, setSource] = React.useState<string | null>(null)
-    const [stageId, setStageId] = React.useState<string | null>(null)
+    const [campaigns, setCampaigns] = React.useState<string[]>([])
+    const [partnerStoreIds, setPartnerStoreIds] = React.useState<string[]>([])
+    const [bdcAgentIds, setBdcAgentIds] = React.useState<string[]>([])
+    const [assignedToIds, setAssignedToIds] = React.useState<string[]>([])
+    const [sources, setSources] = React.useState<string[]>([])
+    const [stageIds, setStageIds] = React.useState<string[]>([])
     const [hasStip, setHasStip] = React.useState<"yes" | "no" | null>(null)
     const [includeReturning, setIncludeReturning] = React.useState<boolean>(false)
     const [bdcMode, setBdcMode] = React.useState<"activity" | "cohort">("activity")
@@ -488,12 +585,12 @@ export function LeadsAnalysisTab({
             if (dateTo) filters.date_to = endOfDay(parseISO(dateTo)).toISOString()
         }
         if (orgDealershipId) filters.dealership_id = orgDealershipId
-        if (campaign) filters.campaign = campaign
-        if (partnerStoreId) filters.partner_store_id = partnerStoreId
-        if (bdcAgentId) filters.bdc_agent_id = bdcAgentId
-        if (assignedTo) filters.assigned_to = assignedTo
-        if (source) filters.source = source
-        if (stageId) filters.stage_id = stageId
+        if (campaigns.length) filters.campaign = campaigns
+        if (partnerStoreIds.length) filters.partner_store_id = partnerStoreIds
+        if (bdcAgentIds.length) filters.bdc_agent_id = bdcAgentIds
+        if (assignedToIds.length) filters.assigned_to = assignedToIds
+        if (sources.length) filters.source = sources
+        if (stageIds.length) filters.stage_id = stageIds
         if (hasStip) filters.has_stip = hasStip
         return filters
     }, [
@@ -502,12 +599,12 @@ export function LeadsAnalysisTab({
         dateFrom,
         dateTo,
         orgDealershipId,
-        campaign,
-        partnerStoreId,
-        bdcAgentId,
-        assignedTo,
-        source,
-        stageId,
+        campaigns,
+        partnerStoreIds,
+        bdcAgentIds,
+        assignedToIds,
+        sources,
+        stageIds,
         hasStip,
         includeReturning,
         bdcMode,
@@ -535,16 +632,23 @@ export function LeadsAnalysisTab({
     }, [fetchData])
 
     const hasActiveSubFilters = Boolean(
-        campaign || partnerStoreId || bdcAgentId || assignedTo || source || stageId || hasStip || includeReturning
+        campaigns.length ||
+            partnerStoreIds.length ||
+            bdcAgentIds.length ||
+            assignedToIds.length ||
+            sources.length ||
+            stageIds.length ||
+            hasStip ||
+            includeReturning
     )
 
     const clearSubFilters = () => {
-        setCampaign(null)
-        setPartnerStoreId(null)
-        setBdcAgentId(null)
-        setAssignedTo(null)
-        setSource(null)
-        setStageId(null)
+        setCampaigns([])
+        setPartnerStoreIds([])
+        setBdcAgentIds([])
+        setAssignedToIds([])
+        setSources([])
+        setStageIds([])
         setHasStip(null)
         setIncludeReturning(false)
     }
@@ -689,109 +793,70 @@ export function LeadsAnalysisTab({
                             </>
                         )}
 
-                        <div className="flex flex-col gap-1">
-                            <label className="text-xs text-muted-foreground">Campaign</label>
-                            <Select value={campaign ?? "all"} onValueChange={(v) => setCampaign(v === "all" ? null : v)}>
-                                <SelectTrigger className="w-[190px] h-9">
-                                    <SelectValue placeholder="All campaigns" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All active campaigns</SelectItem>
-                                    {(data?.available_campaigns ?? []).map((c) => (
-                                        <SelectItem key={c} value={c}>
-                                            {c}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
+                        <MultiFilterSelect
+                            label="Campaign"
+                            emptyLabel="All active campaigns"
+                            className="w-[190px]"
+                            options={(data?.available_campaigns ?? []).map((name) => ({ value: name, label: name }))}
+                            selected={campaigns}
+                            onChange={setCampaigns}
+                        />
 
-                        <div className="flex flex-col gap-1">
-                            <label className="text-xs text-muted-foreground">Partner Store</label>
-                            <Select value={partnerStoreId ?? "all"} onValueChange={(v) => setPartnerStoreId(v === "all" ? null : v)}>
-                                <SelectTrigger className="w-[185px] h-9">
-                                    <SelectValue placeholder="All stores" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All stores</SelectItem>
-                                    {partnerStores.map((ps) => (
-                                        <SelectItem key={ps.id} value={ps.id}>
-                                            {ps.brand ? `${ps.name} (${ps.brand})` : ps.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
+                        <MultiFilterSelect
+                            label="Partner Store"
+                            emptyLabel="All stores"
+                            className="w-[185px]"
+                            options={partnerStores.map((ps) => ({
+                                value: ps.id,
+                                label: ps.brand ? `${ps.name} (${ps.brand})` : ps.name,
+                            }))}
+                            selected={partnerStoreIds}
+                            onChange={setPartnerStoreIds}
+                        />
 
                         {bdcAgents.length > 0 && (
-                            <div className="flex flex-col gap-1">
-                                <label className="text-xs text-muted-foreground">BDC Agent</label>
-                                <Select value={bdcAgentId ?? "all"} onValueChange={(v) => setBdcAgentId(v === "all" ? null : v)}>
-                                    <SelectTrigger className="w-[160px] h-9">
-                                        <SelectValue placeholder="All BDC" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All BDC</SelectItem>
-                                        {bdcAgents.map((a) => (
-                                            <SelectItem key={a.id} value={a.id}>
-                                                {a.first_name} {a.last_name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
+                            <MultiFilterSelect
+                                label="BDC Agent"
+                                emptyLabel="All BDC"
+                                className="w-[160px]"
+                                options={bdcAgents.map((agent) => ({
+                                    value: agent.id,
+                                    label: `${agent.first_name} ${agent.last_name}`.trim(),
+                                }))}
+                                selected={bdcAgentIds}
+                                onChange={setBdcAgentIds}
+                            />
                         )}
 
-                        <div className="flex flex-col gap-1">
-                            <label className="text-xs text-muted-foreground">Salesperson</label>
-                            <Select value={assignedTo ?? "all"} onValueChange={(v) => setAssignedTo(v === "all" ? null : v)}>
-                                <SelectTrigger className="w-[155px] h-9">
-                                    <SelectValue placeholder="All" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All</SelectItem>
-                                    {salespersons.map((s) => (
-                                        <SelectItem key={s.id} value={s.id}>
-                                            {s.first_name} {s.last_name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
+                        <MultiFilterSelect
+                            label="Salesperson"
+                            emptyLabel="All"
+                            className="w-[155px]"
+                            options={salespersons.map((person) => ({
+                                value: person.id,
+                                label: `${person.first_name} ${person.last_name}`.trim(),
+                            }))}
+                            selected={assignedToIds}
+                            onChange={setAssignedToIds}
+                        />
 
-                        <div className="flex flex-col gap-1">
-                            <label className="text-xs text-muted-foreground">Source</label>
-                            <Select value={source ?? "all"} onValueChange={(v) => setSource(v === "all" ? null : v)}>
-                                <SelectTrigger className="w-[140px] h-9">
-                                    <SelectValue placeholder="All" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All sources</SelectItem>
-                                    {LEAD_SOURCES.map((s) => (
-                                        <SelectItem key={s.value} value={s.value}>
-                                            {s.label}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
+                        <MultiFilterSelect
+                            label="Source"
+                            emptyLabel="All sources"
+                            className="w-[140px]"
+                            options={LEAD_SOURCES}
+                            selected={sources}
+                            onChange={setSources}
+                        />
 
-                        <div className="flex flex-col gap-1">
-                            <label className="text-xs text-muted-foreground">Stage</label>
-                            <Select value={stageId ?? "all"} onValueChange={(v) => setStageId(v === "all" ? null : v)}>
-                                <SelectTrigger className="w-[145px] h-9">
-                                    <SelectValue placeholder="All" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All stages</SelectItem>
-                                    {stages.map((st) => (
-                                        <SelectItem key={st.id} value={st.id}>
-                                            {st.display_name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
+                        <MultiFilterSelect
+                            label="Stage"
+                            emptyLabel="All stages"
+                            className="w-[145px]"
+                            options={stages.map((stage) => ({ value: stage.id, label: stage.display_name }))}
+                            selected={stageIds}
+                            onChange={setStageIds}
+                        />
 
                         <div className="flex flex-col gap-1">
                             <label className="text-xs text-muted-foreground">Stips</label>
@@ -996,8 +1061,8 @@ export function LeadsAnalysisTab({
                                     </CardTitle>
                                     <CardDescription>
                                         {bdcMode === "activity"
-                                            ? "All leads worked, calls placed (connected ≥ 15s), notes added, and appointments booked by each BDC agent during this period."
-                                            : "Each BDC agent's work strictly on the cohort of leads that arrived during this period."}
+                                            ? "Calls, notes, and appointments each agent logged during this period. Sold is the cohort leads marked converted, same as Converted / Sold above."
+                                            : "Each agent's work on leads that arrived during this period. Sold is those cohort leads marked converted."}
                                     </CardDescription>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-2">
@@ -1070,11 +1135,9 @@ export function LeadsAnalysisTab({
                                                         key={row.user_id}
                                                         className={cn(
                                                             "cursor-pointer hover:bg-muted/40",
-                                                            bdcAgentId === row.user_id && "bg-primary/5"
+                                                            bdcAgentIds.includes(row.user_id) && "bg-primary/5"
                                                         )}
-                                                        onClick={() =>
-                                                            setBdcAgentId((prev) => (prev === row.user_id ? null : row.user_id))
-                                                        }
+                                                        onClick={() => setBdcAgentIds((prev) => toggleValue(prev, row.user_id))}
                                                     >
                                                         <TableCell className="font-medium whitespace-nowrap">
                                                             <div>{row.user_name}</div>
@@ -1211,13 +1274,13 @@ export function LeadsAnalysisTab({
                                         Campaign Performance Matrix
                                     </CardTitle>
                                     <CardDescription>
-                                        Active campaigns that brought leads in this period. Click any row to filter the report to that campaign.
+                                        Active campaigns that brought leads in this period. Click a row to add or remove that campaign.
                                     </CardDescription>
                                 </div>
-                                {campaign && (
+                                {campaigns.length > 0 && (
                                     <Badge variant="secondary" className="gap-1">
-                                        Campaign: {campaign}
-                                        <button type="button" onClick={() => setCampaign(null)} aria-label="Clear campaign filter">
+                                        {campaigns.length === 1 ? `Campaign: ${campaigns[0]}` : `${campaigns.length} campaigns`}
+                                        <button type="button" onClick={() => setCampaigns([])} aria-label="Clear campaign filter">
                                             <X className="h-3 w-3" />
                                         </button>
                                     </Badge>
@@ -1279,11 +1342,9 @@ export function LeadsAnalysisTab({
                                                     key={row.campaign_name}
                                                     className={cn(
                                                         "cursor-pointer hover:bg-muted/40",
-                                                        campaign === row.campaign_name && "bg-primary/5"
+                                                        campaigns.includes(row.campaign_name) && "bg-primary/5"
                                                     )}
-                                                    onClick={() =>
-                                                        setCampaign((prev) => (prev === row.campaign_name ? null : row.campaign_name))
-                                                    }
+                                                    onClick={() => setCampaigns((prev) => toggleValue(prev, row.campaign_name))}
                                                 >
                                                     <TableCell className="font-medium max-w-[220px] truncate" title={row.campaign_name}>
                                                         {row.campaign_name}
@@ -1421,11 +1482,11 @@ export function LeadsAnalysisTab({
                             <CardHeader className="pb-3">
                                 <CardTitle className="text-base">Appointments &amp; Show-Up Matrix</CardTitle>
                                 <CardDescription>
-                                    All {data.appointments.total_appointments.toLocaleString()} appointments belonging to leads in this cohort.
+                                    All {data.appointments.total_appointments.toLocaleString()} appointments belonging to leads in this cohort. Sold is the same converted leads as the cohort card.
                                 </CardDescription>
                             </CardHeader>
                             <CardContent className="space-y-3">
-                                <div className="grid grid-cols-3 gap-2 text-center">
+                                <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
                                     <div className="rounded-md border border-emerald-200/70 bg-emerald-50/40 dark:bg-emerald-950/20 p-2">
                                         <div className="text-[11px] text-emerald-700 dark:text-emerald-300">Show Rate</div>
                                         <div className="text-base font-semibold tabular-nums">
@@ -1451,6 +1512,15 @@ export function LeadsAnalysisTab({
                                         </div>
                                         <div className="text-[10px] text-muted-foreground">
                                             {data.appointments.cancelled} / {data.appointments.total_appointments}
+                                        </div>
+                                    </div>
+                                    <div className="rounded-md border border-emerald-200/70 bg-emerald-50/40 dark:bg-emerald-950/20 p-2">
+                                        <div className="text-[11px] text-emerald-700 dark:text-emerald-300">Sold</div>
+                                        <div className="text-base font-semibold tabular-nums">
+                                            {data.summary.converted_leads.toLocaleString()}
+                                        </div>
+                                        <div className="text-[10px] text-muted-foreground">
+                                            leads in this cohort
                                         </div>
                                     </div>
                                 </div>
@@ -1502,13 +1572,13 @@ export function LeadsAnalysisTab({
                                         Partner Store Matrix
                                     </CardTitle>
                                     <CardDescription>
-                                        Leads sent to each partner store, appointment show-up rate, and close rate. Click a store to filter.
+                                        Leads sent to each partner store, appointment show-up rate, and close rate. Click a store to add or remove it.
                                     </CardDescription>
                                 </div>
-                                {partnerStoreId && (
+                                {partnerStoreIds.length > 0 && (
                                     <Badge variant="secondary" className="gap-1">
-                                        Store filtered
-                                        <button type="button" onClick={() => setPartnerStoreId(null)} aria-label="Clear store filter">
+                                        {partnerStoreIds.length === 1 ? "1 store" : `${partnerStoreIds.length} stores`}
+                                        <button type="button" onClick={() => setPartnerStoreIds([])} aria-label="Clear store filter">
                                             <X className="h-3 w-3" />
                                         </button>
                                     </Badge>
@@ -1539,14 +1609,13 @@ export function LeadsAnalysisTab({
                                                     key={row.partner_store_id ?? "none"}
                                                     className={cn(
                                                         row.partner_store_id && "cursor-pointer hover:bg-muted/40",
-                                                        row.partner_store_id && partnerStoreId === row.partner_store_id && "bg-primary/5",
+                                                        row.partner_store_id && partnerStoreIds.includes(row.partner_store_id) && "bg-primary/5",
                                                         !row.partner_store_id && "text-muted-foreground"
                                                     )}
                                                     onClick={() => {
                                                         if (!row.partner_store_id) return
-                                                        setPartnerStoreId((prev) =>
-                                                            prev === row.partner_store_id ? null : row.partner_store_id ?? null
-                                                        )
+                                                        const storeId = row.partner_store_id
+                                                        setPartnerStoreIds((prev) => toggleValue(prev, storeId))
                                                     }}
                                                 >
                                                     <TableCell className="font-medium">{row.partner_store_name}</TableCell>

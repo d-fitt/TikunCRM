@@ -160,8 +160,16 @@ export interface AnalyticsFilters {
     partner_store_id?: string;
 }
 
-export interface LeadsCohortFilters extends AnalyticsFilters {
-    campaign?: string;
+export interface LeadsCohortFilters {
+    date_from?: string;
+    date_to?: string;
+    dealership_id?: string;
+    assigned_to?: string[];
+    bdc_agent_id?: string[];
+    source?: string[];
+    stage_id?: string[];
+    partner_store_id?: string[];
+    campaign?: string[];
     has_stip?: "yes" | "no";
     include_returning?: boolean;
     bdc_mode?: "activity" | "cohort";
@@ -258,6 +266,7 @@ export interface AppointmentsSummary {
     cancelled: number;
     cancel_rate_pct: number;
     rescheduled: number;
+    sold_leads: number;
     by_status: AppointmentStatusMatrixRow[];
 }
 
@@ -605,7 +614,10 @@ export const ReportsService = {
     },
 
     async getLeadsCohortAnalysis(filters?: LeadsCohortFilters): Promise<LeadCohortAnalysisResponse> {
-        const response = await apiClient.get("/reports/analytics/leads-cohort", { params: filters });
+        const response = await apiClient.get("/reports/analytics/leads-cohort", {
+            params: filters,
+            paramsSerializer: { indexes: null },
+        });
         return response.data;
     },
 

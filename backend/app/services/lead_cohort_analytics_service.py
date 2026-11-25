@@ -222,6 +222,8 @@ class AppointmentsSummary(BaseModel):
     cancelled: int
     cancel_rate_pct: float
     rescheduled: int
+    # Same definition as CohortSummary.converted_leads: cohort leads marked converted.
+    sold_leads: int
     by_status: List[AppointmentStatusMatrixRow]
 
 
@@ -312,7 +314,7 @@ def _resolve_campaign_name(
 async def _get_bdc_users(
     db: AsyncSession,
     dealership_id: Optional[UUID],
-    bdc_agent_id: Optional[UUID] = None,
+    bdc_agent_ids: Optional[List[UUID]] = None,
 ) -> List[User]:
     users_by_id: Dict[UUID, User] = {}
 
@@ -345,12 +347,26 @@ async def _get_bdc_users(
         for u in all_res.scalars().all():
             users_by_id[u.id] = u
 
-    if bdc_agent_id:
-        if bdc_agent_id in users_by_id:
-            return [users_by_id[bdc_agent_id]]
-        one_res = await db.execute(select(User).where(User.id == bdc_agent_id))
-        one = one_res.scalar_one_or_none()
-        return [one] if one else []
+    selected_ids = list(dict.fromkeys(aid for aid in (bdc_agent_ids or []) if aid))
+    if selected_ids:
+        selected: List[User] = []
+        missing: List[UUID] = []
+        for aid in selected_ids:
+            user = users_by_id.get(aid)
+            if user:
+                selected.append(user)
+            else:
+                missing.append(aid)
+        if missing:
+            missing_res = await db.execute(select(User).where(User.id.in_(missing)))
+            missing_by_id = {u.id: u for u in missing_res.scalars().all()}
+            for aid in missing:
+                if aid in missing_by_id:
+                    selected.append(missing_by_id[aid])
+        return sorted(
+            selected,
+            key=lambda u: f"{u.first_name or ''} {u.last_name or ''}".strip().lower(),
+        )
 
     return sorted(
         users_by_id.values(),
@@ -364,12 +380,12 @@ async def build_lead_cohort_analysis(
     dealership_id: Optional[UUID],
     date_from: Optional[datetime],
     date_to: Optional[datetime],
-    assigned_to: Optional[UUID] = None,
-    bdc_agent_id: Optional[UUID] = None,
-    source: Optional[str] = None,
-    stage_id: Optional[UUID] = None,
-    partner_store_id: Optional[UUID] = None,
-    campaign: Optional[str] = None,
+    assigned_to: Optional[List[UUID]] = None,
+    bdc_agent_id: Optional[List[UUID]] = None,
+    source: Optional[List[str]] = None,
+    stage_id: Optional[List[UUID]] = None,
+    partner_store_id: Optional[List[UUID]] = None,
+    campaign: Optional[List[str]] = None,
     has_stip: Optional[str] = None,
     include_returning: bool = False,
     bdc_mode: str = "activity",
@@ -381,20 +397,26 @@ async def build_lead_cohort_analysis(
     lead_conds = []
     if dealership_id:
         lead_conds.append(Lead.dealership_id == dealership_id)
-    if assigned_to:
-        lead_conds.append(Lead.assigned_to == assigned_to)
-    if source:
+    assigned_ids = list(dict.fromkeys(aid for aid in (assigned_to or []) if aid))
+    if assigned_ids:
+        lead_conds.append(Lead.assigned_to.in_(assigned_ids))
+    source_values: List[LeadSource] = []
+    for raw_source in source or []:
         try:
-            lead_conds.append(Lead.source == LeadSource(source))
+            source_values.append(LeadSource(raw_source))
         except ValueError:
-            pass
-    if stage_id:
-        lead_conds.append(Lead.stage_id == stage_id)
-    if partner_store_id:
+            continue
+    if source_values:
+        lead_conds.append(Lead.source.in_(list(dict.fromkeys(source_values))))
+    stage_ids = list(dict.fromkeys(sid for sid in (stage_id or []) if sid))
+    if stage_ids:
+        lead_conds.append(Lead.stage_id.in_(stage_ids))
+    partner_store_ids = list(dict.fromkeys(pid for pid in (partner_store_id or []) if pid))
+    if partner_store_ids:
         lead_conds.append(
             or_(
-                Lead.partner_store_id == partner_store_id,
-                Lead.sold_partner_store_id == partner_store_id,
+                Lead.partner_store_id.in_(partner_store_ids),
+                Lead.sold_partner_store_id.in_(partner_store_ids),
             )
         )
 
@@ -459,15 +481,19 @@ async def build_lead_cohort_analysis(
         key=str.lower,
     )
 
-    # Filter by campaign if selected (active campaigns only)
+    # Filter by any of the selected campaigns (active campaigns only)
     leads = all_period_leads
-    if campaign:
-        target_c = campaign.strip().lower()
+    campaign_targets = {
+        name.strip().lower()
+        for name in (campaign or [])
+        if name and name.strip()
+    }
+    if campaign_targets:
         leads = [
             l
             for l in leads
             if l.campaign_mapping_id in active_mapping_ids
-            and lead_campaign_map[l.id].lower() == target_c
+            and lead_campaign_map[l.id].lower() in campaign_targets
         ]
 
     # Stip document detection for cohort leads
@@ -509,15 +535,17 @@ async def build_lead_cohort_analysis(
     elif has_stip == "no":
         leads = [l for l in leads if not _lead_has_stip(l)]
 
-    # If filtering by a specific BDC agent, include leads assigned to OR worked by that BDC agent
-    if bdc_agent_id and leads:
+    # If filtering by BDC agents, include leads assigned to OR worked by any selected agent
+    bdc_agent_ids = list(dict.fromkeys(aid for aid in (bdc_agent_id or []) if aid))
+    if bdc_agent_ids and leads:
         candidate_ids = [l.id for l in leads]
+        bdc_agent_id_set = set(bdc_agent_ids)
         acted_ids: Set[UUID] = set()
         act_res = await db.execute(
             select(Activity.lead_id)
             .where(
                 Activity.lead_id.in_(candidate_ids),
-                Activity.user_id == bdc_agent_id,
+                Activity.user_id.in_(bdc_agent_ids),
                 Activity.type.in_(WORK_ACTIVITY_TYPES),
             )
             .distinct()
@@ -525,19 +553,19 @@ async def build_lead_cohort_analysis(
         acted_ids.update(row[0] for row in act_res.all() if row[0])
         call_res = await db.execute(
             select(CallLog.lead_id)
-            .where(CallLog.lead_id.in_(candidate_ids), CallLog.user_id == bdc_agent_id)
+            .where(CallLog.lead_id.in_(candidate_ids), CallLog.user_id.in_(bdc_agent_ids))
             .distinct()
         )
         acted_ids.update(row[0] for row in call_res.all() if row[0])
         appt_res = await db.execute(
             select(Appointment.lead_id)
-            .where(Appointment.lead_id.in_(candidate_ids), Appointment.scheduled_by == bdc_agent_id)
+            .where(Appointment.lead_id.in_(candidate_ids), Appointment.scheduled_by.in_(bdc_agent_ids))
             .distinct()
         )
         acted_ids.update(row[0] for row in appt_res.all() if row[0])
         leads = [
             l for l in leads
-            if l.bdc_assigned_to_id == bdc_agent_id or l.id in acted_ids
+            if l.bdc_assigned_to_id in bdc_agent_id_set or l.id in acted_ids
         ]
 
     lead_ids = [l.id for l in leads]
@@ -641,6 +669,7 @@ async def build_lead_cohort_analysis(
     showed_up_count = 0
     no_show_lead_count = 0
     converted_count = 0
+    converted_lead_ids: Set[UUID] = set()
     lost_count = 0
     active_count = 0
 
@@ -724,6 +753,7 @@ async def build_lead_cohort_analysis(
                 cb["no_show"] += 1
         if is_conv:
             converted_count += 1
+            converted_lead_ids.add(l.id)
             if cb is not None:
                 cb["converted"] += 1
         if is_lst:
@@ -841,7 +871,10 @@ async def build_lead_cohort_analysis(
         )
     stages.sort(key=lambda r: (-r.count, r.display_name.lower()))
 
-    # 6. Appointments matrix (appointment-level counts for cohort leads)
+    # 6. Appointments matrix (appointment-level counts for cohort leads).
+    # A sale is a converted lead, not an appointment status. Appointments marked
+    # "sold" are completed visits, so they roll into Completed. The sold count
+    # shown beside this table is converted_count, the same number as the cohort card.
     appt_status_counts: Dict[str, int] = defaultdict(int)
     for a in cohort_appointments:
         appt_status_counts[_status_str(a.status)] += 1
@@ -852,15 +885,19 @@ async def build_lead_cohort_analysis(
     appt_showed = sum(appt_status_counts.get(s.value, 0) for s in APPT_SHOWED_STATUSES)
     appt_no_show = appt_status_counts.get("no_show", 0)
 
+    display_status_counts: Dict[str, int] = defaultdict(int)
+    for st_key, count in appt_status_counts.items():
+        display_status_counts["completed" if st_key == "sold" else st_key] += count
+
     by_status_rows = [
         AppointmentStatusMatrixRow(
             status=st_key,
             label=APPT_STATUS_LABELS.get(st_key, st_key.replace("_", " ").title()),
-            count=appt_status_counts[st_key],
-            pct_of_appointments=_pct(appt_status_counts[st_key], total_appts),
+            count=display_status_counts[st_key],
+            pct_of_appointments=_pct(display_status_counts[st_key], total_appts),
         )
         for st_key in APPT_STATUS_ORDER
-        if appt_status_counts.get(st_key, 0) > 0
+        if st_key != "sold" and display_status_counts.get(st_key, 0) > 0
     ]
 
     appointments_summary = AppointmentsSummary(
@@ -873,6 +910,7 @@ async def build_lead_cohort_analysis(
         cancelled=appt_cancelled,
         cancel_rate_pct=_pct(appt_cancelled, total_appts),
         rescheduled=appt_rescheduled,
+        sold_leads=converted_count,
         by_status=by_status_rows,
     )
 
@@ -914,7 +952,7 @@ async def build_lead_cohort_analysis(
     )
 
     # 8. BDC Agent Productivity Matrix
-    bdc_users = await _get_bdc_users(db, dealership_id, bdc_agent_id)
+    bdc_users = await _get_bdc_users(db, dealership_id, bdc_agent_ids)
     bdc_ids = [u.id for u in bdc_users]
     bdc_rows, bdc_totals = await _build_bdc_productivity(
         db,
@@ -926,7 +964,8 @@ async def build_lead_cohort_analysis(
         mode=mode,
         cohort_lead_ids=set(lead_ids),
         cohort_leads_by_id=lead_by_id,
-        partner_store_id=partner_store_id,
+        converted_lead_ids=converted_lead_ids,
+        partner_store_ids=partner_store_ids,
     )
 
     return LeadCohortAnalysisResponse(
@@ -958,7 +997,8 @@ async def _build_bdc_productivity(
     mode: str,
     cohort_lead_ids: Set[UUID],
     cohort_leads_by_id: Dict[UUID, Lead],
-    partner_store_id: Optional[UUID],
+    converted_lead_ids: Set[UUID],
+    partner_store_ids: Optional[List[UUID]] = None,
 ) -> tuple[List[BdcAgentProductivityRow], BdcAgentProductivityRow]:
     empty_total = BdcAgentProductivityRow(
         user_id="total",
@@ -996,6 +1036,8 @@ async def _build_bdc_productivity(
     touches_by_agent: Dict[UUID, int] = defaultdict(int)
     first_touch_by_agent_lead: Dict[tuple[UUID, UUID], datetime] = {}
     appts_by_agent: Dict[UUID, List[Appointment]] = defaultdict(list)
+
+    store_ids = list(dict.fromkeys(pid for pid in (partner_store_ids or []) if pid))
 
     # Queries depend on mode:
     # - "cohort": all calls/activities/appts by these BDC agents on cohort_lead_ids (regardless of when the touch happened)
@@ -1039,8 +1081,8 @@ async def _build_bdc_productivity(
         appt_conds = [Appointment.scheduled_by.in_(bdc_ids)]
         if dealership_id:
             appt_conds.append(or_(Appointment.dealership_id == dealership_id, Appointment.dealership_id.is_(None)))
-        if partner_store_id:
-            appt_conds.append(Appointment.partner_store_id == partner_store_id)
+        if store_ids:
+            appt_conds.append(Appointment.partner_store_id.in_(store_ids))
         if mode == "cohort":
             appt_conds.append(Appointment.lead_id.in_(cohort_lead_ids))
         else:
@@ -1102,18 +1144,40 @@ async def _build_bdc_productivity(
         for l in ml_res.scalars().all():
             worked_leads_map[l.id] = l
 
-    # If partner_store_id filter is active in activity mode, scope worked leads to that store
-    if partner_store_id and mode == "activity":
+    # If a partner-store filter is active in activity mode, scope worked leads to those stores
+    if store_ids and mode == "activity":
+        store_id_set = set(store_ids)
         for uid in list(leads_worked_by_agent.keys()):
             leads_worked_by_agent[uid] = {
                 lid
                 for lid in leads_worked_by_agent[uid]
                 if lid in worked_leads_map
                 and (
-                    worked_leads_map[lid].partner_store_id == partner_store_id
-                    or worked_leads_map[lid].sold_partner_store_id == partner_store_id
+                    worked_leads_map[lid].partner_store_id in store_id_set
+                    or worked_leads_map[lid].sold_partner_store_id in store_id_set
                 )
             }
+
+    # Sold is the cohort's converted leads, credited to each BDC agent who worked
+    # that lead. This is the same set as Converted / Sold on the cohort card, so
+    # an older sale the agent merely touched this period is not counted again.
+    sold_by_agent: Dict[UUID, Set[UUID]] = defaultdict(set)
+    if converted_lead_ids and bdc_ids:
+        sold_ids = list(converted_lead_ids)
+        for user_col, lead_col in (
+            (CallLog.user_id, CallLog.lead_id),
+            (Activity.user_id, Activity.lead_id),
+            (Appointment.scheduled_by, Appointment.lead_id),
+        ):
+            touch_res = await db.execute(
+                select(user_col, lead_col).where(
+                    lead_col.in_(sold_ids),
+                    user_col.in_(bdc_ids),
+                )
+            )
+            for uid, lid in touch_res.all():
+                if uid and lid:
+                    sold_by_agent[uid].add(lid)
 
     # Build rows per agent
     rows: List[BdcAgentProductivityRow] = []
@@ -1147,7 +1211,9 @@ async def _build_bdc_productivity(
         # Speed to lead for this agent's worked leads
         agent_speeds: List[float] = []
         stips_n = 0
-        sold_n = 0
+        agent_sold = sold_by_agent.get(uid, set())
+        sold_n = len(agent_sold)
+        team_sold_leads.update(agent_sold)
         for lid in worked_set:
             lead = worked_leads_map.get(lid)
             if not lead:
@@ -1155,9 +1221,6 @@ async def _build_bdc_productivity(
             if lead.has_ssn_stip or lead.has_dl_stip:
                 stips_n += 1
                 team_stips_leads.add(lid)
-            if (lead.outcome or "").lower() == "converted":
-                sold_n += 1
-                team_sold_leads.add(lid)
             ft = first_touch_by_agent_lead.get((uid, lid))
             if ft and lead.created_at and ft >= lead.created_at:
                 diff_min = (ft - lead.created_at).total_seconds() / 60.0
