@@ -12,6 +12,8 @@ import {
     format,
 } from "date-fns"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { LeadsAnalysisTab } from "@/components/analytics/leads-analysis-tab"
 import {
     Table,
     TableBody,
@@ -401,6 +403,7 @@ export default function AnalyticsPage() {
     const orgDealershipId = useOrgDealershipId()
     const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin || isBdc
 
+    const [activeTab, setActiveTab] = React.useState<"overview" | "leads">("overview")
     const [analysis, setAnalysis] = React.useState<DealershipAnalysisResponse | null>(null)
     const [leadsOverTime, setLeadsOverTime] = React.useState<LeadsOverTimeResponse | null>(null)
     const [leadsByStage, setLeadsByStage] = React.useState<LeadsByStageResponse | null>(null)
@@ -537,13 +540,37 @@ export default function AnalyticsPage() {
 
     return (
         <div className="space-y-6">
-            <div>
-                <h1 className="text-3xl font-bold tracking-tight">Analytics</h1>
-                <p className="text-muted-foreground">
-                    Dealership-wide summary, charts, and per-salesperson analysis. Date range filters leads received, appointments set, check-ins, notes, and other activity in the selected period.
-                </p>
+            <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                    <h1 className="text-3xl font-bold tracking-tight">Analytics</h1>
+                    <p className="text-muted-foreground">
+                        Dealership-wide summary, lead cohort analysis, and BDC/salesperson productivity.
+                    </p>
+                </div>
             </div>
 
+            <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "overview" | "leads")} className="space-y-6">
+                <TabsList>
+                    <TabsTrigger value="overview">Overview</TabsTrigger>
+                    <TabsTrigger value="leads">Leads</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="leads" className="mt-0">
+                    <LeadsAnalysisTab
+                        dealershipId={dealershipId}
+                        orgDealershipId={orgDealershipId}
+                        isSuperAdmin={isSuperAdmin}
+                        isBdc={isBdc}
+                        dealerships={dealerships}
+                        salespersons={salespersons}
+                        bdcAgents={bdcAgents}
+                        partnerStores={partnerStores}
+                        stages={stages}
+                        onDealershipChange={setDealershipId}
+                    />
+                </TabsContent>
+
+                <TabsContent value="overview" className="mt-0 space-y-6">
             {/* Filters */}
             <Card>
                 <CardHeader className="pb-2">
@@ -1103,6 +1130,8 @@ export default function AnalyticsPage() {
                     </div>
                 </>
             )}
+                </TabsContent>
+            </Tabs>
         </div>
     )
 }

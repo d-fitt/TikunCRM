@@ -2541,3 +2541,59 @@ async def get_sold_cars_report(
         total_sold=len(items),
         items=items,
     )
+
+
+@router.get("/analytics/leads-cohort")
+async def get_leads_cohort_analysis(
+    date_from: Optional[str] = Query(None, description="ISO start datetime"),
+    date_to: Optional[str] = Query(None, description="ISO end datetime"),
+    dealership_id: Optional[UUID] = Query(None, description="Dealership scope"),
+    assigned_to: Optional[UUID] = Query(None, description="Filter by salesperson"),
+    bdc_agent_id: Optional[UUID] = Query(None, description="Filter by BDC agent"),
+    source: Optional[str] = Query(None, description="Filter by lead source"),
+    stage_id: Optional[UUID] = Query(None, description="Filter by pipeline stage"),
+    partner_store_id: Optional[UUID] = Query(None, description="Filter by partner store"),
+    campaign: Optional[str] = Query(None, description="Filter by campaign display name"),
+    has_stip: Optional[str] = Query(None, description="Filter by stip presence: yes | no"),
+    include_returning: bool = Query(False, description="Include returning leads (last_inbound_at in period)"),
+    bdc_mode: str = Query("activity", description="BDC productivity mode: activity | cohort"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_owner),
+) -> Any:
+    """
+    Comprehensive Leads Cohort & BDC Productivity Analysis for the selected period.
+    """
+    from app.services.lead_cohort_analytics_service import build_lead_cohort_analysis
+
+    resolved_dealership_id = await _http_resolve_dealership(
+        db, current_user, dealership_id, required=False
+    )
+
+    dt_from: Optional[datetime] = None
+    dt_to: Optional[datetime] = None
+    if date_from:
+        try:
+            dt_from = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            dt_to = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+
+    return await build_lead_cohort_analysis(
+        db,
+        dealership_id=resolved_dealership_id,
+        date_from=dt_from,
+        date_to=dt_to,
+        assigned_to=assigned_to,
+        bdc_agent_id=bdc_agent_id,
+        source=source,
+        stage_id=stage_id,
+        partner_store_id=partner_store_id,
+        campaign=campaign,
+        has_stip=has_stip,
+        include_returning=include_returning,
+        bdc_mode=bdc_mode,
+    )
