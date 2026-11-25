@@ -311,6 +311,7 @@ export interface BdcAgentProductivityRow {
     user_id: string;
     user_name: string;
     email?: string | null;
+    role?: string | null;
     leads_worked: number;
     calls_made: number;
     connected_calls: number;

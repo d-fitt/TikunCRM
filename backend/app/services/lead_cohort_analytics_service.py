@@ -132,6 +132,12 @@ def _status_str(val: Any) -> str:
     return val.value if hasattr(val, "value") else str(val)
 
 
+def _normalize_status_key(val: Any) -> str:
+    if not val:
+        return ""
+    return str(val).strip().lower().replace(" ", "_").replace("'", "")
+
+
 class CohortDrillLead(BaseModel):
     id: str
     name: str
@@ -285,6 +291,7 @@ class BdcAgentProductivityRow(BaseModel):
     user_id: str
     user_name: str
     email: Optional[str] = None
+    role: Optional[str] = None
     leads_worked: int
     calls_made: int
     connected_calls: int
@@ -348,17 +355,34 @@ def _resolve_campaign_name(
     return SOURCE_LABELS.get(src, src.replace("_", " ").title() if src else "Unattributed")
 
 
+PRODUCTIVITY_ROLES = (
+    UserRole.BDC,
+    UserRole.SALESPERSON,
+    UserRole.DEALERSHIP_ADMIN,
+    UserRole.DEALERSHIP_OWNER,
+    UserRole.SUPER_ADMIN,
+)
+
+ROLE_LABELS: Dict[UserRole, str] = {
+    UserRole.BDC: "BDC",
+    UserRole.SALESPERSON: "Salesperson",
+    UserRole.DEALERSHIP_ADMIN: "Manager",
+    UserRole.DEALERSHIP_OWNER: "Owner",
+    UserRole.SUPER_ADMIN: "Super Admin",
+}
+
+
 async def _get_bdc_users(
     db: AsyncSession,
     dealership_id: Optional[UUID],
-    bdc_agent_ids: Optional[List[UUID]] = None,
+    selected_user_ids: Optional[List[UUID]] = None,
 ) -> List[User]:
     users_by_id: Dict[UUID, User] = {}
 
     if dealership_id:
         direct_res = await db.execute(
             select(User).where(
-                User.role == UserRole.BDC,
+                User.role.in_(PRODUCTIVITY_ROLES),
                 User.is_active == True,
                 User.dealership_id == dealership_id,
             )
@@ -371,7 +395,7 @@ async def _get_bdc_users(
             .join(UserDealershipAccess, UserDealershipAccess.user_id == User.id)
             .where(
                 UserDealershipAccess.dealership_id == dealership_id,
-                User.role == UserRole.BDC,
+                User.role.in_(PRODUCTIVITY_ROLES),
                 User.is_active == True,
             )
         )
@@ -379,12 +403,12 @@ async def _get_bdc_users(
             users_by_id[u.id] = u
     else:
         all_res = await db.execute(
-            select(User).where(User.role == UserRole.BDC, User.is_active == True)
+            select(User).where(User.role.in_(PRODUCTIVITY_ROLES), User.is_active == True)
         )
         for u in all_res.scalars().all():
             users_by_id[u.id] = u
 
-    selected_ids = list(dict.fromkeys(aid for aid in (bdc_agent_ids or []) if aid))
+    selected_ids = list(dict.fromkeys(aid for aid in (selected_user_ids or []) if aid))
     if selected_ids:
         selected: List[User] = []
         missing: List[UUID] = []
@@ -598,6 +622,10 @@ async def build_lead_cohort_analysis(
             and lead_campaign_map[l.id].lower() in campaign_targets
         ]
 
+    bdc_agent_ids = list(dict.fromkeys(aid for aid in (bdc_agent_id or []) if aid))
+    actor_filter_ids = list(dict.fromkeys([*assigned_ids, *bdc_agent_ids]))
+    actor_filter_set = set(actor_filter_ids)
+
     # Stip document detection for cohort leads
     lead_ids_pre = [l.id for l in leads]
     customer_ids_pre = {
@@ -609,16 +637,22 @@ async def build_lead_cohort_analysis(
     leads_with_stip_doc: Set[UUID] = set()
     customers_with_stip_doc: Set[UUID] = set()
     if lead_ids_pre:
+        lsd_conds = [LeadStipDocument.lead_id.in_(lead_ids_pre)]
+        if actor_filter_ids:
+            lsd_conds.append(LeadStipDocument.uploaded_by.in_(actor_filter_ids))
         lsd_res = await db.execute(
             select(LeadStipDocument.lead_id)
-            .where(LeadStipDocument.lead_id.in_(lead_ids_pre))
+            .where(and_(*lsd_conds))
             .distinct()
         )
         leads_with_stip_doc = {row[0] for row in lsd_res.all()}
     if customer_ids_pre:
+        csd_conds = [CustomerStipDocument.customer_id.in_(customer_ids_pre)]
+        if actor_filter_ids:
+            csd_conds.append(CustomerStipDocument.uploaded_by.in_(actor_filter_ids))
         csd_res = await db.execute(
             select(CustomerStipDocument.customer_id)
-            .where(CustomerStipDocument.customer_id.in_(customer_ids_pre))
+            .where(and_(*csd_conds))
             .distinct()
         )
         customers_with_stip_doc = {row[0] for row in csd_res.all()}
@@ -645,6 +679,7 @@ async def build_lead_cohort_analysis(
             .where(
                 Activity.lead_id.in_(candidate_ids),
                 Activity.user_id.in_(assigned_ids),
+                Activity.type.in_(WORK_ACTIVITY_TYPES),
             )
             .distinct()
         )
@@ -681,7 +716,6 @@ async def build_lead_cohort_analysis(
         ]
 
     # If filtering by BDC agents, include leads assigned to OR worked by any selected agent
-    bdc_agent_ids = list(dict.fromkeys(aid for aid in (bdc_agent_id or []) if aid))
     if bdc_agent_ids and leads:
         candidate_ids = [l.id for l in leads]
         bdc_agent_id_set = set(bdc_agent_ids)
@@ -733,19 +767,31 @@ async def build_lead_cohort_analysis(
     worked_lead_ids: Set[UUID] = set()
     first_touch_at_by_lead: Dict[UUID, datetime] = {}
 
+    last_converted_actor_by_lead: Dict[UUID, Optional[UUID]] = {}
+    last_lost_actor_by_lead: Dict[UUID, Optional[UUID]] = {}
+    interested_by_actor_leads: Set[UUID] = set()
+    partner_sent_by_actor_leads: Set[UUID] = set()
+
     if lead_ids:
+        appt_conds = [Appointment.lead_id.in_(lead_ids)]
+        # When filtered to specific Salesperson/Manager or BDC user(s), count only appointments they themselves scheduled
+        if actor_filter_ids:
+            appt_conds.append(Appointment.scheduled_by.in_(actor_filter_ids))
         appt_res = await db.execute(
-            select(Appointment).where(Appointment.lead_id.in_(lead_ids))
+            select(Appointment).where(and_(*appt_conds))
         )
         cohort_appointments = list(appt_res.scalars().all())
 
-        # Any work activity or call counts a lead as "worked"
+        # Any work activity or call counts a lead as "worked" (scoped to selected user(s) when filtered)
+        act_min_conds = [
+            Activity.lead_id.in_(lead_ids),
+            Activity.type.in_(WORK_ACTIVITY_TYPES),
+        ]
+        if actor_filter_ids:
+            act_min_conds.append(Activity.user_id.in_(actor_filter_ids))
         act_min_res = await db.execute(
             select(Activity.lead_id, func.min(Activity.created_at))
-            .where(
-                Activity.lead_id.in_(lead_ids),
-                Activity.type.in_(WORK_ACTIVITY_TYPES),
-            )
+            .where(and_(*act_min_conds))
             .group_by(Activity.lead_id)
         )
         for lid, ts in act_min_res.all():
@@ -754,9 +800,12 @@ async def build_lead_cohort_analysis(
                 if ts:
                     first_touch_at_by_lead[lid] = ts
 
+        call_min_conds = [CallLog.lead_id.in_(lead_ids)]
+        if actor_filter_ids:
+            call_min_conds.append(CallLog.user_id.in_(actor_filter_ids))
         call_min_res = await db.execute(
             select(CallLog.lead_id, func.min(CallLog.started_at))
-            .where(CallLog.lead_id.in_(lead_ids))
+            .where(and_(*call_min_conds))
             .group_by(CallLog.lead_id)
         )
         for lid, ts in call_min_res.all():
@@ -765,11 +814,45 @@ async def build_lead_cohort_analysis(
                 if ts and (lid not in first_touch_at_by_lead or ts < first_touch_at_by_lead[lid]):
                     first_touch_at_by_lead[lid] = ts
 
-    for l in leads:
-        if l.first_contacted_at:
-            worked_lead_ids.add(l.id)
-            if l.id not in first_touch_at_by_lead or l.first_contacted_at < first_touch_at_by_lead[l.id]:
-                first_touch_at_by_lead[l.id] = l.first_contacted_at
+        # Load status-change & partner-store update activities for strict per-user attribution
+        if actor_filter_ids:
+            attr_res = await db.execute(
+                select(Activity.lead_id, Activity.user_id, Activity.type, Activity.description, Activity.meta_data)
+                .where(
+                    Activity.lead_id.in_(lead_ids),
+                    Activity.type.in_((ActivityType.STATUS_CHANGED, ActivityType.LEAD_UPDATED)),
+                )
+                .order_by(Activity.created_at.asc())
+            )
+            for lid, uid, atype, desc, meta in attr_res.all():
+                if not lid:
+                    continue
+                m = meta if isinstance(meta, dict) else {}
+                if atype == ActivityType.STATUS_CHANGED:
+                    new_st = _normalize_status_key(m.get("new_status"))
+                    outcome_val = _normalize_status_key(m.get("outcome"))
+                    if new_st == "converted" or outcome_val == "sold":
+                        last_converted_actor_by_lead[lid] = uid
+                    if new_st in LOST_STAGE_NAMES:
+                        last_lost_actor_by_lead[lid] = uid
+                    if uid in actor_filter_set and (new_st in INTERESTED_STAGE_NAMES or outcome_val == "sold"):
+                        interested_by_actor_leads.add(lid)
+                elif atype == ActivityType.LEAD_UPDATED:
+                    if uid in actor_filter_set:
+                        has_partner_meta = bool(
+                            m.get("partner_store_id")
+                            or m.get("sent_to_partner_store_id")
+                            or m.get("sold_to_partner_store_id")
+                        )
+                        if has_partner_meta or (desc and "partner" in desc.lower()):
+                            partner_sent_by_actor_leads.add(lid)
+
+    if not actor_filter_ids:
+        for l in leads:
+            if l.first_contacted_at:
+                worked_lead_ids.add(l.id)
+                if l.id not in first_touch_at_by_lead or l.first_contacted_at < first_touch_at_by_lead[l.id]:
+                    first_touch_at_by_lead[l.id] = l.first_contacted_at
 
     # Group cohort appointments by lead_id
     appts_by_lead: Dict[UUID, List[Appointment]] = defaultdict(list)
@@ -777,23 +860,42 @@ async def build_lead_cohort_analysis(
         if a.lead_id:
             appts_by_lead[a.lead_id].append(a)
             worked_lead_ids.add(a.lead_id)
+            if actor_filter_set and a.partner_store_id:
+                partner_sent_by_actor_leads.add(a.lead_id)
 
-    # Helper classifiers per lead
+    # Helper classifiers per lead (when filtered to specific user(s), attribute strictly to who performed the change)
     def _is_converted(l: Lead) -> bool:
         st = stages_by_id.get(l.stage_id)
-        return (l.outcome or "").lower() == "converted" or (st is not None and st.name.lower() == "converted")
+        is_conv_state = (l.outcome or "").lower() == "converted" or (st is not None and st.name.lower() == "converted")
+        if not is_conv_state:
+            return False
+        if not actor_filter_set:
+            return True
+        if l.id in last_converted_actor_by_lead:
+            return last_converted_actor_by_lead[l.id] in actor_filter_set
+        return l.assigned_to in actor_filter_set
 
     def _is_lost(l: Lead) -> bool:
         st = stages_by_id.get(l.stage_id)
-        return (l.outcome or "").lower() == "lost" or (st is not None and st.name.lower() in LOST_STAGE_NAMES)
+        is_lost_state = (l.outcome or "").lower() == "lost" or (st is not None and st.name.lower() in LOST_STAGE_NAMES)
+        if not is_lost_state:
+            return False
+        if not actor_filter_set:
+            return True
+        if l.id in last_lost_actor_by_lead:
+            return last_lost_actor_by_lead[l.id] in actor_filter_set
+        return l.assigned_to in actor_filter_set
 
     def _is_interested(l: Lead) -> bool:
         if _is_converted(l):
             return True
         st = stages_by_id.get(l.stage_id)
-        if st and st.name.lower() in INTERESTED_STAGE_NAMES:
+        is_int_state = st is not None and st.name.lower() in INTERESTED_STAGE_NAMES
+        if not is_int_state:
+            return False
+        if not actor_filter_set:
             return True
-        return False
+        return l.id in interested_by_actor_leads
 
     def _has_appt_set(lid: UUID) -> bool:
         return any(a.status in APPT_SET_STATUSES for a in appts_by_lead.get(lid, []))
@@ -853,7 +955,7 @@ async def build_lead_cohort_analysis(
                 if a.partner_store_id:
                     eff_store_id = a.partner_store_id
                     break
-        is_sent = eff_store_id is not None
+        is_sent = (eff_store_id is not None) and (not actor_filter_set or l.id in partner_sent_by_actor_leads)
 
         is_active_open = bool(l.is_active and not is_conv and not is_lst)
         if drill_metric:
@@ -1121,8 +1223,9 @@ async def build_lead_cohort_analysis(
         key=lambda r: (r.partner_store_id is None, -r.leads_sent, r.partner_store_name.lower())
     )
 
-    # 8. BDC Agent Productivity Matrix
-    bdc_users = await _get_bdc_users(db, dealership_id, bdc_agent_ids)
+    # 8. Team & BDC Productivity Matrix (includes BDC, Salesperson, Manager, Owner, Admin)
+    productivity_filter_ids = list(dict.fromkeys([*bdc_agent_ids, *assigned_ids]))
+    bdc_users = await _get_bdc_users(db, dealership_id, productivity_filter_ids)
     bdc_ids = [u.id for u in bdc_users]
     bdc_rows, bdc_totals = await _build_bdc_productivity(
         db,
@@ -1172,8 +1275,9 @@ async def _build_bdc_productivity(
 ) -> tuple[List[BdcAgentProductivityRow], BdcAgentProductivityRow]:
     empty_total = BdcAgentProductivityRow(
         user_id="total",
-        user_name="BDC Team Total",
+        user_name="Team Total",
         email=None,
+        role=None,
         leads_worked=0,
         calls_made=0,
         connected_calls=0,
@@ -1328,7 +1432,7 @@ async def _build_bdc_productivity(
                 )
             }
 
-    # Actual stip documents uploaded for any worked lead (ignore eligibility checkboxes)
+    # Actual stip documents uploaded BY EACH USER for any worked lead (no cross-user credit)
     worked_lead_ids_list = list(worked_leads_map.keys())
     worked_customer_ids = {
         cid
@@ -1336,50 +1440,72 @@ async def _build_bdc_productivity(
         for cid in (lead.customer_id, lead.secondary_customer_id)
         if cid is not None
     }
-    worked_leads_with_stip_doc: Set[UUID] = set()
-    worked_customers_with_stip_doc: Set[UUID] = set()
-    if worked_lead_ids_list:
+    worked_leads_stip_by_user: Dict[UUID, Set[UUID]] = defaultdict(set)
+    worked_customers_stip_by_user: Dict[UUID, Set[UUID]] = defaultdict(set)
+    if worked_lead_ids_list and bdc_ids:
         wlsd_res = await db.execute(
-            select(LeadStipDocument.lead_id)
-            .where(LeadStipDocument.lead_id.in_(worked_lead_ids_list))
+            select(LeadStipDocument.uploaded_by, LeadStipDocument.lead_id)
+            .where(
+                LeadStipDocument.lead_id.in_(worked_lead_ids_list),
+                LeadStipDocument.uploaded_by.in_(bdc_ids),
+            )
             .distinct()
         )
-        worked_leads_with_stip_doc = {row[0] for row in wlsd_res.all()}
-    if worked_customer_ids:
+        for uid, lid in wlsd_res.all():
+            if uid and lid:
+                worked_leads_stip_by_user[uid].add(lid)
+    if worked_customer_ids and bdc_ids:
         wcsd_res = await db.execute(
-            select(CustomerStipDocument.customer_id)
-            .where(CustomerStipDocument.customer_id.in_(worked_customer_ids))
+            select(CustomerStipDocument.uploaded_by, CustomerStipDocument.customer_id)
+            .where(
+                CustomerStipDocument.customer_id.in_(worked_customer_ids),
+                CustomerStipDocument.uploaded_by.in_(bdc_ids),
+            )
             .distinct()
         )
-        worked_customers_with_stip_doc = {row[0] for row in wcsd_res.all()}
+        for uid, cid in wcsd_res.all():
+            if uid and cid:
+                worked_customers_stip_by_user[uid].add(cid)
 
-    def _worked_lead_has_stip_doc(lead: Lead) -> bool:
+    def _worked_lead_has_stip_doc(uid: UUID, lead: Lead) -> bool:
+        user_lead_stips = worked_leads_stip_by_user.get(uid, set())
+        user_cust_stips = worked_customers_stip_by_user.get(uid, set())
         return bool(
-            lead.id in worked_leads_with_stip_doc
-            or lead.customer_id in worked_customers_with_stip_doc
-            or (lead.secondary_customer_id and lead.secondary_customer_id in worked_customers_with_stip_doc)
+            lead.id in user_lead_stips
+            or lead.customer_id in user_cust_stips
+            or (lead.secondary_customer_id and lead.secondary_customer_id in user_cust_stips)
         )
 
-    # Sold is the cohort's converted leads, credited to each BDC agent who worked
-    # that lead. This is the same set as Converted / Sold on the cohort card, so
-    # an older sale the agent merely touched this period is not counted again.
+    # Sold is strictly credited to the user who marked the lead Converted/Sold
+    # (via STATUS_CHANGED to converted / outcome=sold, falling back to lead.assigned_to if no log exists).
     sold_by_agent: Dict[UUID, Set[UUID]] = defaultdict(set)
     if converted_lead_ids and bdc_ids:
         sold_ids = list(converted_lead_ids)
-        for user_col, lead_col in (
-            (CallLog.user_id, CallLog.lead_id),
-            (Activity.user_id, Activity.lead_id),
-            (Appointment.scheduled_by, Appointment.lead_id),
-        ):
-            touch_res = await db.execute(
-                select(user_col, lead_col).where(
-                    lead_col.in_(sold_ids),
-                    user_col.in_(bdc_ids),
-                )
+        bdc_id_set = set(bdc_ids)
+        conv_act_res = await db.execute(
+            select(Activity.lead_id, Activity.user_id, Activity.meta_data)
+            .where(
+                Activity.lead_id.in_(sold_ids),
+                Activity.type == ActivityType.STATUS_CHANGED,
             )
-            for uid, lid in touch_res.all():
-                if uid and lid:
-                    sold_by_agent[uid].add(lid)
+            .order_by(Activity.created_at.asc())
+        )
+        last_conv_actor: Dict[UUID, Optional[UUID]] = {}
+        for lid, uid, meta in conv_act_res.all():
+            if not lid:
+                continue
+            m = meta if isinstance(meta, dict) else {}
+            if _normalize_status_key(m.get("new_status")) == "converted" or _normalize_status_key(m.get("outcome")) == "sold":
+                last_conv_actor[lid] = uid
+        for lid in sold_ids:
+            if lid in last_conv_actor:
+                closer = last_conv_actor[lid]
+                if closer and closer in bdc_id_set:
+                    sold_by_agent[closer].add(lid)
+            else:
+                lead_obj = cohort_leads_by_id.get(lid)
+                if lead_obj and lead_obj.assigned_to and lead_obj.assigned_to in bdc_id_set:
+                    sold_by_agent[lead_obj.assigned_to].add(lid)
 
     # Build rows per agent
     rows: List[BdcAgentProductivityRow] = []
@@ -1420,7 +1546,7 @@ async def _build_bdc_productivity(
             lead = worked_leads_map.get(lid)
             if not lead:
                 continue
-            if _worked_lead_has_stip_doc(lead):
+            if _worked_lead_has_stip_doc(uid, lead):
                 stips_n += 1
                 team_stips_leads.add(lid)
             ft = first_touch_by_agent_lead.get((uid, lid))
@@ -1439,12 +1565,13 @@ async def _build_bdc_productivity(
         appts_denom = max(0, appts_sched - appts_canc - appts_resch)
         appt_distinct_leads = len({a.lead_id for a in agent_appts if a.lead_id and a.status in APPT_SET_STATUSES})
 
-        full_name = f"{u.first_name or ''} {u.last_name or ''}".strip() or (u.email or "BDC Agent")
+        full_name = f"{u.first_name or ''} {u.last_name or ''}".strip() or (u.email or "Team Member")
         rows.append(
             BdcAgentProductivityRow(
                 user_id=str(uid),
                 user_name=full_name,
                 email=u.email,
+                role=ROLE_LABELS.get(u.role, u.role.value.replace("_", " ").title() if u.role else None),
                 leads_worked=worked_n,
                 calls_made=calls_n,
                 connected_calls=conn_n,
@@ -1485,8 +1612,9 @@ async def _build_bdc_productivity(
     team_appts_denom = max(0, team_appts_scheduled - team_appts_cancelled - team_appts_rescheduled)
     totals = BdcAgentProductivityRow(
         user_id="total",
-        user_name="BDC Team Total",
+        user_name="Team Total",
         email=None,
+        role=None,
         leads_worked=team_worked_n,
         calls_made=team_calls,
         connected_calls=team_connected,

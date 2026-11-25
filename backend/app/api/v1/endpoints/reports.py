@@ -1025,6 +1025,7 @@ async def get_dealership_analysis(
     # in the period was marked sold. The store table is that same set, grouped
     # by the store the lead was sold to.
     sold_leads_subq = None
+    overview_actor_ids = [uid for uid in (assigned_to, bdc_agent_id) if uid is not None]
     if no_matching_leads:
         converted_leads = 0
     else:
@@ -1034,12 +1035,38 @@ async def get_dealership_analysis(
             _append_sold_date_filters_to_lead_query(
                 converted_lead_filters, activity_date_from, activity_date_to
             )
+        if overview_actor_ids:
+            # Strict attribution: only credit leads where this user marked Converted/Sold
+            # (or is assigned_to when no STATUS_CHANGED to converted exists)
+            conv_by_actor_subq = select(Activity.lead_id).where(
+                Activity.type == ActivityType.STATUS_CHANGED,
+                Activity.user_id.in_(overview_actor_ids),
+                or_(
+                    func.lower(Activity.meta_data["new_status"].astext) == "converted",
+                    func.lower(Activity.meta_data["outcome"].astext) == "sold",
+                ),
+            )
+            any_conv_act_subq = select(Activity.lead_id).where(
+                Activity.type == ActivityType.STATUS_CHANGED,
+                or_(
+                    func.lower(Activity.meta_data["new_status"].astext) == "converted",
+                    func.lower(Activity.meta_data["outcome"].astext) == "sold",
+                ),
+            )
+            converted_lead_filters.append(
+                or_(
+                    Lead.id.in_(conv_by_actor_subq),
+                    and_(~Lead.id.in_(any_conv_act_subq), Lead.assigned_to.in_(overview_actor_ids)),
+                )
+            )
         converted_from_leads_q = select(Lead.id.label("lead_id")).where(and_(*converted_lead_filters))
 
         sold_visit_filters = [
             ShowroomVisit.dealership_id == resolved_dealership_id,
             ShowroomVisit.outcome == ShowroomOutcome.SOLD,
         ]
+        if overview_actor_ids:
+            sold_visit_filters.append(ShowroomVisit.checked_out_by.in_(overview_actor_ids))
         if lead_ids:
             sold_visit_filters.append(ShowroomVisit.lead_id.in_(lead_ids))
         if activity_date_from is not None:
@@ -1053,8 +1080,8 @@ async def get_dealership_analysis(
         converted_leads = converted_result.scalar() or 0
 
     activity_filters = [Activity.dealership_id == resolved_dealership_id]
-    if assigned_to is not None:
-        activity_filters.append(Activity.user_id == assigned_to)
+    if overview_actor_ids:
+        activity_filters.append(Activity.user_id.in_(overview_actor_ids))
     if lead_ids:
         activity_filters.append(Activity.lead_id.in_(lead_ids))
     if activity_date_from is not None:
@@ -1073,8 +1100,8 @@ async def get_dealership_analysis(
         total_notes = total_notes_result.scalar() or 0
 
     appt_filters = [Appointment.dealership_id == resolved_dealership_id]
-    if assigned_to is not None:
-        appt_filters.append(or_(Appointment.scheduled_by == assigned_to, Appointment.assigned_to == assigned_to))
+    if overview_actor_ids:
+        appt_filters.append(Appointment.scheduled_by.in_(overview_actor_ids))
     appt_lead_scope = _matching_lead_scope(Appointment.lead_id)
     if appt_lead_scope is not None:
         appt_filters.append(appt_lead_scope)

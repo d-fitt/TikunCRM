@@ -672,7 +672,7 @@ function downloadCohortPdf(data: LeadCohortAnalysisResponse, periodLabel: string
     // BDC table
     doc.setFontSize(11)
     doc.setFont("helvetica", "bold")
-    doc.text(`BDC Agent Productivity (${data.bdc_mode === "cohort" ? "Cohort Leads Only" : "Work Done in Period"})`, margin, y)
+    doc.text(`Team & BDC Productivity (${data.bdc_mode === "cohort" ? "Cohort Leads Only" : "Work Done in Period"})`, margin, y)
     y += 8
     autoTable(doc, {
         startY: y,
@@ -1325,19 +1325,19 @@ export function LeadsAnalysisTab({
                         </Card>
                     </div>
 
-                    {/* Section 2: BDC Agent Productivity Matrix */}
+                    {/* Section 2: Team & BDC Productivity Matrix */}
                     <Card>
                         <CardHeader className="pb-3">
                             <div className="flex flex-wrap items-start justify-between gap-3">
                                 <div>
                                     <CardTitle className="text-base flex items-center gap-2">
                                         <Users className="h-4 w-4" />
-                                        BDC Agent Productivity
+                                        Team &amp; BDC Productivity
                                     </CardTitle>
                                     <CardDescription>
                                         {bdcMode === "activity"
-                                            ? "Calls, notes, and appointments each agent logged during this period. Sold is the cohort leads marked converted, same as Converted / Sold above."
-                                            : "Each agent's work on leads that arrived during this period. Sold is those cohort leads marked converted."}
+                                            ? "Calls, notes, and appointments each team member (BDC, managers, admins, salespersons) logged during this period. Sold is the cohort leads marked converted."
+                                            : "Each team member's work on leads that arrived during this period. Sold is those cohort leads marked converted."}
                                     </CardDescription>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-2">
@@ -1385,7 +1385,7 @@ export function LeadsAnalysisTab({
                                 <Table>
                                     <TableHeader>
                                         <TableRow className="bg-muted/50">
-                                            <TableHead>BDC Agent</TableHead>
+                                            <TableHead>Team Member</TableHead>
                                             <TableHead className="text-right">Leads Worked</TableHead>
                                             <TableHead className="text-right">Calls Made</TableHead>
                                             <TableHead className="text-right">Connected</TableHead>
@@ -1402,7 +1402,7 @@ export function LeadsAnalysisTab({
                                     </TableHeader>
                                     <TableBody>
                                         {visibleBdcAgents.length === 0 ? (
-                                            <TableEmpty title="No BDC agents found" description="No BDC agents match the current filter." />
+                                            <TableEmpty title="No team members found" description="No team members match the current filter." />
                                         ) : (
                                             <>
                                                 {visibleBdcAgents.map((row) => (
@@ -1410,12 +1410,25 @@ export function LeadsAnalysisTab({
                                                         key={row.user_id}
                                                         className={cn(
                                                             "cursor-pointer hover:bg-muted/40",
-                                                            bdcAgentIds.includes(row.user_id) && "bg-primary/5"
+                                                            (bdcAgentIds.includes(row.user_id) || assignedToIds.includes(row.user_id)) && "bg-primary/5"
                                                         )}
-                                                        onClick={() => setBdcAgentIds((prev) => toggleValue(prev, row.user_id))}
+                                                        onClick={() => {
+                                                            if (row.role === "BDC") {
+                                                                setBdcAgentIds((prev) => toggleValue(prev, row.user_id))
+                                                            } else {
+                                                                setAssignedToIds((prev) => toggleValue(prev, row.user_id))
+                                                            }
+                                                        }}
                                                     >
                                                         <TableCell className="font-medium whitespace-nowrap">
-                                                            <div>{row.user_name}</div>
+                                                            <div className="flex items-center gap-1.5">
+                                                                <span>{row.user_name}</span>
+                                                                {row.role && (
+                                                                    <Badge variant="outline" className="text-[10px] font-normal px-1.5 py-0 h-4">
+                                                                        {row.role}
+                                                                    </Badge>
+                                                                )}
+                                                            </div>
                                                             {row.email && (
                                                                 <div className="text-[11px] text-muted-foreground">{row.email}</div>
                                                             )}
