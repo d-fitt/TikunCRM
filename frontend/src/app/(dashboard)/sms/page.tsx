@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Loader2, MessageSquare, RefreshCw, Search, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,9 @@ export default function SMSPage() {
   const [leadSearchLoading, setLeadSearchLoading] = useState(false);
   const [pickedLead, setPickedLead] = useState<SMSLeadSearchItem | null>(null);
   const [tab, setTab] = useState(searchParams.get("tab") === "campaigns" ? "campaigns" : "conversations");
+  // Typing state per lead: leadId -> { userId: userName }
+  const [typingMap, setTypingMap] = useState<Record<string, Record<string, string>>>({});
+  const typingTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
     const lead = searchParams.get("lead");
@@ -82,6 +85,77 @@ export default function SMSPage() {
     useCallback(() => void loadConversations({ silent: true }), [loadConversations]),
     [loadConversations]
   );
+
+  useWebSocketEvent<{ lead_id?: string; user_id?: string; user_name?: string; is_typing?: boolean }>(
+    "sms:typing",
+    useCallback(
+      (data) => {
+        if (!data?.lead_id || !data?.user_id) return;
+        const leadId = String(data.lead_id);
+        const uid = String(data.user_id);
+        if (user?.id && uid === String(user.id)) return;
+
+        const key = `${leadId}:${uid}`;
+        if (typingTimersRef.current[key]) {
+          clearTimeout(typingTimersRef.current[key]);
+          delete typingTimersRef.current[key];
+        }
+
+        if (data.is_typing) {
+          const name = data.user_name || "Someone";
+          setTypingMap((prev) => ({
+            ...prev,
+            [leadId]: { ...(prev[leadId] || {}), [uid]: name },
+          }));
+          typingTimersRef.current[key] = setTimeout(() => {
+            setTypingMap((prev) => {
+              const leadTypers = { ...(prev[leadId] || {}) };
+              delete leadTypers[uid];
+              const next = { ...prev };
+              if (Object.keys(leadTypers).length === 0) {
+                delete next[leadId];
+              } else {
+                next[leadId] = leadTypers;
+              }
+              return next;
+            });
+            delete typingTimersRef.current[key];
+          }, 4000);
+        } else {
+          setTypingMap((prev) => {
+            if (!prev[leadId] || !(uid in prev[leadId])) return prev;
+            const leadTypers = { ...prev[leadId] };
+            delete leadTypers[uid];
+            const next = { ...prev };
+            if (Object.keys(leadTypers).length === 0) {
+              delete next[leadId];
+            } else {
+              next[leadId] = leadTypers;
+            }
+            return next;
+          });
+        }
+      },
+      [user?.id]
+    ),
+    [user?.id]
+  );
+
+  useEffect(() => {
+    return () => {
+      Object.values(typingTimersRef.current).forEach(clearTimeout);
+      typingTimersRef.current = {};
+    };
+  }, []);
+
+  const typingByLead = useMemo(() => {
+    const out: Record<string, string[]> = {};
+    for (const [lid, users] of Object.entries(typingMap)) {
+      const names = Object.values(users);
+      if (names.length > 0) out[lid] = names;
+    }
+    return out;
+  }, [typingMap]);
 
   useEffect(() => {
     const q = search.trim();
@@ -231,6 +305,7 @@ export default function SMSPage() {
                     conversations={filtered}
                     selectedLeadId={selectedLeadId || undefined}
                     onSelect={handleSelect}
+                    typingByLead={typingByLead}
                   />
                 )
               )}

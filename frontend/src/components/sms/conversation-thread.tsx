@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { format, isToday, isYesterday } from "date-fns";
-import { Loader2, ArrowLeft, Ban, ShieldCheck, ShieldAlert } from "lucide-react";
+import { Loader2, ArrowLeft, Ban, ShieldCheck, ShieldAlert, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -17,9 +17,13 @@ import {
 } from "@/components/ui/alert-dialog";
 import { MessageBubble } from "./message-bubble";
 import { MessageComposer } from "./message-composer";
-import { SMSConsentStatus, SMSMessage, smsService } from "@/services/sms-service";
+import { SMSCallLogCard } from "./call-log-card";
+import { SMSCallLog, SMSConsentStatus, SMSMessage, smsService } from "@/services/sms-service";
 import { useToast } from "@/hooks/use-toast";
 import { useWebSocketEvent } from "@/hooks/use-websocket";
+import { wsService } from "@/lib/websocket";
+import { useCallLeadOptional } from "@/contexts/call-lead-context";
+import { useAuthStore } from "@/stores/auth-store";
 
 interface ConversationThreadProps {
   leadId: string;
@@ -28,6 +32,10 @@ interface ConversationThreadProps {
   onBack?: () => void;
   onMessageSent?: () => void;
 }
+
+type ThreadItem =
+  | { kind: "message"; id: string; timestamp: string; message: SMSMessage }
+  | { kind: "call"; id: string; timestamp: string; call: SMSCallLog };
 
 function errorDetail(err: unknown): string | undefined {
   const e = err as { response?: { data?: { detail?: string } } };
@@ -62,9 +70,12 @@ function ConsentBadge({ consent }: { consent: SMSConsentStatus }) {
 
 export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMessageSent }: ConversationThreadProps) {
   const { toast } = useToast();
+  const callLeadCtx = useCallLeadOptional();
+  const currentUserId = useAuthStore((s) => s.user?.id);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const [messages, setMessages] = useState<SMSMessage[]>([]);
+  const [calls, setCalls] = useState<SMSCallLog[]>([]);
   const [consent, setConsent] = useState<SMSConsentStatus | null>(null);
   const [loadedContact, setLoadedContact] = useState<{ name: string; phone: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -72,11 +83,16 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
   const [confirmOptOut, setConfirmOptOut] = useState(false);
   const [optingOut, setOptingOut] = useState(false);
 
+  // Active typers: userId -> userName
+  const [typingUsers, setTypingUsers] = useState<Record<string, string>>({});
+  const typingTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
   const loadConversation = useCallback(async (opts?: { silent?: boolean }) => {
     try {
       if (!opts?.silent) setLoading(true);
       const conversation = await smsService.getConversation(leadId);
       setMessages(conversation.messages);
+      setCalls(conversation.calls || []);
       setConsent(conversation.consent ?? null);
       setLoadedContact({ name: conversation.lead_name, phone: conversation.lead_phone });
       setError(null);
@@ -92,10 +108,18 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
   }, [leadId]);
 
   useEffect(() => {
-    loadConversation();
+    void loadConversation();
   }, [loadConversation]);
 
-  // Fallback poll so incoming replies appear even if a WebSocket event is missed
+  // Clear typing timers when unmounting or switching leads
+  useEffect(() => {
+    return () => {
+      Object.values(typingTimersRef.current).forEach(clearTimeout);
+      typingTimersRef.current = {};
+    };
+  }, [leadId]);
+
+  // Fallback poll so incoming replies/calls appear even if a WebSocket event is missed
   useEffect(() => {
     const id = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState === "visible") {
@@ -148,9 +172,163 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
     [leadId]
   );
 
+  // Real-time typing indicator
+  useWebSocketEvent<{ lead_id?: string; user_id?: string; user_name?: string; is_typing?: boolean }>(
+    "sms:typing",
+    useCallback(
+      (data) => {
+        if (!data?.lead_id || String(data.lead_id) !== String(leadId)) return;
+        const uid = data.user_id ? String(data.user_id) : "";
+        if (!uid || (currentUserId && uid === String(currentUserId))) return;
+
+        if (typingTimersRef.current[uid]) {
+          clearTimeout(typingTimersRef.current[uid]);
+          delete typingTimersRef.current[uid];
+        }
+
+        if (data.is_typing) {
+          const name = data.user_name || "Someone";
+          setTypingUsers((prev) => ({ ...prev, [uid]: name }));
+          typingTimersRef.current[uid] = setTimeout(() => {
+            setTypingUsers((prev) => {
+              const next = { ...prev };
+              delete next[uid];
+              return next;
+            });
+            delete typingTimersRef.current[uid];
+          }, 4000);
+        } else {
+          setTypingUsers((prev) => {
+            if (!(uid in prev)) return prev;
+            const next = { ...prev };
+            delete next[uid];
+            return next;
+          });
+        }
+      },
+      [leadId, currentUserId]
+    ),
+    [leadId, currentUserId]
+  );
+
+  // Real-time call completed events - add incoming & outgoing calls to timeline immediately
+  useWebSocketEvent<{
+    call_log_id?: string;
+    lead_id?: string;
+    call?: {
+      id: string;
+      direction: string;
+      from_number: string;
+      to_number: string;
+      status: string;
+      duration_seconds: number | null;
+      outcome: string | null;
+      notes: string | null;
+      recording_url: string | null;
+      started_at: string | null;
+      ended_at: string | null;
+    };
+  }>(
+    "call:completed",
+    useCallback(
+      (data) => {
+        if (!data?.lead_id || String(data.lead_id) !== String(leadId) || !data.call) return;
+        const c = data.call;
+        const newCall: SMSCallLog = {
+          id: c.id,
+          direction: c.direction,
+          from_number: c.from_number,
+          to_number: c.to_number,
+          status: c.status,
+          duration_seconds: c.duration_seconds ?? 0,
+          recording_url: c.recording_url,
+          recording_duration_seconds: null,
+          notes: c.notes,
+          outcome: c.outcome,
+          started_at: c.started_at || new Date().toISOString(),
+          answered_at: null,
+          ended_at: c.ended_at,
+        };
+        setCalls((prev) => {
+          const idx = prev.findIndex((item) => item.id === newCall.id);
+          if (idx >= 0) {
+            const copy = [...prev];
+            copy[idx] = { ...copy[idx], ...newCall };
+            return copy;
+          }
+          return [...prev, newCall];
+        });
+      },
+      [leadId]
+    ),
+    [leadId]
+  );
+
+  // Real-time call recording ready - attach recording player to existing call card
+  useWebSocketEvent<{
+    call_log_id?: string;
+    lead_id?: string;
+    recording_url?: string;
+    recording_duration_seconds?: number;
+  }>(
+    "call:recording_ready",
+    useCallback(
+      (data) => {
+        if (!data?.lead_id || String(data.lead_id) !== String(leadId) || !data.call_log_id) return;
+        setCalls((prev) =>
+          prev.map((c) =>
+            c.id === data.call_log_id
+              ? {
+                  ...c,
+                  recording_url: data.recording_url ?? c.recording_url,
+                  recording_duration_seconds: data.recording_duration_seconds ?? c.recording_duration_seconds,
+                  duration_seconds: data.recording_duration_seconds || c.duration_seconds,
+                }
+              : c
+          )
+        );
+      },
+      [leadId]
+    ),
+    [leadId]
+  );
+
+  const timelineItems = useMemo<ThreadItem[]>(() => {
+    const items: ThreadItem[] = [
+      ...messages.map((m): ThreadItem => ({
+        kind: "message",
+        id: `msg-${m.id}`,
+        timestamp: m.created_at,
+        message: m,
+      })),
+      ...calls.map((c): ThreadItem => ({
+        kind: "call",
+        id: `call-${c.id}`,
+        timestamp: c.started_at,
+        call: c,
+      })),
+    ];
+    items.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    return items;
+  }, [messages, calls]);
+
+  const activeTypers = Object.values(typingUsers);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [timelineItems.length, activeTypers.length]);
+
+  const handleTypingChange = useCallback(
+    (isTyping: boolean) => {
+      wsService.send(
+        JSON.stringify({
+          type: "sms:typing",
+          payload: { lead_id: leadId, is_typing: isTyping },
+        })
+      );
+    },
+    [leadId]
+  );
 
   const handleReact = async (messageId: string, emoji: string) => {
     try {
@@ -167,10 +345,10 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
     }
   };
 
-  const handleSend = async (body: string, mediaUrls?: string[]) => {
+  const handleSend = async (body: string, mediaUrls?: string[], mediaContentTypes?: string[]) => {
     let errorMessage: string | undefined;
     try {
-      const result = await smsService.sendToLead(leadId, body, mediaUrls);
+      const result = await smsService.sendToLead(leadId, body, mediaUrls, mediaContentTypes);
       if (result.success && result.message_id) {
         const newMessage: SMSMessage = {
           id: result.message_id,
@@ -187,6 +365,7 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
           delivered_at: null,
           category: "conversation",
           media_urls: mediaUrls || [],
+          media_content_types: mediaContentTypes || [],
           reactions: {},
         };
         setMessages((prev) => [...prev, newMessage]);
@@ -219,8 +398,8 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
     }
   };
 
-  const groupedMessages = messages.reduce((groups, message) => {
-    const date = new Date(message.created_at);
+  const groupedItems = timelineItems.reduce((groups, item) => {
+    const date = new Date(item.timestamp);
     let dateKey: string;
     if (isToday(date)) {
       dateKey = "Today";
@@ -232,9 +411,9 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
     if (!groups[dateKey]) {
       groups[dateKey] = [];
     }
-    groups[dateKey].push(message);
+    groups[dateKey].push(item);
     return groups;
-  }, {} as Record<string, SMSMessage[]>);
+  }, {} as Record<string, ThreadItem[]>);
 
   if (loading) {
     return (
@@ -275,26 +454,52 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
             <p className="text-sm text-muted-foreground">{displayPhone}</p>
           )}
         </div>
-        {consent && !consent.opted_out && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground"
-            onClick={() => setConfirmOptOut(true)}
-          >
-            <Ban className="h-4 w-4 mr-1" /> Do not text
-          </Button>
-        )}
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {displayPhone && callLeadCtx && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                callLeadCtx.setCallLead({
+                  phone: displayPhone,
+                  leadId,
+                  leadName: displayName,
+                });
+                toast({
+                  title: "Opening softphone...",
+                  description: `Calling ${displayName}`,
+                });
+              }}
+              title={`Call ${displayName}`}
+            >
+              <Phone className="h-4 w-4 sm:mr-1.5" />
+              <span className="hidden sm:inline">Call</span>
+            </Button>
+          )}
+
+          {consent && !consent.opted_out && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground"
+              onClick={() => setConfirmOptOut(true)}
+            >
+              <Ban className="h-4 w-4 mr-1" /> Do not text
+            </Button>
+          )}
+        </div>
       </div>
 
-      {/* Messages */}
+      {/* Messages & Calls Timeline */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 ? (
+        {timelineItems.length === 0 ? (
           <div className="text-center text-muted-foreground py-8">
             No messages yet. Send a message to start the conversation.
           </div>
         ) : (
-          Object.entries(groupedMessages).map(([date, msgs]) => (
+          Object.entries(groupedItems).map(([date, items]) => (
             <div key={date}>
               <div className="flex items-center gap-4 my-4">
                 <div className="flex-1 h-px bg-border" />
@@ -302,13 +507,35 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
                 <div className="flex-1 h-px bg-border" />
               </div>
               <div className="space-y-3">
-                {msgs.map((message) => (
-                  <MessageBubble key={message.id} message={message} onReact={handleReact} />
-                ))}
+                {items.map((item) =>
+                  item.kind === "message" ? (
+                    <MessageBubble key={item.id} message={item.message} onReact={handleReact} />
+                  ) : (
+                    <SMSCallLogCard key={item.id} call={item.call} />
+                  )
+                )}
               </div>
             </div>
           ))
         )}
+
+        {activeTypers.length > 0 && (
+          <div className="flex items-center gap-2 pt-1">
+            <div className="inline-flex items-center gap-2 rounded-2xl rounded-bl-sm bg-muted px-3.5 py-2 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1" aria-hidden="true">
+                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/70 animate-bounce [animation-delay:-0.3s]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/70 animate-bounce [animation-delay:-0.15s]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/70 animate-bounce" />
+              </span>
+              <span>
+                {activeTypers.length === 1
+                  ? `${activeTypers[0]} is typing...`
+                  : `${activeTypers.slice(0, 2).join(" and ")} are typing...`}
+              </span>
+            </div>
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
@@ -323,6 +550,8 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
         disabled={blocked}
         enableEmoji
         enableMedia
+        enableVoice
+        onTypingChange={handleTypingChange}
         placeholder={blocked ? "Texting is blocked for this customer" : "Type a message..."}
       />
 
