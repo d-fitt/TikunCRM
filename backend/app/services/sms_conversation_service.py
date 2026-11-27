@@ -29,20 +29,52 @@ logger = logging.getLogger(__name__)
 OPTED_OUT_ERROR_CODE = "21610"
 
 _INBOUND_TAPBACK_VERBS = {
+    # English (iOS / Android)
     "liked": "👍",
     "loved": "❤️",
     "laughed at": "😂",
     "disliked": "👎",
     "emphasized": "❗",
     "questioned": "❓",
+    # Spanish (iOS / Android)
+    "le gusta": "👍",
+    "le gustó": "👍",
+    "le gusto": "👍",
+    "me gusta": "👍",
+    "le encanta": "❤️",
+    "le encantó": "❤️",
+    "le encanto": "❤️",
+    "me encanta": "❤️",
+    "no le gusta": "👎",
+    "no le gustó": "👎",
+    "no le gusto": "👎",
+    "se rió de": "😂",
+    "se rio de": "😂",
+    "se ríe de": "😂",
+    "se rie de": "😂",
+    "le hizo reír": "😂",
+    "le hizo reir": "😂",
+    "enfatizó": "❗",
+    "enfatizo": "❗",
+    "enfatiza": "❗",
+    "destacó": "❗",
+    "destaco": "❗",
+    "cuestionó": "❓",
+    "cuestiono": "❓",
+    "cuestiona": "❓",
+    "preguntó por": "❓",
+    "pregunto por": "❓",
 }
+_TAPBACK_VERBS_PATTERN = "|".join(
+    sorted((re.escape(k) for k in _INBOUND_TAPBACK_VERBS), key=len, reverse=True)
+)
 _TAPBACK_VERB_RE = re.compile(
-    r'^(Liked|Loved|Laughed at|Disliked|Emphasized|Questioned)\s+[“"](.+)[”"]$',
-    re.DOTALL,
+    rf'^({_TAPBACK_VERBS_PATTERN})\s+[“"«](.+)[”"»]$',
+    re.IGNORECASE | re.DOTALL,
 )
 _TAPBACK_EMOJI_RE = re.compile(
-    r'^Reacted\s+(\S+)\s+to\s+[“"](.+)[”"]$',
-    re.DOTALL,
+    r'^(?:Reacted\s+(\S+)\s+to|Reaccion[oó]\s+(?:con\s+)?(\S+)\s+a)\s+[“"«](.+)[”"»]$',
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -50,12 +82,15 @@ def _parse_inbound_tapback(body: str) -> Optional[Tuple[str, str]]:
     text = (body or "").strip()
     m = _TAPBACK_VERB_RE.match(text)
     if m:
-        emoji = _INBOUND_TAPBACK_VERBS.get(m.group(1).lower())
+        emoji = _INBOUND_TAPBACK_VERBS.get(m.group(1).strip().lower())
         if emoji:
             return emoji, m.group(2).strip()
     m2 = _TAPBACK_EMOJI_RE.match(text)
     if m2:
-        return m2.group(1).strip(), m2.group(2).strip()
+        emoji = (m2.group(1) or m2.group(2) or "").strip()
+        quote = (m2.group(3) or "").strip()
+        if emoji and quote:
+            return emoji, quote
     return None
 
 
@@ -340,7 +375,16 @@ class SMSConversationService:
                     t_meta["reactions"] = t_reacts
                     target.meta_data = t_meta
                     flag_modified(target, "meta_data")
-                    await self.db.flush()
+
+                # Mark this raw tapback SMS as applied so it attaches to the target bubble
+                # instead of appearing as a separate "Le gusta '...'" text bubble.
+                s_meta = dict(sms_log.meta_data or {})
+                s_meta["tapback_applied"] = True
+                s_meta["tapback_target_id"] = str(target.id)
+                s_meta["tapback_emoji"] = tb_emoji
+                sms_log.meta_data = s_meta
+                flag_modified(sms_log, "meta_data")
+                await self.db.flush()
 
         # Log activity
         if lead:
@@ -461,7 +505,8 @@ class SMSConversationService:
             query = query.where(SMSLog.created_at < before)
         query = query.order_by(SMSLog.created_at.desc()).limit(limit)
         result = await self.db.execute(query)
-        return list(reversed(result.scalars().all()))
+        rows = [m for m in result.scalars().all() if not (m.meta_data or {}).get("tapback_applied")]
+        return list(reversed(rows))
     
     async def get_conversations_list(
         self,
@@ -497,7 +542,8 @@ class SMSConversationService:
             .group_by(SMSLog.lead_id)
         ).subquery()
 
-        # Threads holding only automated/campaign texts stay out of the inbox until someone replies
+        # Bulk offer campaigns stay out of the inbox until someone replies.
+        # The new-lead greeting and the offers confirmation must show up on their own.
         other = aliased(SMSLog)
         has_conversation = (
             select(other.id)
@@ -506,7 +552,7 @@ class SMSConversationService:
                 or_(
                     other.direction == MessageDirection.INBOUND,
                     other.category.is_(None),
-                    other.category == "conversation",
+                    other.category.in_(("conversation", "auto_first", "compliance")),
                 ),
             )
             .exists()

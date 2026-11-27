@@ -56,6 +56,12 @@ async def _send_new_lead_texts(db: AsyncSession, lead_id: UUID) -> None:
         return
     effective = await get_effective_twilio_config(db, lead.dealership_id)
     if not effective.is_sms_ready() or not effective.sms_auto_first_message_enabled:
+        logger.info(
+            "New-lead text skipped for lead %s: sms ready=%s auto-text=%s",
+            lead_id,
+            effective.is_sms_ready(),
+            effective.sms_auto_first_message_enabled,
+        )
         return
     meta = dict(lead.meta_data or {})
     if meta.get(SENT_FLAG):
