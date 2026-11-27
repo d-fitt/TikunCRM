@@ -315,10 +315,11 @@ class Settings(BaseSettings):
             rel = backend_root / p
             if rel.is_file():
                 return str(rel)
-        # Fallback: default firebase-service-account.json in backend/ if present
-        default_file = backend_root / "firebase-service-account.json"
-        if default_file.is_file():
-            return str(default_file)
+        # Fallback: default service account filenames in backend/ if present
+        for default_name in ("firebase-service-account.json", ".firebase-service-account.json"):
+            default_file = backend_root / default_name
+            if default_file.is_file():
+                return str(default_file)
         return None
 
     def get_fcm_service_account_info(self) -> Optional[dict]:
