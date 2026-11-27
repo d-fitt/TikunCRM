@@ -36,6 +36,7 @@ class NotificationType(str, Enum):
     LEAD_MULTI_CAMPAIGN = "LEAD_MULTI_CAMPAIGN"  # Lead found in another campaign
     WHATSAPP_NEW_LEAD = "WHATSAPP_NEW_LEAD"  # New WhatsApp conversation from unknown number
     WHATSAPP_RECEIVED = "WHATSAPP_RECEIVED"  # WhatsApp message received
+    SMS_RECEIVED = "SMS_RECEIVED"            # SMS message received
     MISSED_CALL = "MISSED_CALL"              # Inbound call unanswered (ring group timed out)
     VOICEMAIL = "VOICEMAIL"                  # Caller left a voicemail after missed inbound call
 

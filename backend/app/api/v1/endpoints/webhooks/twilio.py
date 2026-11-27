@@ -23,6 +23,7 @@ from app.services.notification_service import NotificationService
 from app.core.websocket_manager import ws_manager
 from app.core.config import settings
 from app.models.lead import Lead
+from app.models.notification import NotificationType
 
 logger = logging.getLogger(__name__)
 
@@ -340,7 +341,7 @@ async def handle_incoming_sms(
             title=title,
             message=text,
             link=f"/sms?lead={sms_log.lead_id}",
-            notification_type="sms_received",
+            notification_type=NotificationType.SMS_RECEIVED,
             meta_data={
                 "lead_id": str(sms_log.lead_id),
                 "message_id": str(sms_log.id),
