@@ -34,7 +34,7 @@ import { LeadService, Lead, getLeadFullName, getLeadPhone, getLeadEmail } from "
 import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/services/appointment-service"
 import { ShowroomService } from "@/services/showroom-service"
 import { getStageLabel, getStageColor } from "@/services/lead-stage-service"
-import { useStatsRefresh, useShowroomUpdates, useWebSocketEvent } from "@/hooks/use-websocket"
+import { useShowroomUpdates, useWebSocketEvent, useWebSocketResync } from "@/hooks/use-websocket"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { useBdcDealership } from "@/contexts/bdc-dealership-context"
@@ -186,12 +186,12 @@ export function BdcDashboard() {
         }, 1500)
     }, [loadData])
 
-    useStatsRefresh(loadData)
     useShowroomUpdates(scheduleReload)
     useWebSocketEvent("lead:created", scheduleReload, [scheduleReload])
     useWebSocketEvent("lead:updated", scheduleReload, [scheduleReload])
     useWebSocketEvent("badges:refresh", scheduleReload, [scheduleReload])
     useWebSocketEvent("stats:refresh", scheduleReload, [scheduleReload])
+    useWebSocketResync(scheduleReload, [scheduleReload])
 
     React.useEffect(() => {
         setIsLoading(true)
