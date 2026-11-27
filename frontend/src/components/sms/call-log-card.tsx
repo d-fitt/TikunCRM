@@ -166,13 +166,16 @@ export function SMSCallLogCard({ call }: SMSCallLogCardProps) {
   const displayTime = isPlaying || progress > 0 ? currentTime : duration;
 
   return (
-    <div className="flex justify-center py-1">
+    <div className={cn("flex py-0.5", isInbound ? "justify-start" : "justify-end")}>
       <div
         className={cn(
-          "rounded-xl border px-3.5 py-2.5 min-w-[270px] max-w-[380px] w-full shadow-xs",
+          "rounded-2xl border px-3.5 py-2.5 min-w-[250px] max-w-[360px] w-full shadow-xs",
+          isInbound ? "rounded-bl-sm" : "rounded-br-sm",
           isMissed
             ? "border-destructive/30 bg-destructive/5"
-            : "border-border bg-muted/60"
+            : isInbound
+              ? "border-border bg-muted/60"
+              : "border-primary/20 bg-primary/5"
         )}
       >
         <div className="flex items-center justify-between gap-2">

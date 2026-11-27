@@ -116,6 +116,8 @@ class NotificationService:
                             "related_type": related_type,
                         }
                     )
+                else:
+                    logger.warning("Push skipped for user %s: FCM is not configured", user_id)
             except Exception as e:
                 # Don't fail notification creation if push fails
                 logger.warning(f"Failed to send push notification: {e}")

@@ -61,7 +61,7 @@ class PushService:
             Number of successful sends
         """
         if not self.is_configured:
-            logger.debug("FCM not configured - skipping push notification")
+            logger.warning("FCM not configured - skipping push notification for user %s", user_id)
             return 0
 
         # Own session. Committing the caller's session here expired every

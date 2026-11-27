@@ -73,6 +73,10 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
   const callLeadCtx = useCallLeadOptional();
   const currentUserId = useAuthStore((s) => s.user?.id);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const timelineContentRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+  const initialScrollDoneRef = useRef(false);
 
   const [messages, setMessages] = useState<SMSMessage[]>([]);
   const [calls, setCalls] = useState<SMSCallLog[]>([]);
@@ -339,9 +343,57 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
 
   const activeTypers = Object.values(typingUsers);
 
+  const scrollToBottom = useCallback((smooth = false) => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    if (smooth) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, []);
+
+  // Reset initial-scroll flag whenever the selected lead changes
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [timelineItems.length, activeTypers.length]);
+    initialScrollDoneRef.current = false;
+    isNearBottomRef.current = true;
+  }, [leadId]);
+
+  // Snap to the bottommost message/call on initial load and when new items arrive while near bottom
+  useEffect(() => {
+    if (loading) return;
+    if (!initialScrollDoneRef.current) {
+      initialScrollDoneRef.current = true;
+      requestAnimationFrame(() => scrollToBottom(false));
+      const t1 = window.setTimeout(() => {
+        if (isNearBottomRef.current) scrollToBottom(false);
+      }, 150);
+      const t2 = window.setTimeout(() => {
+        if (isNearBottomRef.current) scrollToBottom(false);
+      }, 450);
+      return () => {
+        window.clearTimeout(t1);
+        window.clearTimeout(t2);
+      };
+    }
+    if (isNearBottomRef.current) {
+      requestAnimationFrame(() => scrollToBottom(true));
+    }
+  }, [loading, timelineItems.length, activeTypers.length, scrollToBottom]);
+
+  // Keep pinned to bottom when lazy-loaded images or audio cards expand height
+  useEffect(() => {
+    if (loading) return;
+    const contentEl = timelineContentRef.current;
+    if (!contentEl || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      if (isNearBottomRef.current) {
+        scrollToBottom(false);
+      }
+    });
+    ro.observe(contentEl);
+    return () => ro.disconnect();
+  }, [loading, leadId, scrollToBottom]);
 
   const handleTypingChange = useCallback(
     (isTyping: boolean) => {
@@ -518,7 +570,16 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
       </div>
 
       {/* Messages & Calls Timeline */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div
+        ref={scrollContainerRef}
+        onScroll={() => {
+          const el = scrollContainerRef.current;
+          if (!el) return;
+          isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+        }}
+        className="flex-1 overflow-y-auto p-4"
+      >
+        <div ref={timelineContentRef} className="space-y-4">
         {timelineItems.length === 0 ? (
           <div className="text-center text-muted-foreground py-8">
             No messages yet. Send a message to start the conversation.
@@ -562,6 +623,7 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
         )}
 
         <div ref={messagesEndRef} />
+        </div>
       </div>
 
       {blocked && (

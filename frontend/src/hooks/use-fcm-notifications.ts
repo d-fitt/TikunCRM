@@ -225,6 +225,8 @@ export function useFCMNotifications(): UseFCMNotificationsReturn {
         sharedForegroundHandler()
         sharedForegroundHandler = null
       }
+      // Reset cached registration promise so re-subscribing in the same session re-registers with backend
+      autoRegisterPromise = null
 
       setState((prev) => ({
         ...prev,
@@ -266,6 +268,7 @@ async function autoRegisterTokenOnce(): Promise<boolean> {
         "FCM token request timed out"
       )
       if (!token) {
+        autoRegisterPromise = null
         return false
       }
 
@@ -311,23 +314,41 @@ function setupSharedForegroundHandler() {
     const tag = data.tag || "tikuncrm-fcm"
 
     if (Notification.permission === "granted") {
-      try {
-        const notification = new Notification(title, {
-          body,
-          icon,
-          badge: icon,
-          tag,
-          data: { url, type },
-          requireInteraction: true,
-        })
-
-        notification.onclick = () => {
-          window.focus()
-          window.location.href = url
-          notification.close()
+      const notifOptions: NotificationOptions = {
+        body,
+        icon,
+        badge: icon,
+        tag,
+        data: { url, type },
+        requireInteraction: true,
+      }
+      // Prefer ServiceWorkerRegistration.showNotification (works on mobile Chrome & iOS PWA where `new Notification()` throws)
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.ready
+          .then((reg) => reg.showNotification(title, notifOptions))
+          .catch(() => {
+            try {
+              const notification = new Notification(title, notifOptions)
+              notification.onclick = () => {
+                window.focus()
+                window.location.href = url
+                notification.close()
+              }
+            } catch (err) {
+              console.error("[FCM] Failed to show notification:", err)
+            }
+          })
+      } else {
+        try {
+          const notification = new Notification(title, notifOptions)
+          notification.onclick = () => {
+            window.focus()
+            window.location.href = url
+            notification.close()
+          }
+        } catch (err) {
+          console.error("[FCM] Failed to show notification:", err)
         }
-      } catch (err) {
-        console.error("[FCM] Failed to show notification:", err)
       }
     }
   })
