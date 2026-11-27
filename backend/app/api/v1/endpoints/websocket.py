@@ -129,7 +129,13 @@ async def websocket_endpoint(
             if not isinstance(msg, dict):
                 continue
             msg_type = msg.get("type")
-            if msg_type == "sms:typing":
+            if msg_type == "sms:active_thread":
+                msg_payload = msg.get("payload") or {}
+                active_lead_id = msg_payload.get("lead_id")
+                ws_manager.set_active_sms_thread(
+                    websocket, user_id, str(active_lead_id) if active_lead_id else None
+                )
+            elif msg_type == "sms:typing":
                 msg_payload = msg.get("payload") or {}
                 lead_id = msg_payload.get("lead_id")
                 is_typing = bool(msg_payload.get("is_typing"))

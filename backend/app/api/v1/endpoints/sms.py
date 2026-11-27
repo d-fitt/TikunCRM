@@ -372,8 +372,21 @@ async def get_conversation(
     call_query = call_query.order_by(CallLog.started_at.desc()).limit(limit)
     call_rows = list(reversed((await db.execute(call_query)).scalars().all()))
     
-    # Mark as read
+    # Mark messages & any unread SMS notifications for this lead as read
     await service.mark_conversation_as_read(lead_id)
+    from sqlalchemy import update as sql_update
+    from app.models.notification import Notification, NotificationType
+    from app.core.timezone import utc_now
+    await db.execute(
+        sql_update(Notification)
+        .where(
+            Notification.user_id == current_user.id,
+            Notification.type == NotificationType.SMS_RECEIVED,
+            Notification.is_read.is_(False),
+            Notification.link == f"/sms?lead={lead_id}",
+        )
+        .values(is_read=True, read_at=utc_now())
+    )
     await db.commit()
     
     return ConversationResponse(

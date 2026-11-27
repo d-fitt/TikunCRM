@@ -98,6 +98,7 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
       setError(null);
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event("sms:unread-changed"));
+        window.dispatchEvent(new CustomEvent("badges:refresh", { detail: { notifications: true } }));
       }
     } catch (err) {
       if (!opts?.silent) setError("Failed to load conversation");
@@ -110,6 +111,30 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
   useEffect(() => {
     void loadConversation();
   }, [loadConversation]);
+
+  // Tell the server while this chat is open & visible so we don't fire bell/email notifications for it
+  useEffect(() => {
+    const sendActive = (activeLeadId: string | null) => {
+      wsService.send(
+        JSON.stringify({
+          type: "sms:active_thread",
+          payload: { lead_id: activeLeadId },
+        })
+      );
+    };
+    const syncVisibility = () => {
+      const visible = typeof document === "undefined" || document.visibilityState === "visible";
+      sendActive(visible ? leadId : null);
+    };
+    syncVisibility();
+    const unsubOpen = wsService.on("connection:open", syncVisibility);
+    document.addEventListener("visibilitychange", syncVisibility);
+    return () => {
+      unsubOpen();
+      document.removeEventListener("visibilitychange", syncVisibility);
+      sendActive(null);
+    };
+  }, [leadId]);
 
   // Clear typing timers when unmounting or switching leads
   useEffect(() => {

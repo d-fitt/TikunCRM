@@ -334,7 +334,14 @@ async def handle_incoming_sms(
             title, text = "Customer opted back in to texts", f"{lead_name} replied {body.strip()} and can be texted again."
         else:
             title = "New SMS Received"
-            text = f"Message from {lead_name}: {body[:50]}..." if len(body) > 50 else f"Message from {lead_name}: {body}"
+            preview = (body or "").strip() or ("[Attachment]" if media_urls else "")
+            text = f"Message from {lead_name}: {preview[:50]}..." if len(preview) > 50 else f"Message from {lead_name}: {preview}"
+
+        # If any agent is actively viewing this chat right now, mark it read immediately
+        if ws_manager.anyone_viewing_sms_lead(str(sms_log.lead_id)):
+            sms_log.is_read = True
+            from app.core.timezone import utc_now
+            sms_log.read_at = utc_now()
 
         if sms_log.user_id:
             recipient_ids = [sms_log.user_id]
@@ -350,7 +357,11 @@ async def handle_incoming_sms(
             )
             recipient_ids = list(users_res.scalars().all())
 
+        notified_any = False
         for uid in recipient_ids:
+            # Skip bell/push/email notification for users who currently have this chat open
+            if ws_manager.is_viewing_sms_lead(str(uid), str(sms_log.lead_id)):
+                continue
             await notification_service.create_notification(
                 user_id=uid,
                 title=title,
@@ -363,11 +374,12 @@ async def handle_incoming_sms(
                     "from_number": from_number,
                 },
                 send_push=True,
-                send_email=False,  # Don't email for SMS
+                send_email=True,   # Chat isn't open — also notify via email
                 send_sms=False,    # Don't SMS about SMS
             )
+            notified_any = True
 
-        if recipient_ids:
+        if notified_any or sms_log.is_read:
             await db.commit()
     
     # Empty TwiML: Twilio answers English keywords itself, the CRM sends everything else via the API

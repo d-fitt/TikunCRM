@@ -2,7 +2,7 @@
 WebSocket Connection Manager for real-time updates
 """
 import logging
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 import json
 
 from fastapi import WebSocket
@@ -26,6 +26,27 @@ class WebSocketManager:
         self.dealership_users: Dict[str, Set[str]] = {}
         # user_id -> dealership ids this connection is registered under (for cleanup)
         self.user_broadcast_dealerships: Dict[str, Set[str]] = {}
+        # websocket -> (user_id, lead_id) for tabs currently viewing an open SMS thread
+        self.active_sms_threads: Dict[WebSocket, Tuple[str, str]] = {}
+
+    def set_active_sms_thread(
+        self,
+        websocket: WebSocket,
+        user_id: str,
+        lead_id: Optional[str],
+    ) -> None:
+        if lead_id:
+            self.active_sms_threads[websocket] = (str(user_id), str(lead_id))
+        else:
+            self.active_sms_threads.pop(websocket, None)
+
+    def is_viewing_sms_lead(self, user_id: str, lead_id: str) -> bool:
+        target = (str(user_id), str(lead_id))
+        return any(val == target for val in self.active_sms_threads.values())
+
+    def anyone_viewing_sms_lead(self, lead_id: str) -> bool:
+        lid = str(lead_id)
+        return any(active_lid == lid for _, active_lid in self.active_sms_threads.values())
     
     def _register_user_for_dealerships(
         self,
@@ -89,6 +110,7 @@ class WebSocketManager:
         dealership_id: Optional[str] = None,
     ):
         """Remove a WebSocket connection and dealership subscriptions."""
+        self.active_sms_threads.pop(websocket, None)
         if user_id in self.active_connections:
             self.active_connections[user_id].discard(websocket)
             if not self.active_connections[user_id]:
