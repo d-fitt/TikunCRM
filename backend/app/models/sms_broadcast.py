@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.database import Base
@@ -23,9 +23,13 @@ class SMSBroadcast(Base):
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    name: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
-    # queued | sending | completed | cancelled
+    media_urls: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    filters: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # draft | queued | sending | completed | cancelled
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    scheduled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     total_recipients: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     sent_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

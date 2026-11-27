@@ -1,6 +1,7 @@
 """
 WebSocket Endpoint for real-time updates
 """
+import json
 import logging
 from typing import List, Optional
 from uuid import UUID
@@ -81,10 +82,12 @@ async def websocket_endpoint(
         return
     
     # Refresh BDC / org-wide subscriptions from DB so new dealership assignments apply without re-login
+    user_name: str = payload.get("full_name") or payload.get("email") or "Someone"
     try:
         async with async_session_maker() as db:
             user = await db.get(User, UUID(str(user_id)))
             if user and user.is_active:
+                user_name = user.full_name or user.email or user_name
                 if user.role == UserRole.BDC:
                     ids = await get_accessible_dealership_ids(db, user)
                     accessible_dealership_ids = [str(i) for i in (ids or [])]
@@ -118,6 +121,34 @@ async def websocket_endpoint(
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_text("pong")
+                continue
+            try:
+                msg = json.loads(data)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            msg_type = msg.get("type")
+            if msg_type == "sms:typing":
+                msg_payload = msg.get("payload") or {}
+                lead_id = msg_payload.get("lead_id")
+                is_typing = bool(msg_payload.get("is_typing"))
+                if lead_id:
+                    target_dealerships = accessible_dealership_ids or ([str(dealership_id)] if dealership_id else [])
+                    for did in target_dealerships:
+                        await ws_manager.broadcast_to_dealership(
+                            did,
+                            {
+                                "type": "sms:typing",
+                                "payload": {
+                                    "lead_id": str(lead_id),
+                                    "user_id": str(user_id),
+                                    "user_name": user_name,
+                                    "is_typing": is_typing,
+                                },
+                            },
+                            exclude_user=str(user_id),
+                        )
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected: user={user_id}")
         ws_manager.disconnect(websocket, user_id, dealership_id)

@@ -283,6 +283,7 @@ async def handle_incoming_sms(
         to_number=to_number,
         body=body,
         media_urls=media_urls,
+        media_content_types=twilio_content_types,
         resolved_dealership_id=resolved_dealership_id,
         opt_out_type=opt_out_type,
     )

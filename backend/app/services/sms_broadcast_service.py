@@ -1,26 +1,35 @@
 """
-Promotional SMS campaigns.
+Promotional SMS/MMS campaigns with advanced audience filtering, drafts/templates,
+scheduling, media attachments, and batched sending.
 
-Recipients are fixed when the campaign is created (customers with promotional consent),
-then a scheduler job sends a small batch every minute inside the allowed hours.
-Consent is checked again for every recipient right before sending.
+Recipients are snapshotted when a campaign is launched (only customers with
+promotional consent), then a scheduler job sends a small batch every minute
+inside the allowed hours. Consent is re-checked right before every send.
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, exists, func, select, text, update
+from sqlalchemy import String, and_, cast, exists, func, not_, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.permissions import UserRole
 from app.core.timezone import utc_now
+from app.models.campaign_mapping import CampaignMapping
 from app.models.customer import Customer
+from app.models.customer_stip_document import CustomerStipDocument
 from app.models.dealership import Dealership
 from app.models.lead import Lead
+from app.models.lead_stage import LeadStage
+from app.models.lead_stip_document import LeadStipDocument
 from app.models.sms_broadcast import SMSBroadcast, SMSBroadcastRecipient
+from app.models.sms_log import MessageDirection, SMSLog
+from app.models.user import User
 from app.services import sms_consent_service as sms_consent
 from app.services.dealership_twilio_config_service import get_effective_twilio_config
 from app.services.sms_conversation_service import SMSConversationService
@@ -51,58 +60,346 @@ def in_send_window(tz: ZoneInfo, now: Optional[datetime] = None) -> bool:
     return SEND_WINDOW_START_HOUR <= local.hour < SEND_WINDOW_END_HOUR
 
 
-def _audience_filter(dealership_id: UUID):
-    return and_(
+def _parse_date(val: Any, end_of_day: bool = False) -> Optional[datetime]:
+    if not val:
+        return None
+    if isinstance(val, datetime):
+        return val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+    try:
+        d = date.fromisoformat(str(val)[:10])
+        t = time(23, 59, 59, 999999) if end_of_day else time(0, 0, 0)
+        return datetime.combine(d, t, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _lead_has_stips_expr():
+    return or_(
+        Lead.has_ssn_stip.is_(True),
+        Lead.has_dl_stip.is_(True),
+        exists().where(LeadStipDocument.lead_id == Lead.id),
+        exists().where(CustomerStipDocument.customer_id == Lead.customer_id),
+    )
+
+
+def _lead_filter_conditions(dealership_id: UUID, filters: Optional[Dict[str, Any]] = None) -> list:
+    f = filters or {}
+    conds = [Lead.dealership_id == dealership_id]
+
+    if f.get("only_active"):
+        conds.append(Lead.is_active.is_(True))
+
+    stage_ids_raw = f.get("stage_ids") or []
+    stage_ids = []
+    for sid in stage_ids_raw:
+        try:
+            stage_ids.append(UUID(str(sid)))
+        except ValueError:
+            pass
+    if stage_ids:
+        conds.append(Lead.stage_id.in_(stage_ids))
+
+    campaigns = [str(c).strip() for c in (f.get("campaigns") or []) if str(c).strip()]
+    if campaigns:
+        conds.append(
+            or_(
+                Lead.source_campaign_raw.in_(campaigns),
+                Lead.meta_data["campaign_name"].astext.in_(campaigns),
+                Lead.meta_data["source_display"].astext.in_(campaigns),
+                exists().where(
+                    and_(
+                        CampaignMapping.id == Lead.campaign_mapping_id,
+                        CampaignMapping.display_name.in_(campaigns),
+                    )
+                ),
+            )
+        )
+
+    sources = [str(s).strip().lower() for s in (f.get("sources") or []) if str(s).strip()]
+    if sources:
+        conds.append(func.lower(cast(Lead.source, String)).in_(sources))
+
+    dt_from = _parse_date(f.get("date_from"), end_of_day=False)
+    if dt_from:
+        conds.append(Lead.created_at >= dt_from)
+    dt_to = _parse_date(f.get("date_to"), end_of_day=True)
+    if dt_to:
+        conds.append(Lead.created_at <= dt_to)
+
+    has_stips = f.get("has_stips")
+    if has_stips is True:
+        conds.append(_lead_has_stips_expr())
+    elif has_stips is False:
+        conds.append(not_(_lead_has_stips_expr()))
+
+    assigned_to = f.get("assigned_to")
+    if assigned_to == "unassigned":
+        conds.append(and_(Lead.assigned_to.is_(None), Lead.bdc_assigned_to_id.is_(None)))
+    elif assigned_to == "assigned":
+        conds.append(or_(Lead.assigned_to.isnot(None), Lead.bdc_assigned_to_id.isnot(None)))
+    elif assigned_to:
+        try:
+            uid = UUID(str(assigned_to))
+            conds.append(or_(Lead.assigned_to == uid, Lead.bdc_assigned_to_id == uid))
+        except ValueError:
+            pass
+
+    min_dp = f.get("min_down_payment")
+    if min_dp is not None and str(min_dp).strip() != "":
+        try:
+            conds.append(Lead.down_payment >= Decimal(str(min_dp)))
+        except Exception:
+            pass
+
+    search = (f.get("search") or "").strip()
+    if search:
+        term = f"%{search}%"
+        full_name = func.concat_ws(" ", Customer.first_name, Customer.last_name)
+        search_conds = [
+            full_name.ilike(term),
+            Lead.interested_in.ilike(term),
+            Lead.source_campaign_raw.ilike(term),
+        ]
+        digits = "".join(ch for ch in search if ch.isdigit())
+        if len(digits) >= 3:
+            search_conds.append(func.regexp_replace(Customer.phone, r"\D", "", "g").like(f"%{digits}%"))
+        conds.append(or_(*search_conds))
+
+    return conds
+
+
+def _audience_filter(dealership_id: UUID, filters: Optional[Dict[str, Any]] = None):
+    f = filters or {}
+    lead_conds = _lead_filter_conditions(dealership_id, f)
+    cust_conds = [
         Customer.sms_promo_consent.is_(True),
         Customer.sms_opted_out.is_(False),
         Customer.phone.isnot(None),
         Customer.phone != "",
-        exists().where(and_(Lead.customer_id == Customer.id, Lead.dealership_id == dealership_id)),
+        exists().where(and_(Lead.customer_id == Customer.id, *lead_conds)),
+    ]
+
+    exclude_days = f.get("exclude_contacted_in_days")
+    if exclude_days is not None and str(exclude_days).strip() != "":
+        try:
+            days = int(exclude_days)
+            if days > 0:
+                cutoff = utc_now() - timedelta(days=days)
+                cust_conds.append(
+                    not_(
+                        exists().where(
+                            and_(
+                                SMSLog.customer_id == Customer.id,
+                                SMSLog.direction == MessageDirection.OUTBOUND,
+                                SMSLog.category == sms_consent.CATEGORY_PROMOTIONAL,
+                                SMSLog.created_at >= cutoff,
+                            )
+                        )
+                    )
+                )
+        except ValueError:
+            pass
+
+    return and_(*cust_conds)
+
+
+async def audience_count(
+    db: AsyncSession, dealership_id: UUID, filters: Optional[Dict[str, Any]] = None
+) -> int:
+    return (
+        await db.execute(select(func.count(Customer.id)).where(_audience_filter(dealership_id, filters)))
+    ).scalar_one()
+
+
+async def audience_preview(
+    db: AsyncSession,
+    dealership_id: UUID,
+    filters: Optional[Dict[str, Any]] = None,
+    limit: int = 30,
+) -> Dict[str, Any]:
+    """Return total matching opted-in customers + sample lead rows for visual verification."""
+    total = await audience_count(db, dealership_id, filters)
+    if total == 0:
+        return {"total": 0, "sample_leads": []}
+
+    lead_conds = _lead_filter_conditions(dealership_id, filters)
+    latest_lead_id = (
+        select(Lead.id)
+        .where(Lead.customer_id == Customer.id, *lead_conds)
+        .order_by(Lead.created_at.desc())
+        .limit(1)
+        .correlate(Customer)
+        .scalar_subquery()
     )
 
+    cust_rows = (
+        await db.execute(
+            select(Customer.id, latest_lead_id)
+            .where(_audience_filter(dealership_id, filters))
+            .order_by(Customer.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
 
-async def audience_count(db: AsyncSession, dealership_id: UUID) -> int:
-    return (
-        await db.execute(select(func.count(Customer.id)).where(_audience_filter(dealership_id)))
-    ).scalar_one()
+    lead_ids = [lid for _, lid in cust_rows if lid is not None]
+    if not lead_ids:
+        return {"total": total, "sample_leads": []}
+
+    has_stips_col = _lead_has_stips_expr().label("has_stips")
+    rows = (
+        await db.execute(
+            select(
+                Lead.id,
+                Lead.customer_id,
+                Customer.first_name,
+                Customer.last_name,
+                Customer.phone,
+                LeadStage.display_name,
+                LeadStage.color,
+                Lead.source_campaign_raw,
+                CampaignMapping.display_name.label("mapped_campaign"),
+                Lead.meta_data,
+                Lead.source,
+                Lead.interested_in,
+                Lead.down_payment,
+                Lead.created_at,
+                has_stips_col,
+            )
+            .join(Customer, Lead.customer_id == Customer.id)
+            .outerjoin(LeadStage, Lead.stage_id == LeadStage.id)
+            .outerjoin(CampaignMapping, Lead.campaign_mapping_id == CampaignMapping.id)
+            .where(Lead.id.in_(lead_ids))
+            .order_by(Lead.created_at.desc())
+        )
+    ).all()
+
+    sample_leads = []
+    for r in rows:
+        meta = r.meta_data or {}
+        campaign = r.mapped_campaign or r.source_campaign_raw or meta.get("source_display") or meta.get("campaign_name")
+        sample_leads.append(
+            {
+                "lead_id": str(r.id),
+                "customer_id": str(r.customer_id),
+                "name": f"{r.first_name or ''} {r.last_name or ''}".strip() or "Unknown",
+                "phone": r.phone,
+                "stage_name": r.display_name,
+                "stage_color": r.color,
+                "campaign": campaign,
+                "source": r.source.value if hasattr(r.source, "value") else str(r.source),
+                "interested_in": r.interested_in,
+                "down_payment": float(r.down_payment) if r.down_payment is not None else None,
+                "has_stips": bool(r.has_stips),
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+        )
+
+    return {"total": total, "sample_leads": sample_leads}
+
+
+async def get_filter_options(db: AsyncSession, dealership_id: UUID) -> Dict[str, Any]:
+    """Return available stages, campaigns, sources, and active agents for the filter builder."""
+    stages_rows = (
+        await db.execute(
+            select(LeadStage.id, LeadStage.display_name, LeadStage.color, LeadStage.order)
+            .where(or_(LeadStage.dealership_id == dealership_id, LeadStage.dealership_id.is_(None)))
+            .order_by(LeadStage.order.asc())
+        )
+    ).all()
+    stages = [
+        {"id": str(r.id), "name": r.display_name, "color": r.color}
+        for r in stages_rows
+    ]
+
+    campaign_expr = func.coalesce(
+        CampaignMapping.display_name,
+        Lead.source_campaign_raw,
+        Lead.meta_data["source_display"].astext,
+        Lead.meta_data["campaign_name"].astext,
+    )
+    campaign_rows = (
+        await db.execute(
+            select(campaign_expr.label("cname"), func.count(func.distinct(Lead.customer_id)).label("cnt"))
+            .outerjoin(CampaignMapping, Lead.campaign_mapping_id == CampaignMapping.id)
+            .where(Lead.dealership_id == dealership_id, campaign_expr.isnot(None), campaign_expr != "")
+            .group_by("cname")
+            .order_by(func.count(func.distinct(Lead.customer_id)).desc())
+            .limit(80)
+        )
+    ).all()
+    campaigns = [{"name": r.cname, "count": int(r.cnt)} for r in campaign_rows if r.cname]
+
+    source_rows = (
+        await db.execute(
+            select(cast(Lead.source, String).label("src"), func.count(func.distinct(Lead.customer_id)).label("cnt"))
+            .where(Lead.dealership_id == dealership_id)
+            .group_by("src")
+            .order_by(func.count(func.distinct(Lead.customer_id)).desc())
+        )
+    ).all()
+    sources = [{"value": str(r.src).lower(), "count": int(r.cnt)} for r in source_rows if r.src]
+
+    agent_rows = (
+        await db.execute(
+            select(User.id, User.first_name, User.last_name, User.role)
+            .where(
+                User.dealership_id == dealership_id,
+                User.is_active.is_(True),
+                User.role.in_([UserRole.BDC, UserRole.DEALERSHIP_ADMIN, UserRole.SUPER_ADMIN]),
+            )
+            .order_by(User.first_name.asc())
+        )
+    ).all()
+    agents = [
+        {"id": str(r.id), "name": f"{r.first_name or ''} {r.last_name or ''}".strip()}
+        for r in agent_rows
+    ]
+
+    return {
+        "stages": stages,
+        "campaigns": campaigns,
+        "sources": sources,
+        "agents": agents,
+    }
 
 
 def build_body(raw_body: str) -> str:
     return sms_consent.prepare_promotional_body(raw_body)
 
 
-def preview(raw_body: str, sample_first_name: str = "María") -> dict:
+def preview(
+    raw_body: str,
+    sample_first_name: str = "María",
+    media_urls: Optional[List[str]] = None,
+) -> dict:
     body = build_body(raw_body)
     sample = sms_consent.personalize(body, sample_first_name)
+    has_media = bool(media_urls)
     return {
         "final_body": body,
         "sample": sample,
-        "segments": sms_consent.segment_count(sample),
+        "segments": 1 if has_media else sms_consent.segment_count(sample),
         "characters": len(sample),
         "blocked_links": sms_consent.disallowed_link_hosts(body),
+        "is_mms": has_media,
     }
 
 
-async def create_broadcast(
-    db: AsyncSession, dealership_id: UUID, created_by: UUID, raw_body: str
-) -> SMSBroadcast:
-    body = build_body(raw_body)
-    broadcast = SMSBroadcast(
-        dealership_id=dealership_id, created_by=created_by, body=body, status="queued"
-    )
-    db.add(broadcast)
-    await db.flush()
-
+async def _populate_recipients(db: AsyncSession, broadcast: SMSBroadcast) -> int:
+    filters = broadcast.filters or {}
+    lead_conds = _lead_filter_conditions(broadcast.dealership_id, filters)
     latest_lead = (
         select(Lead.id)
-        .where(Lead.customer_id == Customer.id, Lead.dealership_id == dealership_id)
+        .where(Lead.customer_id == Customer.id, *lead_conds)
         .order_by(Lead.created_at.desc())
         .limit(1)
         .correlate(Customer)
         .scalar_subquery()
     )
     rows = (
-        await db.execute(select(Customer.id, latest_lead).where(_audience_filter(dealership_id)))
+        await db.execute(
+            select(Customer.id, latest_lead).where(_audience_filter(broadcast.dealership_id, filters))
+        )
     ).all()
     db.add_all(
         SMSBroadcastRecipient(broadcast_id=broadcast.id, customer_id=cid, lead_id=lid)
@@ -113,6 +410,53 @@ async def create_broadcast(
         broadcast.status = "completed"
         broadcast.completed_at = utc_now()
     await db.flush()
+    return len(rows)
+
+
+async def create_broadcast(
+    db: AsyncSession,
+    dealership_id: UUID,
+    created_by: UUID,
+    raw_body: str,
+    *,
+    name: Optional[str] = None,
+    media_urls: Optional[List[str]] = None,
+    filters: Optional[Dict[str, Any]] = None,
+    save_as_draft: bool = False,
+    scheduled_at: Optional[datetime] = None,
+) -> SMSBroadcast:
+    body = build_body(raw_body)
+    broadcast = SMSBroadcast(
+        dealership_id=dealership_id,
+        created_by=created_by,
+        name=(name or "").strip()[:160] or None,
+        body=body,
+        media_urls=list(media_urls or []),
+        filters=dict(filters or {}),
+        status="draft" if save_as_draft else "queued",
+        scheduled_at=scheduled_at,
+    )
+    db.add(broadcast)
+    await db.flush()
+
+    if save_as_draft:
+        broadcast.total_recipients = await audience_count(db, dealership_id, broadcast.filters)
+        await db.flush()
+        return broadcast
+
+    await _populate_recipients(db, broadcast)
+    return broadcast
+
+
+async def launch_draft_broadcast(db: AsyncSession, broadcast: SMSBroadcast) -> SMSBroadcast:
+    if broadcast.status != "draft":
+        return broadcast
+    broadcast.status = "queued"
+    broadcast.completed_at = None
+    broadcast.sent_count = 0
+    broadcast.failed_count = 0
+    broadcast.skipped_count = 0
+    await _populate_recipients(db, broadcast)
     return broadcast
 
 
@@ -195,6 +539,7 @@ async def _send_one(
         lead_id=recipient.lead_id,
         dealership_id=broadcast.dealership_id,
         category=sms_consent.CATEGORY_PROMOTIONAL,
+        media_urls=list(broadcast.media_urls or []) or None,
     )
     recipient.sms_log_id = sms_log.id if sms_log else None
     if ok:
@@ -208,6 +553,8 @@ async def _send_one(
 async def process_broadcast(db: AsyncSession, broadcast: SMSBroadcast) -> None:
     effective = await get_effective_twilio_config(db, broadcast.dealership_id)
     if not effective.is_sms_ready() or not effective.sms_promo_enabled:
+        return
+    if broadcast.scheduled_at and utc_now() < broadcast.scheduled_at:
         return
     if not in_send_window(await dealership_timezone(db, broadcast.dealership_id)):
         return

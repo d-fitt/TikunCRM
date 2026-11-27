@@ -29,10 +29,55 @@ export interface SMSLeadSearchItem {
   lead_phone: string | null;
 }
 
+export interface SMSCampaignFilters {
+  stage_ids?: string[];
+  campaigns?: string[];
+  sources?: string[];
+  date_from?: string | null;
+  date_to?: string | null;
+  has_stips?: boolean | null;
+  assigned_to?: string | null;
+  min_down_payment?: number | null;
+  only_active?: boolean;
+  exclude_contacted_in_days?: number | null;
+  search?: string | null;
+}
+
+export interface SMSCampaignFilterOptions {
+  stages: { id: string; name: string; color: string | null }[];
+  campaigns: { name: string; count: number }[];
+  sources: { value: string; count: number }[];
+  agents: { id: string; name: string }[];
+}
+
+export interface SMSCampaignSampleLead {
+  lead_id: string;
+  customer_id: string;
+  name: string;
+  phone: string | null;
+  stage_name: string | null;
+  stage_color: string | null;
+  campaign: string | null;
+  source: string;
+  interested_in: string | null;
+  down_payment: number | null;
+  has_stips: boolean;
+  created_at: string | null;
+}
+
+export interface SMSCampaignAudiencePreview {
+  total: number;
+  sample_leads: SMSCampaignSampleLead[];
+}
+
 export interface SMSCampaign {
   id: string;
+  name: string | null;
   body: string;
-  status: "queued" | "sending" | "completed" | "cancelled";
+  media_urls: string[];
+  filters: SMSCampaignFilters;
+  status: "draft" | "queued" | "sending" | "completed" | "cancelled";
+  scheduled_at: string | null;
   total_recipients: number;
   sent_count: number;
   failed_count: number;
@@ -40,6 +85,15 @@ export interface SMSCampaign {
   created_at: string;
   completed_at: string | null;
   created_by_name: string | null;
+}
+
+export interface SMSCampaignPayload {
+  name?: string | null;
+  body: string;
+  media_urls?: string[];
+  filters?: SMSCampaignFilters;
+  save_as_draft?: boolean;
+  scheduled_at?: string | null;
 }
 
 export interface SMSCampaignOverview {
@@ -57,6 +111,7 @@ export interface SMSCampaignPreview {
   characters: number;
   blocked_links: string[];
   audience: number;
+  is_mms: boolean;
 }
 
 export interface SendSMSRequest {
@@ -87,7 +142,24 @@ export interface SMSMessage {
   category?: SMSCategory | null;
   error_message?: string | null;
   media_urls?: string[];
+  media_content_types?: string[];
   reactions?: Record<string, string[]>;
+}
+
+export interface SMSCallLog {
+  id: string;
+  direction: "inbound" | "outbound" | string;
+  from_number: string;
+  to_number: string;
+  status: string;
+  duration_seconds: number;
+  recording_url: string | null;
+  recording_duration_seconds: number | null;
+  notes: string | null;
+  outcome: string | null;
+  started_at: string;
+  answered_at: string | null;
+  ended_at: string | null;
 }
 
 export interface UploadSMSMediaResponse {
@@ -101,6 +173,7 @@ export interface Conversation {
   lead_name: string;
   lead_phone: string | null;
   messages: SMSMessage[];
+  calls?: SMSCallLog[];
   consent?: SMSConsentStatus | null;
 }
 
@@ -114,6 +187,8 @@ export interface ConversationListItem {
     direction: string;
     created_at: string;
     status: string;
+    media_urls?: string[];
+    media_content_types?: string[];
   };
   unread_count: number;
 }
@@ -166,10 +241,20 @@ class SMSService {
   /**
    * Send SMS or MMS to a specific lead
    */
-  async sendToLead(leadId: string, body: string, mediaUrls?: string[]): Promise<SendSMSResponse> {
+  async sendToLead(
+    leadId: string,
+    body: string,
+    mediaUrls?: string[],
+    mediaContentTypes?: string[]
+  ): Promise<SendSMSResponse> {
     const response = await apiClient.post<SendSMSResponse>(
       `/sms/conversations/${leadId}/send`,
-      { body, to_number: "", media_urls: mediaUrls || [] }
+      {
+        body,
+        to_number: "",
+        media_urls: mediaUrls || [],
+        media_content_types: mediaContentTypes || [],
+      }
     );
     return response.data;
   }
@@ -231,14 +316,54 @@ class SMSService {
     return response.data;
   }
 
-  async previewCampaign(body: string): Promise<SMSCampaignPreview> {
-    const response = await apiClient.post<SMSCampaignPreview>("/sms/campaigns/preview", { body });
+  async getCampaignFilterOptions(): Promise<SMSCampaignFilterOptions> {
+    const response = await apiClient.get<SMSCampaignFilterOptions>("/sms/campaigns/filter-options");
     return response.data;
   }
 
-  async createCampaign(body: string): Promise<SMSCampaign> {
-    const response = await apiClient.post<SMSCampaign>("/sms/campaigns", { body });
+  async previewCampaignAudience(
+    filters: SMSCampaignFilters,
+    limit = 25
+  ): Promise<SMSCampaignAudiencePreview> {
+    const response = await apiClient.post<SMSCampaignAudiencePreview>("/sms/campaigns/audience-preview", {
+      filters,
+      limit,
+    });
     return response.data;
+  }
+
+  async previewCampaign(payload: SMSCampaignPayload): Promise<SMSCampaignPreview> {
+    const response = await apiClient.post<SMSCampaignPreview>("/sms/campaigns/preview", payload);
+    return response.data;
+  }
+
+  async testSendCampaign(payload: {
+    to_number: string;
+    body: string;
+    media_urls?: string[];
+    sample_first_name?: string;
+  }): Promise<{ success: boolean; message_sid?: string }> {
+    const response = await apiClient.post("/sms/campaigns/test-send", payload);
+    return response.data;
+  }
+
+  async createCampaign(payload: SMSCampaignPayload): Promise<SMSCampaign> {
+    const response = await apiClient.post<SMSCampaign>("/sms/campaigns", payload);
+    return response.data;
+  }
+
+  async updateDraftCampaign(id: string, payload: SMSCampaignPayload): Promise<SMSCampaign> {
+    const response = await apiClient.patch<SMSCampaign>(`/sms/campaigns/${id}`, payload);
+    return response.data;
+  }
+
+  async launchCampaign(id: string): Promise<SMSCampaign> {
+    const response = await apiClient.post<SMSCampaign>(`/sms/campaigns/${id}/launch`);
+    return response.data;
+  }
+
+  async deleteCampaign(id: string): Promise<void> {
+    await apiClient.delete(`/sms/campaigns/${id}`);
   }
 
   async listCampaigns(): Promise<SMSCampaign[]> {

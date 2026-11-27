@@ -2,6 +2,7 @@
 SMS Conversation Service - Manages SMS conversations with leads
 """
 import logging
+import re
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
 from uuid import UUID, uuid4
@@ -9,6 +10,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select, or_, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.config import settings
 from app.core.timezone import utc_now
@@ -25,6 +27,73 @@ logger = logging.getLogger(__name__)
 
 # Twilio: "Attempt to send to unsubscribed recipient"
 OPTED_OUT_ERROR_CODE = "21610"
+
+_INBOUND_TAPBACK_VERBS = {
+    "liked": "👍",
+    "loved": "❤️",
+    "laughed at": "😂",
+    "disliked": "👎",
+    "emphasized": "❗",
+    "questioned": "❓",
+}
+_TAPBACK_VERB_RE = re.compile(
+    r'^(Liked|Loved|Laughed at|Disliked|Emphasized|Questioned)\s+[“"](.+)[”"]$',
+    re.DOTALL,
+)
+_TAPBACK_EMOJI_RE = re.compile(
+    r'^Reacted\s+(\S+)\s+to\s+[“"](.+)[”"]$',
+    re.DOTALL,
+)
+
+
+def _parse_inbound_tapback(body: str) -> Optional[Tuple[str, str]]:
+    text = (body or "").strip()
+    m = _TAPBACK_VERB_RE.match(text)
+    if m:
+        emoji = _INBOUND_TAPBACK_VERBS.get(m.group(1).lower())
+        if emoji:
+            return emoji, m.group(2).strip()
+    m2 = _TAPBACK_EMOJI_RE.match(text)
+    if m2:
+        return m2.group(1).strip(), m2.group(2).strip()
+    return None
+
+
+def _classify_media_label(media_urls: Optional[List[str]], media_content_types: Optional[List[str]] = None) -> str:
+    """Return a user-friendly preview label for the first media attachment."""
+    urls = media_urls or []
+    types = media_content_types or []
+    first_ct = (types[0] if types else "").lower().split(";")[0].strip()
+    first_url = (urls[0] if urls else "").split("?")[0].lower()
+
+    if first_ct.startswith("audio/"):
+        return "[Audio]"
+    if first_ct.startswith("video/"):
+        return "[Video]"
+    if first_ct.startswith("image/"):
+        return "[Image]"
+    if first_ct in (
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "text/plain",
+        "text/csv",
+        "text/vcard",
+        "text/x-vcard",
+    ):
+        return "[Document]"
+
+    if any(first_url.endswith(ext) for ext in (".mp3", ".wav", ".ogg", ".m4a", ".aac", ".amr")):
+        return "[Audio]"
+    if first_url.endswith(".webm") and ("voice" in first_url or "audio" in first_url):
+        return "[Audio]"
+    if any(first_url.endswith(ext) for ext in (".mp4", ".3gp", ".mov", ".webm", ".mkv", ".avi")):
+        return "[Video]"
+    if any(first_url.endswith(ext) for ext in (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".csv", ".vcf")):
+        return "[Document]"
+    if any(first_url.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".bmp")):
+        return "[Image]"
+    return "[Attachment]"
 
 
 class SMSConversationService:
@@ -80,6 +149,7 @@ class SMSConversationService:
         dealership_id: Optional[UUID] = None,
         category: str = sms_consent.CATEGORY_CONVERSATION,
         media_urls: Optional[List[str]] = None,
+        media_content_types: Optional[List[str]] = None,
     ) -> Tuple[bool, Optional[SMSLog], Optional[str]]:
         """
         Send an SMS message and store in database.
@@ -125,6 +195,10 @@ class SMSConversationService:
             return False, None, blocked
 
         # Create SMS log entry
+        meta_data: Dict[str, Any] = {}
+        if media_content_types:
+            meta_data["media_content_types"] = list(media_content_types)
+
         sms_log = SMSLog(
             customer_id=customer_id,
             lead_id=lead_id,
@@ -137,6 +211,7 @@ class SMSConversationService:
             body=body or "",
             category=category,
             media_urls=media_urls or [],
+            meta_data=meta_data,
             status=SMSStatus.QUEUED,
             sent_at=utc_now()
         )
@@ -183,6 +258,7 @@ class SMSConversationService:
         to_number: str,
         body: str,
         media_urls: Optional[List[str]] = None,
+        media_content_types: Optional[List[str]] = None,
         resolved_dealership_id: Optional[UUID] = None,
         opt_out_type: Optional[str] = None,
     ) -> Tuple[SMSLog, Optional[str], Optional[str]]:
@@ -210,6 +286,10 @@ class SMSConversationService:
             sms_consent.record_customer_initiated(customer)
 
         # Create SMS log (customer_id for thread; lead_id for context/notification)
+        meta_data: Dict[str, Any] = {}
+        if media_content_types:
+            meta_data["media_content_types"] = list(media_content_types)
+
         sms_log = SMSLog(
             customer_id=customer_id,
             lead_id=lead_id,
@@ -222,6 +302,7 @@ class SMSConversationService:
             body=body,
             category=f"keyword_{keyword}" if keyword else None,
             media_urls=media_urls or [],
+            meta_data=meta_data,
             status=SMSStatus.RECEIVED,
             received_at=utc_now(),
             is_read=False
@@ -229,6 +310,37 @@ class SMSConversationService:
 
         self.db.add(sms_log)
         await self.db.flush()
+
+        # If the customer reacted on Google Messages / iPhone, attach the emoji to the target bubble too
+        tapback = _parse_inbound_tapback(body)
+        if tapback and customer_id:
+            tb_emoji, tb_quote = tapback
+            recent_q = (
+                select(SMSLog)
+                .where(SMSLog.customer_id == customer_id, SMSLog.id != sms_log.id)
+                .order_by(SMSLog.created_at.desc())
+                .limit(30)
+            )
+            recent_msgs = (await self.db.execute(recent_q)).scalars().all()
+            needle = tb_quote.rstrip(".").strip().lower()
+            target = next(
+                (m for m in recent_msgs if m.body and needle and needle in m.body.strip().lower()),
+                None,
+            )
+            if target:
+                t_meta = dict(target.meta_data or {})
+                t_reacts: Dict[str, List[str]] = {
+                    k: list(v) for k, v in (t_meta.get("reactions") or {}).items() if isinstance(v, list)
+                }
+                actor = customer.full_name if customer else from_number
+                users = t_reacts.get(tb_emoji, [])
+                if actor not in users:
+                    users.append(actor)
+                    t_reacts[tb_emoji] = users
+                    t_meta["reactions"] = t_reacts
+                    target.meta_data = t_meta
+                    flag_modified(target, "meta_data")
+                    await self.db.flush()
 
         # Log activity
         if lead:
@@ -435,6 +547,9 @@ class SMSConversationService:
         conversations = []
         for row in rows:
             sms, first_name, last_name, phone, unread_count = row
+            media_urls = list(sms.media_urls or []) if isinstance(sms.media_urls, list) else []
+            media_content_types = list((sms.meta_data or {}).get("media_content_types") or [])
+            fallback_body = _classify_media_label(media_urls, media_content_types) if media_urls else ""
             conversations.append({
                 "lead_id": str(sms.lead_id),
                 "customer_id": str(sms.customer_id) if sms.customer_id else None,
@@ -442,10 +557,12 @@ class SMSConversationService:
                 "lead_phone": phone,
                 "last_message": {
                     "id": str(sms.id),
-                    "body": sms.body or ("[Attachment]" if sms.media_urls else ""),
+                    "body": sms.body or fallback_body,
                     "direction": sms.direction.value,
                     "created_at": sms.created_at.isoformat(),
-                    "status": sms.status.value
+                    "status": sms.status.value,
+                    "media_urls": media_urls,
+                    "media_content_types": media_content_types,
                 },
                 "unread_count": unread_count
             })

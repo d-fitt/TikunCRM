@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import { format } from "date-fns";
-import { Check, CheckCheck, Clock, AlertCircle, FileText, Download, SmilePlus } from "lucide-react";
+import { Check, CheckCheck, Clock, AlertCircle, FileText, Download, SmilePlus, Mic } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SMSMessage } from "@/services/sms-service";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { classifyMedia, fileNameFromUrl } from "./media-utils";
 
 interface MessageBubbleProps {
   message: SMSMessage;
@@ -20,31 +21,12 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
-function mediaKind(url: string): "video" | "pdf" | "image" {
-  const clean = url.split("?")[0].toLowerCase();
-  if (clean.endsWith(".mp4") || clean.endsWith(".3gp") || clean.endsWith(".mov") || clean.endsWith(".webm")) {
-    return "video";
-  }
-  if (clean.endsWith(".pdf")) {
-    return "pdf";
-  }
-  return "image";
-}
-
-function fileNameFromUrl(url: string): string {
-  try {
-    const seg = url.split("?")[0].split("/").pop();
-    return seg ? decodeURIComponent(seg) : "Attachment";
-  } catch {
-    return "Attachment";
-  }
-}
-
 export function MessageBubble({ message, onReact }: MessageBubbleProps) {
   const isOutbound = message.direction === "outbound";
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const mediaUrls = message.media_urls || [];
+  const mediaContentTypes = message.media_content_types || [];
   const reactions = Object.entries(message.reactions || {}).filter(([, users]) => users && users.length > 0);
 
   const getStatusIcon = () => {
@@ -120,7 +102,41 @@ export function MessageBubble({ message, onReact }: MessageBubbleProps) {
           {mediaUrls.length > 0 && (
             <div className={cn("space-y-2", message.body && "mb-2")}>
               {mediaUrls.map((url, idx) => {
-                const kind = mediaKind(url);
+                const kind = classifyMedia(url, mediaContentTypes[idx]);
+                if (kind === "audio") {
+                  return (
+                    <div
+                      key={`${url}-${idx}`}
+                      className={cn(
+                        "flex flex-col gap-1.5 rounded-xl p-2 min-w-[230px]",
+                        isOutbound
+                          ? "bg-primary-foreground/15 text-primary-foreground"
+                          : "bg-background text-foreground"
+                      )}
+                    >
+                      <div className="flex items-center gap-1.5 text-xs font-medium">
+                        <Mic className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate max-w-[180px]">{fileNameFromUrl(url)}</span>
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          download
+                          className="ml-auto opacity-80 hover:opacity-100"
+                          title="Download audio"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                        </a>
+                      </div>
+                      <audio
+                        src={url}
+                        controls
+                        preload="metadata"
+                        className="h-9 w-full max-w-[260px]"
+                      />
+                    </div>
+                  );
+                }
                 if (kind === "video") {
                   return (
                     <video
@@ -131,7 +147,7 @@ export function MessageBubble({ message, onReact }: MessageBubbleProps) {
                     />
                   );
                 }
-                if (kind === "pdf") {
+                if (kind === "document") {
                   return (
                     <a
                       key={`${url}-${idx}`}
@@ -162,7 +178,7 @@ export function MessageBubble({ message, onReact }: MessageBubbleProps) {
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={url}
-                      alt="Attachment"
+                      alt="Image attachment"
                       className="max-h-64 max-w-[260px] rounded-xl object-cover hover:opacity-95 transition-opacity"
                       loading="lazy"
                     />

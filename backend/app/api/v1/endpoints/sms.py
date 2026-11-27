@@ -3,7 +3,7 @@ SMS API Endpoints - Conversation-style messaging
 """
 import logging
 from datetime import datetime
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Query
@@ -20,6 +20,7 @@ from app.core.access_scope import get_accessible_dealership_ids, user_can_access
 from app.db.database import get_db
 from app.models.user import User
 from app.models.sms_log import SMSLog, MessageDirection
+from app.models.call_log import CallLog
 from app.models.lead import Lead
 from app.models.customer import Customer
 from app.models.sms_broadcast import SMSBroadcast
@@ -50,6 +51,7 @@ class SendSMSRequest(BaseModel):
     body: str = Field("", max_length=1600, description="Message body")
     lead_id: Optional[UUID] = Field(None, description="Optional lead ID")
     media_urls: List[str] = Field(default_factory=list, description="Optional MMS media URLs")
+    media_content_types: List[str] = Field(default_factory=list, description="Optional MMS media MIME types")
 
 
 class SendSMSResponse(BaseModel):
@@ -76,8 +78,29 @@ class SMSMessageResponse(BaseModel):
     category: Optional[str] = None
     error_message: Optional[str] = None
     media_urls: List[str] = Field(default_factory=list)
+    media_content_types: List[str] = Field(default_factory=list)
     reactions: Dict[str, List[str]] = Field(default_factory=dict)
     
+    class Config:
+        from_attributes = True
+
+
+class SMSCallLogResponse(BaseModel):
+    """Call log record included in SMS conversation timeline"""
+    id: UUID
+    direction: str
+    from_number: str
+    to_number: str
+    status: str
+    duration_seconds: int = 0
+    recording_url: Optional[str] = None
+    recording_duration_seconds: Optional[int] = None
+    notes: Optional[str] = None
+    outcome: Optional[str] = None
+    started_at: datetime
+    answered_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+
     class Config:
         from_attributes = True
 
@@ -100,6 +123,7 @@ class ConversationResponse(BaseModel):
     lead_name: str
     lead_phone: Optional[str]
     messages: List[SMSMessageResponse]
+    calls: List[SMSCallLogResponse] = Field(default_factory=list)
     consent: Optional[SMSConsentStatus] = None
 
 
@@ -334,6 +358,19 @@ async def get_conversation(
         limit=limit,
         before=before
     )
+
+    # Fetch call logs for this customer/lead so inbound & outbound calls appear in the thread
+    call_query = select(CallLog)
+    if lead.customer_id:
+        call_query = call_query.where(
+            or_(CallLog.customer_id == lead.customer_id, CallLog.lead_id == lead.id)
+        )
+    else:
+        call_query = call_query.where(CallLog.lead_id == lead.id)
+    if before:
+        call_query = call_query.where(CallLog.started_at < before)
+    call_query = call_query.order_by(CallLog.started_at.desc()).limit(limit)
+    call_rows = list(reversed((await db.execute(call_query)).scalars().all()))
     
     # Mark as read
     await service.mark_conversation_as_read(lead_id)
@@ -361,10 +398,29 @@ async def get_conversation(
                 category=msg.category,
                 error_message=msg.error_message,
                 media_urls=list(msg.media_urls or []) if isinstance(msg.media_urls, list) else [],
+                media_content_types=list((msg.meta_data or {}).get("media_content_types") or []),
                 reactions=dict((msg.meta_data or {}).get("reactions") or {}),
             )
             for msg in messages
-        ]
+        ],
+        calls=[
+            SMSCallLogResponse(
+                id=call.id,
+                direction=call.direction.value,
+                from_number=call.from_number,
+                to_number=call.to_number,
+                status=call.status.value,
+                duration_seconds=call.duration_seconds or 0,
+                recording_url=call.recording_url,
+                recording_duration_seconds=call.recording_duration_seconds,
+                notes=call.notes,
+                outcome=call.outcome,
+                started_at=call.started_at,
+                answered_at=call.answered_at,
+                ended_at=call.ended_at,
+            )
+            for call in call_rows
+        ],
     )
 
 
@@ -415,6 +471,7 @@ async def send_to_lead(
         lead_id=lead.id,
         dealership_id=lead.dealership_id,
         media_urls=request.media_urls or None,
+        media_content_types=request.media_content_types or None,
     )
     
     await db.commit()
@@ -467,13 +524,37 @@ async def mark_message_read(
 
 
 _SMS_ALLOWED_MEDIA_TYPES = {
+    # Images
     "image/jpeg",
     "image/png",
     "image/gif",
     "image/webp",
+    # Video
     "video/mp4",
     "video/3gpp",
+    "video/quicktime",
+    "video/webm",
+    # Audio / Voice
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/mp4",
+    "audio/x-m4a",
+    "audio/m4a",
+    "audio/aac",
+    "audio/ogg",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/webm",
+    "audio/amr",
+    "audio/3gpp",
+    # Documents
     "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/plain",
+    "text/csv",
+    "text/vcard",
+    "text/x-vcard",
 }
 _SMS_MAX_MEDIA_SIZE = 5 * 1024 * 1024  # 5MB Twilio MMS limit
 
@@ -489,7 +570,7 @@ async def upload_sms_media(
     file: UploadFile = File(...),
     current_user: User = Depends(deps.get_current_active_user),
 ):
-    """Upload an image, video, or PDF for sending via MMS (max 5MB)."""
+    """Upload an image, video, audio, or document for sending via MMS (max 5MB)."""
     from app.services.azure_storage_service import azure_storage_service
 
     if not azure_storage_service.is_whatsapp_media_configured:
@@ -498,11 +579,11 @@ async def upload_sms_media(
             detail="Media storage not configured",
         )
 
-    content_type = (file.content_type or "application/octet-stream").split(";")[0].strip()
+    content_type = (file.content_type or "application/octet-stream").split(";")[0].strip().lower()
     if content_type not in _SMS_ALLOWED_MEDIA_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported file type ({content_type}). Allowed: JPEG, PNG, GIF, WebP, MP4, PDF.",
+            detail=f"Unsupported file type ({content_type}). Allowed: images, videos, audio (MP3/M4A/OGG/WAV/WebM), PDF, and documents.",
         )
 
     content = await file.read()
@@ -536,6 +617,32 @@ class ReactionResponse(BaseModel):
     reactions: Dict[str, List[str]]
 
 
+_TAPBACK_VERBS = {
+    "👍": "Liked",
+    "❤️": "Loved",
+    "❤": "Loved",
+    "😂": "Laughed at",
+    "👎": "Disliked",
+    "❗": "Emphasized",
+    "❓": "Questioned",
+}
+
+
+def _format_tapback_sms(emoji: str, target_body: str, has_media: bool) -> str:
+    snippet = (target_body or "").strip()
+    if len(snippet) > 80:
+        snippet = snippet[:77] + "..."
+    verb = _TAPBACK_VERBS.get(emoji)
+    if snippet:
+        if verb:
+            return f'{verb} “{snippet}”'
+        return f'Reacted {emoji} to “{snippet}”'
+    noun = "an attachment" if has_media else "a message"
+    if verb:
+        return f"{verb} {noun}"
+    return f"Reacted {emoji} to {noun}"
+
+
 @router.post("/messages/{message_id}/react", response_model=ReactionResponse)
 async def toggle_sms_reaction(
     message_id: UUID,
@@ -543,10 +650,15 @@ async def toggle_sms_reaction(
     current_user: User = Depends(deps.get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Toggle an emoji reaction on an SMS message."""
+    """
+    Toggle an emoji reaction on an SMS message.
+    When adding a reaction, also sends a standard SMS tapback (e.g. Liked “...”)
+    so Google Messages and iPhone render the reaction on the customer's phone.
+    """
     sms_log = await db.get(SMSLog, message_id)
     if not sms_log:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    lead = None
     if sms_log.lead_id:
         lead = await db.get(Lead, sms_log.lead_id)
         if lead and not await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to):
@@ -559,6 +671,7 @@ async def toggle_sms_reaction(
     actor = current_user.full_name or current_user.email
     emoji = request.emoji.strip()
     users = reactions.get(emoji, [])
+    added = False
     if actor in users:
         users = [u for u in users if u != actor]
         if users:
@@ -568,11 +681,31 @@ async def toggle_sms_reaction(
     else:
         users.append(actor)
         reactions[emoji] = users
+        added = True
 
     meta["reactions"] = reactions
     sms_log.meta_data = meta
     flag_modified(sms_log, "meta_data")
     await db.commit()
+
+    # Send standard SMS tapback to the customer's phone when adding a reaction
+    if added:
+        to_phone = (
+            sms_log.from_number
+            if sms_log.direction == MessageDirection.INBOUND
+            else sms_log.to_number
+        )
+        customer = await db.get(Customer, sms_log.customer_id) if sms_log.customer_id else None
+        dealership_id = sms_log.dealership_id or (lead.dealership_id if lead else current_user.dealership_id)
+        effective = await get_effective_twilio_config(db, dealership_id)
+        blocked = sms_consent.send_block_reason(customer, sms_consent.CATEGORY_CONVERSATION, effective.sms_promo_enabled)
+        if to_phone and effective.is_sms_ready() and not blocked:
+            from app.services.sms_service import sms_service
+            tapback_text = _format_tapback_sms(emoji, sms_log.body, bool(sms_log.media_urls))
+            try:
+                await sms_service.send_sms(to_phone, tapback_text, effective)
+            except Exception as exc:
+                logger.warning("Failed to send SMS tapback reaction: %s", exc)
 
     if sms_log.lead_id:
         await ws_manager.broadcast_to_dealership(
@@ -650,8 +783,39 @@ async def mark_customer_opted_out(
 
 # ============ Promotional campaigns ============
 
+class CampaignFiltersSchema(BaseModel):
+    stage_ids: List[str] = Field(default_factory=list)
+    campaigns: List[str] = Field(default_factory=list)
+    sources: List[str] = Field(default_factory=list)
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    has_stips: Optional[bool] = None
+    assigned_to: Optional[str] = None
+    min_down_payment: Optional[float] = None
+    only_active: bool = False
+    exclude_contacted_in_days: Optional[int] = None
+    search: Optional[str] = None
+
+
 class CampaignBodyRequest(BaseModel):
+    name: Optional[str] = Field(None, max_length=160)
     body: str = Field(..., min_length=1, max_length=1000)
+    media_urls: List[str] = Field(default_factory=list)
+    filters: CampaignFiltersSchema = Field(default_factory=CampaignFiltersSchema)
+    save_as_draft: bool = False
+    scheduled_at: Optional[datetime] = None
+
+
+class CampaignAudiencePreviewRequest(BaseModel):
+    filters: CampaignFiltersSchema = Field(default_factory=CampaignFiltersSchema)
+    limit: int = Field(25, ge=1, le=100)
+
+
+class CampaignTestSendRequest(BaseModel):
+    to_number: str = Field(..., min_length=7, max_length=30)
+    body: str = Field(..., min_length=1, max_length=1000)
+    media_urls: List[str] = Field(default_factory=list)
+    sample_first_name: str = "María"
 
 
 class CampaignPreviewResponse(BaseModel):
@@ -661,12 +825,17 @@ class CampaignPreviewResponse(BaseModel):
     characters: int
     blocked_links: List[str]
     audience: int
+    is_mms: bool = False
 
 
 class CampaignResponse(BaseModel):
     id: UUID
+    name: Optional[str] = None
     body: str
+    media_urls: List[str] = Field(default_factory=list)
+    filters: Dict[str, Any] = Field(default_factory=dict)
     status: str
+    scheduled_at: Optional[datetime] = None
     total_recipients: int
     sent_count: int
     failed_count: int
@@ -687,8 +856,12 @@ class CampaignOverviewResponse(BaseModel):
 def _campaign_response(b: SMSBroadcast, names: dict) -> CampaignResponse:
     return CampaignResponse(
         id=b.id,
+        name=b.name,
         body=b.body,
+        media_urls=list(b.media_urls or []) if isinstance(b.media_urls, list) else [],
+        filters=dict(b.filters or {}) if isinstance(b.filters, dict) else {},
         status=b.status,
+        scheduled_at=b.scheduled_at,
         total_recipients=b.total_recipients,
         sent_count=b.sent_count,
         failed_count=b.failed_count,
@@ -733,6 +906,27 @@ async def campaign_overview(
     )
 
 
+@router.get("/campaigns/filter-options")
+async def campaign_filter_options(
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    dealership_id = _company_id(current_user)
+    return await broadcasts.get_filter_options(db, dealership_id)
+
+
+@router.post("/campaigns/audience-preview")
+async def campaign_audience_preview(
+    request: CampaignAudiencePreviewRequest,
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    dealership_id = _company_id(current_user)
+    return await broadcasts.audience_preview(
+        db, dealership_id, request.filters.model_dump(exclude_none=True), limit=request.limit
+    )
+
+
 @router.post("/campaigns/preview", response_model=CampaignPreviewResponse)
 async def preview_campaign(
     request: CampaignBodyRequest,
@@ -740,10 +934,38 @@ async def preview_campaign(
     db: AsyncSession = Depends(get_db),
 ):
     dealership_id = _company_id(current_user)
+    filters_dict = request.filters.model_dump(exclude_none=True)
     return CampaignPreviewResponse(
-        **broadcasts.preview(request.body),
-        audience=await broadcasts.audience_count(db, dealership_id),
+        **broadcasts.preview(request.body, media_urls=request.media_urls),
+        audience=await broadcasts.audience_count(db, dealership_id, filters_dict),
     )
+
+
+@router.post("/campaigns/test-send")
+async def test_send_campaign(
+    request: CampaignTestSendRequest,
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a single test SMS/MMS to your own phone to preview how the offer looks."""
+    dealership_id = _company_id(current_user)
+    effective = await get_effective_twilio_config(db, dealership_id)
+    if not effective.is_sms_ready():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SMS is not set up")
+    bad = sms_consent.disallowed_link_hosts(request.body)
+    if bad:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Only links to {settings.sms_allowed_link_domains} are allowed. Remove: {', '.join(bad)}",
+        )
+    rendered = sms_consent.personalize(broadcasts.build_body(request.body), request.sample_first_name)
+    from app.services.sms_service import sms_service
+    res = await sms_service.send_sms(
+        request.to_number, rendered, effective, media_urls=request.media_urls or None
+    )
+    if not res.get("success"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=res.get("error") or "Test send failed")
+    return {"success": True, "message_sid": res.get("message_sid")}
 
 
 @router.post("/campaigns", response_model=CampaignResponse)
@@ -753,21 +975,99 @@ async def create_campaign(
     db: AsyncSession = Depends(get_db),
 ):
     dealership_id = _company_id(current_user)
-    await _require_promo_enabled(db, dealership_id)
+    if not request.save_as_draft:
+        await _require_promo_enabled(db, dealership_id)
     bad = sms_consent.disallowed_link_hosts(request.body)
     if bad:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Only links to {settings.sms_allowed_link_domains} are allowed. Remove: {', '.join(bad)}",
         )
-    broadcast = await broadcasts.create_broadcast(db, dealership_id, current_user.id, request.body)
+    broadcast = await broadcasts.create_broadcast(
+        db,
+        dealership_id,
+        current_user.id,
+        request.body,
+        name=request.name,
+        media_urls=request.media_urls,
+        filters=request.filters.model_dump(exclude_none=True),
+        save_as_draft=request.save_as_draft,
+        scheduled_at=request.scheduled_at,
+    )
     await db.commit()
     return _campaign_response(broadcast, {current_user.id: current_user.full_name})
 
 
+@router.patch("/campaigns/{campaign_id}", response_model=CampaignResponse)
+async def update_draft_campaign(
+    campaign_id: UUID,
+    request: CampaignBodyRequest,
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    dealership_id = _company_id(current_user)
+    broadcast = await db.get(SMSBroadcast, campaign_id)
+    if broadcast is None or broadcast.dealership_id != dealership_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+    if broadcast.status != "draft":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only saved drafts can be edited")
+    bad = sms_consent.disallowed_link_hosts(request.body)
+    if bad:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Only links to {settings.sms_allowed_link_domains} are allowed. Remove: {', '.join(bad)}",
+        )
+    broadcast.name = (request.name or "").strip()[:160] or None
+    broadcast.body = broadcasts.build_body(request.body)
+    broadcast.media_urls = list(request.media_urls or [])
+    broadcast.filters = request.filters.model_dump(exclude_none=True)
+    broadcast.scheduled_at = request.scheduled_at
+    broadcast.total_recipients = await broadcasts.audience_count(db, dealership_id, broadcast.filters)
+    await db.commit()
+    return _campaign_response(broadcast, {current_user.id: current_user.full_name})
+
+
+@router.post("/campaigns/{campaign_id}/launch", response_model=CampaignResponse)
+async def launch_campaign(
+    campaign_id: UUID,
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    dealership_id = _company_id(current_user)
+    await _require_promo_enabled(db, dealership_id)
+    broadcast = await db.get(SMSBroadcast, campaign_id)
+    if broadcast is None or broadcast.dealership_id != dealership_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+    if broadcast.status != "draft":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Campaign is not a draft")
+    await broadcasts.launch_draft_broadcast(db, broadcast)
+    await db.commit()
+    return _campaign_response(broadcast, {current_user.id: current_user.full_name})
+
+
+@router.delete("/campaigns/{campaign_id}")
+async def delete_campaign(
+    campaign_id: UUID,
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    dealership_id = _company_id(current_user)
+    broadcast = await db.get(SMSBroadcast, campaign_id)
+    if broadcast is None or broadcast.dealership_id != dealership_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+    if broadcast.status not in ("draft", "cancelled"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only saved drafts or cancelled campaigns can be deleted",
+        )
+    await db.delete(broadcast)
+    await db.commit()
+    return {"status": "deleted"}
+
+
 @router.get("/campaigns", response_model=List[CampaignResponse])
 async def list_campaigns(
-    limit: int = Query(30, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=100),
     current_user: User = Depends(deps.require_admin),
     db: AsyncSession = Depends(get_db),
 ):
