@@ -21,6 +21,7 @@ from app.api import deps
 from app.core.timezone import utc_now
 from app.core.access_scope import is_org_wide_role, resolve_report_dealership_id, resolve_user_dealership_id
 from app.db.database import get_db
+from app.core.permissions import TEAM_ROLES
 from app.models.user import User, UserRole
 from app.models.appointment import Appointment, AppointmentStatus
 from app.models.follow_up import FollowUp, FollowUpStatus
@@ -1286,7 +1287,7 @@ async def get_dealership_analysis(
         select(User).where(
             and_(
                 User.dealership_id == resolved_dealership_id,
-                User.role == UserRole.SALESPERSON,
+                User.role.in_(TEAM_ROLES),
                 User.is_active == True,
             )
         )
@@ -2008,7 +2009,7 @@ async def get_daily_activities(
     sp_filters = [
         User.dealership_id == resolved_dealership_id,
         User.is_active == True,
-        User.role.in_([UserRole.SALESPERSON, UserRole.DEALERSHIP_ADMIN, UserRole.DEALERSHIP_OWNER]),
+        User.role.in_(TEAM_ROLES),
     ]
     if user_id:
         sp_filters.append(User.id == user_id)
@@ -2243,7 +2244,7 @@ async def get_team_touch_sales_metrics(
     sp_filters = [
         User.dealership_id == resolved_dealership_id,
         User.is_active == True,  # noqa: E712
-        User.role == UserRole.SALESPERSON,
+        User.role.in_(TEAM_ROLES),
         User.id != current_user.id,
     ]
     sp_result = await db.execute(

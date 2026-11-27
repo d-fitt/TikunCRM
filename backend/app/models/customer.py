@@ -65,6 +65,16 @@ class Customer(Base):
         Numeric(12, 2), nullable=False, default=0, server_default="0"
     )
 
+    # SMS consent (A2P 10DLC). Inquiry and promotional consent are recorded separately;
+    # sms_opted_out wins over both until the customer texts START again.
+    sms_inquiry_consent: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    sms_promo_consent: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    sms_consent_source: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    sms_consent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    sms_promo_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    sms_opted_out: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    sms_opted_out_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Metadata
     meta_data: Mapped[dict] = mapped_column(JSONB, name="meta_data", default=dict, nullable=False)
 

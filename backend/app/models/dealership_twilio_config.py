@@ -48,6 +48,14 @@ class DealershipTwilioConfig(Base):
 
     sms_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sms_from_number: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    # A2P 10DLC Messaging Service that holds the registered campaign; SMS is sent through it.
+    messaging_service_sid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    sms_auto_first_message_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    sms_promo_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     whatsapp_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     whatsapp_from_number: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)

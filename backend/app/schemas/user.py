@@ -23,8 +23,7 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     """Schema for creating a user"""
     password: str = Field(..., min_length=6)
-    role: UserRole = UserRole.SALESPERSON
-    dealership_id: Optional[UUID] = None
+    role: UserRole = UserRole.BDC
     hourly_rate: Optional[Decimal] = Field(None, ge=0, le=10000)
 
 
@@ -145,22 +144,3 @@ class TeamListResponse(BaseModel):
     """Team list with stats"""
     items: list[UserWithStats]
     total: int
-    dealership_id: Optional[UUID] = None
-    dealership_name: Optional[str] = None
-
-
-class DealershipAccessItem(BaseModel):
-    """Dealership assigned to a BDC user."""
-    id: UUID
-    name: str
-
-
-class UserDealershipAccessResponse(BaseModel):
-    """BDC user's assigned dealerships."""
-    user_id: UUID
-    dealerships: list[DealershipAccessItem]
-
-
-class UserDealershipAccessUpdate(BaseModel):
-    """Replace BDC user's dealership access list."""
-    dealership_ids: list[UUID] = Field(default_factory=list)

@@ -55,7 +55,6 @@ import {
     type TeamTouchSalesMetricsResponse,
     type TeamTouchSalesMetricsFilters,
 } from "@/services/reports-service"
-import { DealershipService, type Dealership } from "@/services/dealership-service"
 import { TeamService } from "@/services/team-service"
 import { cn } from "@/lib/utils"
 import { jsPDF } from "jspdf"
@@ -126,10 +125,7 @@ export default function TeamSalesTouchReportPage() {
     const [datePreset, setDatePreset] = React.useState<DatePreset>("this_month")
     const [customDateFrom, setCustomDateFrom] = React.useState<Date | undefined>(undefined)
     const [customDateTo, setCustomDateTo] = React.useState<Date | undefined>(undefined)
-    const [selectedDealershipId, setSelectedDealershipId] = React.useState<string>("")
-
-    const [dealerships, setDealerships] = React.useState<Dealership[]>([])
-    const [loadingDropdowns, setLoadingDropdowns] = React.useState(true)
+    const selectedDealershipId = orgDealershipId || user?.dealership_id || ""
 
     const getDateRange = React.useCallback((): { from: Date | null; to: Date | null } => {
         if (datePreset === "all_time") {
@@ -177,36 +173,8 @@ export default function TeamSalesTouchReportPage() {
         return { from, to }
     }, [datePreset, customDateFrom, customDateTo])
 
-    React.useEffect(() => {
-        async function loadDealerships() {
-            setLoadingDropdowns(true)
-            try {
-                if (isSuperAdmin) {
-                    const ds = await DealershipService.listDealerships({ is_active: true })
-                    setDealerships(ds)
-                    setSelectedDealershipId((prev) => (prev || (ds[0]?.id ?? "")))
-                } else if (isBdc && user?.id) {
-                    const access = await TeamService.getUserDealershipAccess(user.id)
-                    const list = access.dealerships as Dealership[]
-                    setDealerships(list)
-                    const fallback = list[0]?.id || orgDealershipId || ""
-                    setSelectedDealershipId((prev) => prev || fallback)
-                }
-            } catch (err) {
-                console.error("Failed to load dealerships:", err)
-            } finally {
-                setLoadingDropdowns(false)
-            }
-        }
-        if (canView) loadDealerships()
-    }, [isSuperAdmin, isBdc, user?.id, orgDealershipId, canView])
-
     const fetchData = React.useCallback(async () => {
-        const dealershipId = isSuperAdmin
-            ? selectedDealershipId
-            : isBdc
-                ? (selectedDealershipId || orgDealershipId)
-                : (user?.dealership_id || orgDealershipId)
+        const dealershipId = selectedDealershipId
         if (isSuperAdmin && !dealershipId) return
 
         setIsLoading(true)
@@ -232,7 +200,7 @@ export default function TeamSalesTouchReportPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [isSuperAdmin, isBdc, selectedDealershipId, orgDealershipId, user?.dealership_id, getDateRange])
+    }, [isSuperAdmin, isBdc, selectedDealershipId, getDateRange])
 
     React.useEffect(() => {
         if (canView) {
@@ -309,11 +277,6 @@ export default function TeamSalesTouchReportPage() {
             dateRangeText = "Custom Range"
         }
 
-        const dealershipLabel =
-            isSuperAdmin && selectedDealershipId
-                ? dealerships.find((d) => d.id === selectedDealershipId)?.name
-                : undefined
-
         doc.setFontSize(18)
         doc.setFont("helvetica", "bold")
         doc.text("Team Touch & Close Report", margin, y)
@@ -323,10 +286,6 @@ export default function TeamSalesTouchReportPage() {
         doc.setFont("helvetica", "normal")
         doc.text(`Period: ${dateRangeText}`, margin, y)
         y += 5
-        if (dealershipLabel) {
-            doc.text(`Dealership: ${dealershipLabel}`, margin, y)
-            y += 5
-        }
         doc.setFontSize(9)
         doc.setTextColor(100, 100, 100)
         const disclaimer =
@@ -360,7 +319,7 @@ export default function TeamSalesTouchReportPage() {
                       sp.sold_count,
                       `${sp.closing_percentage}%`,
                   ])
-                : [["No active salespeople in this dealership scope", "-", "-", "-"]]
+                : [["No active team members", "-", "-", "-"]]
 
         autoTable(doc, {
             startY: y,
@@ -450,27 +409,6 @@ export default function TeamSalesTouchReportPage() {
                     <CardTitle className="text-base">Filters</CardTitle>
                 </CardHeader>
                 <CardContent className="flex flex-wrap items-end gap-3">
-                    {(isSuperAdmin || isBdc) && dealerships.length > 0 && (
-                        <div className="min-w-[200px] flex-1">
-                            <label className="mb-1.5 block text-sm font-medium">Dealership</label>
-                            <Select
-                                value={selectedDealershipId}
-                                onValueChange={setSelectedDealershipId}
-                                disabled={loadingDropdowns}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select dealership" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {dealerships.map((d) => (
-                                        <SelectItem key={d.id} value={d.id}>
-                                            {d.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                    )}
                     <div className="min-w-[160px]">
                         <label className="mb-1.5 block text-sm font-medium">Date range</label>
                         <Select
@@ -604,7 +542,7 @@ export default function TeamSalesTouchReportPage() {
                                         <TableEmpty
                                             icon={<Users className="h-10 w-10" />}
                                             title="No salespeople in scope"
-                                            description="Add active salesperson accounts or pick another dealership."
+                                            description="No team members had activity in this period."
                                         />
                                     ) : (
                                         data.salespeople.map((sp) => (

@@ -62,7 +62,6 @@ import {
     type DailyActivityFilters,
 } from "@/services/reports-service"
 import { TeamService, type UserBrief } from "@/services/team-service"
-import { DealershipService, type Dealership } from "@/services/dealership-service"
 import { WhatsAppIcon } from "@/components/icons/whatsapp"
 import { ACTIVITY_TYPE_INFO, type ActivityType } from "@/services/activity-service"
 import { LeadService } from "@/services/lead-service"
@@ -700,10 +699,9 @@ export default function TeamActivityPage() {
     const [customDateTo, setCustomDateTo] = React.useState<Date | undefined>(undefined)
     const [selectedUserId, setSelectedUserId] = React.useState<string>("all")
     const [selectedActivityTypes, setSelectedActivityTypes] = React.useState<string[]>([])
-    const [selectedDealershipId, setSelectedDealershipId] = React.useState<string>("")
+    const selectedDealershipId = orgDealershipId || user?.dealership_id || ""
     
     // Dropdown data
-    const [dealerships, setDealerships] = React.useState<Dealership[]>([])
     const [salespersons, setSalespersons] = React.useState<UserBrief[]>([])
     const [loadingDropdowns, setLoadingDropdowns] = React.useState(true)
     
@@ -756,27 +754,8 @@ export default function TeamActivityPage() {
         async function loadDropdowns() {
             setLoadingDropdowns(true)
             try {
-                if (isSuperAdmin) {
-                    const ds = await DealershipService.listDealerships({ is_active: true })
-                    setDealerships(ds)
-                    if (ds.length > 0 && !selectedDealershipId) {
-                        setSelectedDealershipId(ds[0].id)
-                    }
-                } else if (isBdc && user?.id) {
-                    const access = await TeamService.getUserDealershipAccess(user.id)
-                    const list = access.dealerships as Dealership[]
-                    setDealerships(list)
-                    const fallback = list[0]?.id || orgDealershipId || ""
-                    if (fallback) {
-                        setSelectedDealershipId((prev) => prev || fallback)
-                    }
-                }
-                
-                const dealershipId = (isSuperAdmin || isBdc)
-                    ? (selectedDealershipId || orgDealershipId)
-                    : user?.dealership_id
-                if (dealershipId) {
-                    const sp = await TeamService.getSalespersons(dealershipId)
+                if (selectedDealershipId) {
+                    const sp = await TeamService.getSalespersons(selectedDealershipId)
                     setSalespersons(sp)
                 }
             } catch (err) {
@@ -786,15 +765,11 @@ export default function TeamActivityPage() {
             }
         }
         loadDropdowns()
-    }, [isSuperAdmin, isBdc, user?.id, user?.dealership_id, selectedDealershipId, orgDealershipId])
+    }, [selectedDealershipId])
     
     // Fetch data
     const fetchData = React.useCallback(async () => {
-        const dealershipId = isSuperAdmin
-            ? selectedDealershipId
-            : isBdc
-                ? (selectedDealershipId || orgDealershipId)
-                : (user?.dealership_id || orgDealershipId)
+        const dealershipId = selectedDealershipId
         if (!isBdc && !dealershipId) return
         
         setIsLoading(true)
@@ -830,7 +805,7 @@ export default function TeamActivityPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [isSuperAdmin, isBdc, selectedDealershipId, orgDealershipId, user?.dealership_id, getDateRange, selectedUserId, selectedActivityTypes])
+    }, [isSuperAdmin, isBdc, selectedDealershipId, getDateRange, selectedUserId, selectedActivityTypes])
     
     React.useEffect(() => {
         fetchData()
@@ -1047,22 +1022,7 @@ export default function TeamActivityPage() {
                             }}
                         >
                             <div className="grid grid-cols-1 gap-3">
-                                {(isSuperAdmin || isBdc) && dealerships.length > 0 && (
-                                    <FilterField label="Dealership">
-                                        <Select value={selectedDealershipId} onValueChange={setSelectedDealershipId}>
-                                            <SelectTrigger className="w-full h-9">
-                                                <SelectValue placeholder="Select dealership" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {dealerships.map((d) => (
-                                                    <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    </FilterField>
-                                )}
-
-                                <FilterField label="Salesperson">
+                                <FilterField label="Assigned to">
                                     <Select value={selectedUserId} onValueChange={setSelectedUserId}>
                                         <SelectTrigger className="w-full h-9">
                                             <SelectValue placeholder="All salespersons" />
@@ -1177,7 +1137,7 @@ export default function TeamActivityPage() {
                         <Card>
                             <CardContent className="py-8">
                                 <p className="text-center text-muted-foreground">
-                                    No team members found for this dealership.
+                                    No team members found.
                                 </p>
                             </CardContent>
                         </Card>

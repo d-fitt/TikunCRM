@@ -29,6 +29,7 @@ import { useRole } from "@/hooks/use-role"
 import { useDebounce } from "@/hooks/use-debounce"
 import { getCountryAndDial, formatPhoneForDisplay, toE164, DIAL_CODE_OPTIONS } from "@/lib/phone-utils"
 import { cn } from "@/lib/utils"
+import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 
 interface AssignToDealershipModalProps {
     open: boolean
@@ -43,6 +44,7 @@ export function AssignToDealershipModal({
     selectedLeads,
     onSuccess
 }: AssignToDealershipModalProps) {
+    const orgDealershipId = useOrgDealershipId()
     const [dealerships, setDealerships] = React.useState<Dealership[]>([])
     const [selectedDealership, setSelectedDealership] = React.useState<string>("")
     const [isLoading, setIsLoading] = React.useState(false)
@@ -51,12 +53,16 @@ export function AssignToDealershipModal({
     React.useEffect(() => {
         if (open) {
             setIsLoading(true)
-            DealershipService.listDealerships({ is_active: true })
-                .then(setDealerships)
+            const orgId = orgDealershipId
+            ;(orgId ? DealershipService.getDealership(orgId).then((d) => [d]) : Promise.resolve([]))
+                .then((list) => {
+                    setDealerships(list)
+                    if (list.length === 1) setSelectedDealership(list[0].id)
+                })
                 .catch(console.error)
                 .finally(() => setIsLoading(false))
         }
-    }, [open])
+    }, [open, orgDealershipId])
 
     const handleAssign = async () => {
         if (!selectedDealership || selectedLeads.length === 0) return
@@ -89,44 +95,21 @@ export function AssignToDealershipModal({
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
                         <Building2 className="h-5 w-5 text-primary" />
-                        Assign to Dealership
+                        Move to Carvaminos
                     </DialogTitle>
                     <DialogDescription>
                         {selectedLeads.length === 1 
-                            ? `Assign "${selectedLeads[0].customer?.first_name || ""} ${selectedLeads[0].customer?.last_name || ""}" to a dealership.`
-                            : `Assign ${selectedLeads.length} selected leads to a dealership.`
+                            ? `Move "${selectedLeads[0].customer?.first_name || ""} ${selectedLeads[0].customer?.last_name || ""}" out of the unassigned pool into Carvaminos so the team can work it.`
+                            : `Move ${selectedLeads.length} selected leads out of the unassigned pool into Carvaminos so the team can work them.`
                         }
                     </DialogDescription>
                 </DialogHeader>
 
-                <div className="py-4">
-                    <label className="text-sm font-medium mb-2 block">
-                        Select Dealership
-                    </label>
-                    {isLoading ? (
-                        <div className="flex items-center justify-center h-10">
-                            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                        </div>
-                    ) : (
-                        <Select value={selectedDealership} onValueChange={setSelectedDealership}>
-                            <SelectTrigger>
-                                <SelectValue placeholder="Choose a dealership..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {dealerships.map((dealership) => (
-                                    <SelectItem key={dealership.id} value={dealership.id}>
-                                        <div className="flex items-center gap-2">
-                                            <div className="flex h-6 w-6 items-center justify-center rounded bg-primary/10 text-primary text-xs font-bold">
-                                                {dealership.name.charAt(0)}
-                                            </div>
-                                            {dealership.name}
-                                        </div>
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    )}
-                </div>
+                {isLoading && (
+                    <div className="flex items-center justify-center h-10">
+                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    </div>
+                )}
 
                 <DialogFooter>
                     <Button 

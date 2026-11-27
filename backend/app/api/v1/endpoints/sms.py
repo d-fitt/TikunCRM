@@ -20,8 +20,13 @@ from app.db.database import get_db
 from app.models.user import User
 from app.models.sms_log import SMSLog, MessageDirection
 from app.models.lead import Lead
+from app.models.customer import Customer
+from app.models.sms_broadcast import SMSBroadcast
+from app.services import sms_consent_service as sms_consent
+from app.services import sms_broadcast_service as broadcasts
 from app.services.sms_conversation_service import SMSConversationService, get_sms_conversation_service
 from app.core.websocket_manager import ws_manager
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +39,8 @@ class SMSConfigResponse(BaseModel):
     """SMS configuration status"""
     sms_enabled: bool
     phone_number: Optional[str]
+    promo_enabled: bool = False
+    auto_first_message_enabled: bool = False
 
 
 class SendSMSRequest(BaseModel):
@@ -64,9 +71,23 @@ class SMSMessageResponse(BaseModel):
     created_at: datetime
     sent_at: Optional[datetime]
     delivered_at: Optional[datetime]
+    category: Optional[str] = None
+    error_message: Optional[str] = None
     
     class Config:
         from_attributes = True
+
+
+class SMSConsentStatus(BaseModel):
+    """What the customer agreed to and whether an agent may text them"""
+    inquiry_consent: Optional[bool]
+    promo_consent: Optional[bool]
+    source: Optional[str]
+    consent_at: Optional[datetime]
+    opted_out: bool
+    opted_out_at: Optional[datetime]
+    can_text: bool
+    block_reason: Optional[str]
 
 
 class ConversationResponse(BaseModel):
@@ -75,6 +96,7 @@ class ConversationResponse(BaseModel):
     lead_name: str
     lead_phone: Optional[str]
     messages: List[SMSMessageResponse]
+    consent: Optional[SMSConsentStatus] = None
 
 
 class ConversationListItem(BaseModel):
@@ -97,6 +119,22 @@ class UnreadCountResponse(BaseModel):
     count: int
 
 
+def _consent_status(customer: Optional[Customer]) -> Optional[SMSConsentStatus]:
+    if customer is None:
+        return None
+    reason = sms_consent.send_block_reason(customer, sms_consent.CATEGORY_CONVERSATION)
+    return SMSConsentStatus(
+        inquiry_consent=customer.sms_inquiry_consent,
+        promo_consent=customer.sms_promo_consent,
+        source=customer.sms_consent_source,
+        consent_at=customer.sms_consent_at,
+        opted_out=bool(customer.sms_opted_out),
+        opted_out_at=customer.sms_opted_out_at,
+        can_text=reason is None,
+        block_reason=reason,
+    )
+
+
 # ============ Endpoints ============
 
 @router.get("/config", response_model=SMSConfigResponse)
@@ -109,6 +147,8 @@ async def get_sms_config(
     return SMSConfigResponse(
         sms_enabled=effective.is_sms_ready(),
         phone_number=effective.sms_from_number if effective.is_sms_ready() else None,
+        promo_enabled=effective.is_sms_ready() and effective.sms_promo_enabled,
+        auto_first_message_enabled=effective.is_sms_ready() and effective.sms_auto_first_message_enabled,
     )
 
 
@@ -252,6 +292,7 @@ async def get_conversation(
         lead_id=lead.id,
         lead_name=f"{lead.first_name} {lead.last_name or ''}".strip(),
         lead_phone=lead.phone,
+        consent=_consent_status(lead.customer),
         messages=[
             SMSMessageResponse(
                 id=msg.id,
@@ -265,7 +306,9 @@ async def get_conversation(
                 is_read=msg.is_read,
                 created_at=msg.created_at,
                 sent_at=msg.sent_at,
-                delivered_at=msg.delivered_at
+                delivered_at=msg.delivered_at,
+                category=msg.category,
+                error_message=msg.error_message,
             )
             for msg in messages
         ]
@@ -389,3 +432,189 @@ async def get_unread_count(
     )
     
     return UnreadCountResponse(count=count)
+
+
+@router.post("/conversations/{lead_id}/opt-out", response_model=SMSConsentStatus)
+async def mark_customer_opted_out(
+    lead_id: UUID,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stop all texts to this customer (e.g. they asked by phone). Only the customer can undo it by texting START."""
+    lead = (
+        await db.execute(select(Lead).options(selectinload(Lead.customer)).where(Lead.id == lead_id))
+    ).scalar_one_or_none()
+    if not lead or not lead.customer:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
+    if not await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    sms_consent.mark_opted_out(lead.customer)
+    lead.customer.sms_consent_source = "agent_marked_opt_out"
+    from app.services.activity import ActivityService
+    from app.models.activity import ActivityType
+    await ActivityService.log_activity(
+        db=db,
+        activity_type=ActivityType.LEAD_UPDATED,
+        description="Marked as do not text",
+        user_id=current_user.id,
+        lead_id=lead.id,
+        dealership_id=lead.dealership_id,
+        meta_data={"sms_opted_out": True},
+    )
+    await db.commit()
+    return _consent_status(lead.customer)
+
+
+# ============ Promotional campaigns ============
+
+class CampaignBodyRequest(BaseModel):
+    body: str = Field(..., min_length=1, max_length=1000)
+
+
+class CampaignPreviewResponse(BaseModel):
+    final_body: str
+    sample: str
+    segments: int
+    characters: int
+    blocked_links: List[str]
+    audience: int
+
+
+class CampaignResponse(BaseModel):
+    id: UUID
+    body: str
+    status: str
+    total_recipients: int
+    sent_count: int
+    failed_count: int
+    skipped_count: int
+    created_at: datetime
+    completed_at: Optional[datetime]
+    created_by_name: Optional[str] = None
+
+
+class CampaignOverviewResponse(BaseModel):
+    promo_enabled: bool
+    audience: int
+    in_send_window: bool
+    send_window: str
+    timezone: str
+
+
+def _campaign_response(b: SMSBroadcast, names: dict) -> CampaignResponse:
+    return CampaignResponse(
+        id=b.id,
+        body=b.body,
+        status=b.status,
+        total_recipients=b.total_recipients,
+        sent_count=b.sent_count,
+        failed_count=b.failed_count,
+        skipped_count=b.skipped_count,
+        created_at=b.created_at,
+        completed_at=b.completed_at,
+        created_by_name=names.get(b.created_by),
+    )
+
+
+def _company_id(user: User) -> UUID:
+    if not user.dealership_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Your account isn't linked to the company")
+    return user.dealership_id
+
+
+async def _require_promo_enabled(db: AsyncSession, dealership_id: UUID) -> None:
+    effective = await get_effective_twilio_config(db, dealership_id)
+    if not effective.is_sms_ready():
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="SMS is not set up")
+    if not effective.sms_promo_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Promotional texts are turned off. A Super Admin can turn them on in Settings > Twilio.",
+        )
+
+
+@router.get("/campaigns/overview", response_model=CampaignOverviewResponse)
+async def campaign_overview(
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    dealership_id = _company_id(current_user)
+    effective = await get_effective_twilio_config(db, dealership_id)
+    tz = await broadcasts.dealership_timezone(db, dealership_id)
+    return CampaignOverviewResponse(
+        promo_enabled=effective.is_sms_ready() and effective.sms_promo_enabled,
+        audience=await broadcasts.audience_count(db, dealership_id),
+        in_send_window=broadcasts.in_send_window(tz),
+        send_window=f"{broadcasts.SEND_WINDOW_START_HOUR}:00 AM - {broadcasts.SEND_WINDOW_END_HOUR - 12}:00 PM",
+        timezone=str(tz),
+    )
+
+
+@router.post("/campaigns/preview", response_model=CampaignPreviewResponse)
+async def preview_campaign(
+    request: CampaignBodyRequest,
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    dealership_id = _company_id(current_user)
+    return CampaignPreviewResponse(
+        **broadcasts.preview(request.body),
+        audience=await broadcasts.audience_count(db, dealership_id),
+    )
+
+
+@router.post("/campaigns", response_model=CampaignResponse)
+async def create_campaign(
+    request: CampaignBodyRequest,
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    dealership_id = _company_id(current_user)
+    await _require_promo_enabled(db, dealership_id)
+    bad = sms_consent.disallowed_link_hosts(request.body)
+    if bad:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Only links to {settings.sms_allowed_link_domains} are allowed. Remove: {', '.join(bad)}",
+        )
+    broadcast = await broadcasts.create_broadcast(db, dealership_id, current_user.id, request.body)
+    await db.commit()
+    return _campaign_response(broadcast, {current_user.id: current_user.full_name})
+
+
+@router.get("/campaigns", response_model=List[CampaignResponse])
+async def list_campaigns(
+    limit: int = Query(30, ge=1, le=100),
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    dealership_id = _company_id(current_user)
+    rows = (
+        await db.execute(
+            select(SMSBroadcast)
+            .where(SMSBroadcast.dealership_id == dealership_id)
+            .order_by(SMSBroadcast.created_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    creator_ids = {b.created_by for b in rows if b.created_by}
+    names = {}
+    if creator_ids:
+        users = (await db.execute(select(User).where(User.id.in_(creator_ids)))).scalars().all()
+        names = {u.id: u.full_name for u in users}
+    return [_campaign_response(b, names) for b in rows]
+
+
+@router.post("/campaigns/{campaign_id}/cancel", response_model=CampaignResponse)
+async def cancel_campaign(
+    campaign_id: UUID,
+    current_user: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    dealership_id = _company_id(current_user)
+    broadcast = await db.get(SMSBroadcast, campaign_id)
+    if broadcast is None or broadcast.dealership_id != dealership_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+    await broadcasts.cancel_broadcast(db, broadcast)
+    await db.commit()
+    return _campaign_response(broadcast, {})

@@ -8,7 +8,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.permissions import Permission, UserRole, has_permission
+from app.core.permissions import Permission, UserRole, has_permission, is_archived_role
 from app.core.security import decode_token, verify_token, verify_config_unlock_token
 from app.db.database import get_db
 from app.models.partner_portal_user import PartnerPortalUser
@@ -56,7 +56,7 @@ async def get_current_active_user(
     current_user: User = Depends(get_current_user),
 ) -> User:
     """Ensure user is active"""
-    if not current_user.is_active:
+    if not current_user.is_active or is_archived_role(current_user.role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Inactive user",

@@ -24,6 +24,9 @@ class DealershipTwilioConfigResponse(BaseModel):
     twilio_api_key_secret: Optional[str] = None
     voice_caller_id_number: Optional[str] = None
     ai_outbound_enabled: bool = False
+    messaging_service_sid: Optional[str] = None
+    sms_auto_first_message_enabled: bool = False
+    sms_promo_enabled: bool = False
 
 
 class DealershipTwilioConfigUpdate(BaseModel):
@@ -42,4 +45,11 @@ class DealershipTwilioConfigUpdate(BaseModel):
     voice_caller_id_number: Optional[str] = None
     ai_outbound_enabled: Optional[bool] = Field(
         None, description="Enable AI outbound calling for new leads"
+    )
+    messaging_service_sid: Optional[str] = None
+    sms_auto_first_message_enabled: Optional[bool] = Field(
+        None, description="Text new consented leads automatically"
+    )
+    sms_promo_enabled: Optional[bool] = Field(
+        None, description="Allow promotional SMS broadcasts"
     )

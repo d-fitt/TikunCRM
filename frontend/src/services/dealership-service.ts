@@ -25,16 +25,8 @@ export interface Dealership {
     leads_count?: number;
 }
 
-export interface OwnerData {
-    first_name: string;
-    last_name: string;
-    email: string;
-    phone?: string;
-    password: string;
-}
-
-export interface CreateDealershipData {
-    name: string;
+export interface UpdateDealershipData {
+    name?: string;
     address?: string;
     city?: string;
     state?: string;
@@ -43,11 +35,6 @@ export interface CreateDealershipData {
     phone?: string;
     email?: string;
     website?: string;
-    owner?: OwnerData;
-}
-
-export interface UpdateDealershipData extends Partial<CreateDealershipData> {
-    is_active?: boolean;
     config?: Record<string, unknown>;
     working_hours?: Record<string, unknown>;
     lead_assignment_rules?: Record<string, unknown>;
@@ -55,21 +42,9 @@ export interface UpdateDealershipData extends Partial<CreateDealershipData> {
 }
 
 export const DealershipService = {
-    // List all dealerships (Super Admin only)
-    async listDealerships(params: { is_active?: boolean } = {}): Promise<Dealership[]> {
-        const response = await apiClient.get(`${DEALERSHIPS_PREFIX}/`, { params });
-        return response.data;
-    },
-
     // Get single dealership
     async getDealership(id: string): Promise<Dealership> {
         const response = await apiClient.get(`${DEALERSHIPS_PREFIX}/${id}`);
-        return response.data;
-    },
-
-    // Create new dealership (Super Admin only)
-    async createDealership(data: CreateDealershipData): Promise<Dealership> {
-        const response = await apiClient.post(`${DEALERSHIPS_PREFIX}/`, data);
         return response.data;
     },
 
@@ -79,24 +54,10 @@ export const DealershipService = {
         return response.data;
     },
 
-    // Toggle dealership active status (Super Admin only)
-    async toggleDealershipStatus(id: string, isActive: boolean): Promise<Dealership> {
-        const response = await apiClient.patch(`${DEALERSHIPS_PREFIX}/${id}/status`, null, {
-            params: { is_active: isActive }
-        });
-        return response.data;
-    },
-
     // Partial update dealership
     async patchDealership(id: string, data: Partial<UpdateDealershipData>): Promise<Dealership> {
         const response = await apiClient.patch(`${DEALERSHIPS_PREFIX}/${id}`, data);
         return response.data;
-    },
-
-    // Get dealership for dropdown selection
-    async getDealershipsForSelect(): Promise<Array<{ id: string; name: string }>> {
-        const dealerships = await this.listDealerships({ is_active: true });
-        return dealerships.map(d => ({ id: d.id, name: d.name }));
     },
 
     async getTwilioConfig(dealershipId: string): Promise<DealershipTwilioConfig> {
@@ -130,6 +91,9 @@ export interface DealershipTwilioConfig {
     /** Present after configuration unlock; decrypted server-side */
     twilio_api_key_secret?: string | null;
     voice_caller_id_number?: string | null;
+    messaging_service_sid?: string | null;
+    sms_auto_first_message_enabled: boolean;
+    sms_promo_enabled: boolean;
 }
 
 export interface DealershipTwilioConfigUpdate {
@@ -144,4 +108,7 @@ export interface DealershipTwilioConfigUpdate {
     twilio_api_key_sid?: string | null;
     twilio_api_key_secret?: string | null;
     voice_caller_id_number?: string | null;
+    messaging_service_sid?: string | null;
+    sms_auto_first_message_enabled?: boolean;
+    sms_promo_enabled?: boolean;
 }

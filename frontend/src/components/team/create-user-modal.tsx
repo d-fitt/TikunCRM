@@ -20,122 +20,62 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { UserService } from "@/services/user-service"
-import { TeamService } from "@/services/team-service"
 import { getApiErrorMessage } from "@/lib/api-errors"
-import { DealershipService } from "@/services/dealership-service"
 import { useRole } from "@/hooks/use-role"
-import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 
 interface CreateUserModalProps {
     isOpen: boolean
     onClose: () => void
     onSuccess?: () => void
-    defaultDealershipId?: string
 }
 
-const ROLE_OPTIONS = [
-    { value: "salesperson", label: "Salesperson" },
-    { value: "dealership_admin", label: "Manager" },
+const MANAGER_ROLE_OPTIONS = [
+    { value: "bdc", label: "BDC Agent" },
 ]
 
 const SUPER_ADMIN_ROLE_OPTIONS = [
-    ...ROLE_OPTIONS,
     { value: "bdc", label: "BDC Agent" },
+    { value: "dealership_admin", label: "Manager" },
     { value: "super_admin", label: "Super Admin" },
 ]
 
-export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipId }: CreateUserModalProps) {
+const EMPTY_FORM = {
+    email: "",
+    password: "",
+    first_name: "",
+    last_name: "",
+    phone: "",
+    role: "bdc",
+    hourly_rate: "",
+}
+
+export function CreateUserModal({ isOpen, onClose, onSuccess }: CreateUserModalProps) {
     const { isSuperAdmin } = useRole()
-    const orgDealershipId = useOrgDealershipId()
-    const resolvedDefaultDealershipId = defaultDealershipId || orgDealershipId || ""
     const [isLoading, setIsLoading] = React.useState(false)
     const [error, setError] = React.useState("")
-    const [dealerships, setDealerships] = React.useState<any[]>([])
     const [showPassword, setShowPassword] = React.useState(false)
-    const [bdcDealershipIds, setBdcDealershipIds] = React.useState<string[]>([])
-    
-    const [formData, setFormData] = React.useState({
-        email: "",
-        password: "",
-        first_name: "",
-        last_name: "",
-        phone: "",
-        role: "salesperson",
-        dealership_id: resolvedDefaultDealershipId,
-        hourly_rate: "",
-    })
-
-    React.useEffect(() => {
-        if (isOpen && isSuperAdmin) {
-            loadDealerships()
-        }
-    }, [isOpen, isSuperAdmin])
-
-    React.useEffect(() => {
-        if (resolvedDefaultDealershipId) {
-            setFormData(prev => ({ ...prev, dealership_id: resolvedDefaultDealershipId }))
-        }
-    }, [resolvedDefaultDealershipId])
-
-    const loadDealerships = async () => {
-        try {
-            const data = await DealershipService.listDealerships()
-            setDealerships(data)
-        } catch (err) {
-            console.error("Failed to load dealerships:", err)
-        }
-    }
+    const [formData, setFormData] = React.useState(EMPTY_FORM)
 
     const resetForm = () => {
-        setFormData({
-            email: "",
-            password: "",
-            first_name: "",
-            last_name: "",
-            phone: "",
-            role: "salesperson",
-            dealership_id: resolvedDefaultDealershipId,
-            hourly_rate: "",
-        })
-        setBdcDealershipIds([])
+        setFormData(EMPTY_FORM)
         setError("")
-    }
-
-    const toggleBdcDealership = (id: string) => {
-        setBdcDealershipIds((prev) =>
-            prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-        )
     }
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
-        
+
         if (!formData.email.trim()) {
             setError("Email is required")
             return
         }
-        
+
         if (!formData.password || formData.password.length < 6) {
             setError("Password must be at least 6 characters")
             return
         }
-        
+
         if (!formData.first_name.trim()) {
             setError("First name is required")
-            return
-        }
-
-        if (formData.role === "bdc" && bdcDealershipIds.length === 0) {
-            setError("Select at least one dealership for the BDC agent")
-            return
-        }
-
-        if (
-            formData.role !== "super_admin" &&
-            formData.role !== "bdc" &&
-            !formData.dealership_id
-        ) {
-            setError("Please select a dealership")
             return
         }
 
@@ -143,23 +83,14 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
         setError("")
 
         try {
-            const payload: Record<string, unknown> = {
-                ...formData,
-                dealership_id:
-                    formData.role === "super_admin" || formData.role === "bdc"
-                        ? null
-                        : formData.dealership_id,
-            }
+            const payload: Record<string, unknown> = { ...formData }
             if (formData.role === "bdc") {
                 const rate = Number(formData.hourly_rate)
                 payload.hourly_rate = Number.isFinite(rate) && rate > 0 ? rate : null
             } else {
                 delete payload.hourly_rate
             }
-            const created = await UserService.createUser(payload)
-            if (formData.role === "bdc") {
-                await TeamService.setUserDealershipAccess(created.id, bdcDealershipIds)
-            }
+            await UserService.createUser(payload)
             resetForm()
             onSuccess?.()
             onClose()
@@ -176,7 +107,7 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
         onClose()
     }
 
-    const roleOptions = isSuperAdmin ? SUPER_ADMIN_ROLE_OPTIONS : ROLE_OPTIONS
+    const roleOptions = isSuperAdmin ? SUPER_ADMIN_ROLE_OPTIONS : MANAGER_ROLE_OPTIONS
 
     return (
         <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
@@ -219,7 +150,7 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
                             <Input
                                 id="email"
                                 type="email"
-                                placeholder="john@dealership.com"
+                                placeholder="john@carvaminos.com"
                                 className="pl-9"
                                 value={formData.email}
                                 onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
@@ -270,8 +201,8 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
                         <Label htmlFor="role">Role *</Label>
                         <div className="relative">
                             <Shield className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground z-10" />
-                            <Select 
-                                value={formData.role} 
+                            <Select
+                                value={formData.role}
                                 onValueChange={(v) => setFormData(prev => ({ ...prev, role: v }))}
                             >
                                 <SelectTrigger className="pl-9">
@@ -303,56 +234,6 @@ export function CreateUserModal({ isOpen, onClose, onSuccess, defaultDealershipI
                             <p className="text-xs text-muted-foreground">
                                 Used for Time &amp; Pay. You can also set this later from Team or Time &amp; Pay.
                             </p>
-                        </div>
-                    )}
-
-                    {formData.role === "bdc" && isSuperAdmin && (
-                        <div className="space-y-2">
-                            <Label>Assigned dealerships *</Label>
-                            <div className="max-h-40 overflow-y-auto rounded-md border p-3 space-y-2">
-                                {dealerships.map((d) => (
-                                    <label
-                                        key={d.id}
-                                        className="flex items-center gap-2 text-sm cursor-pointer"
-                                    >
-                                        <input
-                                            type="checkbox"
-                                            checked={bdcDealershipIds.includes(d.id)}
-                                            onChange={() => toggleBdcDealership(d.id)}
-                                        />
-                                        {d.name}
-                                    </label>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {formData.role !== "super_admin" && formData.role !== "bdc" && (
-                        <div className="space-y-2">
-                            <Label htmlFor="dealership">Dealership *</Label>
-                            {isSuperAdmin ? (
-                                <Select 
-                                    value={formData.dealership_id} 
-                                    onValueChange={(v) => setFormData(prev => ({ ...prev, dealership_id: v }))}
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="Select dealership" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {dealerships.map((d) => (
-                                            <SelectItem key={d.id} value={d.id}>
-                                                {d.name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            ) : (
-                                <Input
-                                    disabled
-                                    value="Current Dealership"
-                                    className="bg-muted"
-                                />
-                            )}
                         </div>
                     )}
 

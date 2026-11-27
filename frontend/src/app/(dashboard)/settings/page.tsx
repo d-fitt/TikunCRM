@@ -67,8 +67,8 @@ const settingsSections: SettingSection[] = [
         icon: Palette,
     },
     {
-        title: "Dealership Settings",
-        description: "Manage your dealership configuration",
+        title: "Company Settings",
+        description: "Timezone and Twilio phone, SMS and WhatsApp setup",
         href: "/settings/dealership",
         icon: Building2,
         adminOnly: true,

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, User, Mail, Phone, Target, Building2 } from "lucide-react"
+import { Loader2, User, Mail, Phone, Target } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -76,7 +76,6 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
     const [error, setError] = React.useState("")
     const [dialCode, setDialCode] = React.useState("+1")
     const [countryCode, setCountryCode] = React.useState("US")
-    const [orgDealershipName, setOrgDealershipName] = React.useState("Carvaminos")
 
     const [formData, setFormData] = React.useState({
         first_name: "",
@@ -108,7 +107,6 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                 const { countryCode: code, dialCode: dial } = getCountryAndDial(d.country ?? undefined)
                 setCountryCode(code)
                 setDialCode(dial)
-                if (d.name) setOrgDealershipName(d.name)
             })
             .catch(() => {
                 setDialCode("+1")
@@ -151,7 +149,7 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
         }
 
         if (isBdc && !orgDealershipId) {
-            setError("Organization dealership is not available. Please refresh and try again.")
+            setError("Your account is not linked to Carvaminos yet. Please refresh and try again.")
             return
         }
 
@@ -223,19 +221,6 @@ export function CreateLeadModal({ isOpen, onClose, onSuccess }: CreateLeadModalP
                 </DialogHeader>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
-                    {isBdc && (
-                        <div className="space-y-2">
-                            <Label>Dealership</Label>
-                            <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
-                                <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-                                <span className="font-medium">{orgDealershipName}</span>
-                            </div>
-                            <p className="text-xs text-muted-foreground">
-                                Manual leads are added to Carvaminos by default.
-                            </p>
-                        </div>
-                    )}
-
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
                             <Label htmlFor="first_name">First Name *</Label>

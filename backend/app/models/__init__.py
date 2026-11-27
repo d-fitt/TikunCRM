@@ -21,6 +21,7 @@ from app.models.appointment import Appointment, AppointmentType, AppointmentStat
 from app.models.fcm_token import FCMToken
 from app.models.call_log import CallLog, CallDirection, CallStatus
 from app.models.sms_log import SMSLog, MessageDirection, SMSStatus
+from app.models.sms_broadcast import SMSBroadcast, SMSBroadcastRecipient
 from app.models.whatsapp_log import WhatsAppLog, WhatsAppDirection, WhatsAppStatus
 from app.models.whatsapp_template import WhatsAppTemplate
 from app.models.showroom_visit import ShowroomVisit, ShowroomOutcome
@@ -104,6 +105,8 @@ __all__ = [
     "CallDirection",
     "CallStatus",
     "SMSLog",
+    "SMSBroadcast",
+    "SMSBroadcastRecipient",
     "MessageDirection",
     "SMSStatus",
     "WhatsAppLog",

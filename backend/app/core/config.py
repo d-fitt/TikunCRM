@@ -176,6 +176,15 @@ class Settings(BaseSettings):
     twilio_auth_token: str = ""
     twilio_phone_number: str = ""  # The Twilio phone number to send from (e.g., +1234567890)
     sms_notifications_enabled: bool = False
+    # A2P 10DLC Messaging Service (MG...) holding the registered campaign
+    twilio_messaging_service_sid: str = ""
+    # Reject Twilio webhooks whose X-Twilio-Signature does not match
+    twilio_validate_webhooks: bool = True
+    # Brand name used in automatic and compliance texts (must match the A2P campaign)
+    sms_brand_name: str = "Carvamonos"
+    sms_help_url: str = "carvamonos.com/contact"
+    # Domains allowed in links inside promotional texts
+    sms_allowed_link_domains: str = "carvamonos.com"
     
     # Twilio WhatsApp (same account; number is often different from SMS, e.g. sandbox)
     twilio_whatsapp_number: str = ""  # e.g. +14155238886 for sandbox

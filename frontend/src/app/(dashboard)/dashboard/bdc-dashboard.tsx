@@ -38,8 +38,6 @@ import { useStatsRefresh, useShowroomUpdates, useWebSocketEvent } from "@/hooks/
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { useBdcDealership } from "@/contexts/bdc-dealership-context"
-import { BdcDealershipSwitcher } from "@/components/layout/bdc-dealership-switcher"
-
 function getScopedMetrics(stats: BdcStats, selectedDealershipId: string | null) {
     if (!selectedDealershipId) {
         return {
@@ -121,7 +119,7 @@ function DealershipRow({ d, maxUnassigned }: { d: BdcDealershipBreakdown; maxUna
 }
 
 export function BdcDashboard() {
-    const { selectedDealershipId, selectedDealershipName } = useBdcDealership()
+    const { selectedDealershipId } = useBdcDealership()
     const [stats, setStats] = React.useState<BdcStats | null>(null)
     const [freshLeadsTop, setFreshLeadsTop] = React.useState<Lead[]>([])
     const [todayAppointments, setTodayAppointments] = React.useState<Appointment[]>([])
@@ -229,13 +227,10 @@ export function BdcDashboard() {
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">BDC Dashboard</h1>
                     <p className="text-muted-foreground">
-                        {selectedDealershipId
-                            ? `Managing ${selectedDealershipName} — assign leads and track performance.`
-                            : `Manage leads across ${stats.dealership_count} dealerships and track performance.`}
+                        Assign leads and track performance.
                     </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                    <BdcDealershipSwitcher className="min-w-[180px]" />
                     {scoped.unassigned > 0 && (
                         <Link href={unassignedHref}>
                             <Button variant="outline" className="border-amber-500 text-amber-600 hover:bg-amber-50">
@@ -264,8 +259,7 @@ export function BdcDashboard() {
                                 {showroomInShowroom}
                             </p>
                             <p className="text-sm text-teal-600 dark:text-teal-400">
-                                Customers in Dealership Right Now
-                                {selectedDealershipId ? ` · ${selectedDealershipName}` : ""}
+                                Customers in Showroom Right Now
                             </p>
                         </div>
                         <div className="text-right mr-4">

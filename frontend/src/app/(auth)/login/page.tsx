@@ -8,7 +8,6 @@ import { Mail, Lock, Eye, EyeOff, UserX } from "lucide-react"
 
 import { useAuthStore } from "@/stores/auth-store"
 import { registerFCMToken } from "@/hooks/use-fcm-notifications"
-import { AuthService, DealershipOption, dealershipLoginKey } from "@/services/auth-service"
 
 type Step = "email" | "password"
 
@@ -23,8 +22,6 @@ export default function LoginPage() {
     const [password, setPassword] = React.useState("")
     const [showPassword, setShowPassword] = React.useState(false)
     const [accountDeactivated, setAccountDeactivated] = React.useState(false)
-    const [dealerships, setDealerships] = React.useState<DealershipOption[]>([])
-    const [selectedDealership, setSelectedDealership] = React.useState<DealershipOption | null>(null)
 
     const showDeactivatedScreen = accountDeactivated || searchParams.get("deactivated") === "1"
 
@@ -35,34 +32,14 @@ export default function LoginPage() {
         router.replace("/login", { scroll: false })
     }
 
-    async function onEmailSubmit(event: React.SyntheticEvent) {
+    function onEmailSubmit(event: React.SyntheticEvent) {
         event.preventDefault()
-        setIsLoading(true)
         setError(null)
-
-        try {
-            const options = await AuthService.lookupDealerships(email)
-            if (options.length === 0) {
-                setError("No account found for this email.")
-                return
-            }
-            setDealerships(options)
-            setSelectedDealership(options[0])
-            setStep("password")
-        } catch (err: any) {
-            console.error("Dealership lookup failed:", err)
-            setError(err?.response?.data?.detail || "Could not look up your account. Please try again.")
-        } finally {
-            setIsLoading(false)
-        }
+        setStep("password")
     }
 
     async function onPasswordSubmit(event: React.SyntheticEvent) {
         event.preventDefault()
-        if (!selectedDealership) {
-            setStep("email")
-            return
-        }
         setIsLoading(true)
         setError(null)
         setAccountDeactivated(false)
@@ -71,8 +48,6 @@ export default function LoginPage() {
             const formBody = new URLSearchParams()
             formBody.append('username', email)
             formBody.append('password', password)
-            // Empty string when super admin (no dealership UUID)
-            formBody.append('dealership_id', dealershipLoginKey(selectedDealership))
 
             const apiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.tikuncrm.com/api/v1";
             const response = await fetch(`${apiUrl}/auth/login`, {
@@ -217,7 +192,7 @@ export default function LoginPage() {
                                     </form>
                                 )}
 
-                                {step === "password" && selectedDealership && (
+                                {step === "password" && (
                                     <form onSubmit={onPasswordSubmit}>
                                         <div className="grid gap-4">
                                             <div className="rounded-md border border-input bg-muted/30 px-3 py-2 text-sm">

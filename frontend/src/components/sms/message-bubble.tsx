@@ -9,6 +9,12 @@ interface MessageBubbleProps {
   message: SMSMessage;
 }
 
+const CATEGORY_LABELS: Record<string, string> = {
+  auto_first: "Automatic",
+  promotional: "Campaign",
+  compliance: "Automatic",
+};
+
 export function MessageBubble({ message }: MessageBubbleProps) {
   const isOutbound = message.direction === "outbound";
   
@@ -44,8 +50,18 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             : "bg-muted rounded-bl-sm"
         )}
       >
+        {isOutbound && message.category && CATEGORY_LABELS[message.category] && (
+          <p className="text-[10px] font-medium uppercase tracking-wide text-primary-foreground/70 mb-0.5">
+            {CATEGORY_LABELS[message.category]}
+          </p>
+        )}
         {/* Message body */}
         <p className="text-sm whitespace-pre-wrap break-words">{message.body}</p>
+        {isOutbound && (message.status === "failed" || message.status === "undelivered") && (
+          <p className="text-[11px] mt-1 text-primary-foreground/90">
+            Not delivered{message.error_message ? `: ${message.error_message}` : ""}
+          </p>
+        )}
         
         {/* Timestamp and status */}
         <div

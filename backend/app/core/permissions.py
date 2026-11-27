@@ -1,26 +1,49 @@
 """
 Role-Based Access Control (RBAC) System
 
-Single-org Carvaminos model:
+Single-company Carvaminos model:
   - SUPER_ADMIN: Full system access (settings, users, partner stores, integrations)
   - DEALERSHIP_ADMIN: Manager — all leads, team management, reports
-  - SALESPERSON: Own assigned leads, communications
-  - BDC: Multi-queue lead workers (retained for pipeline flexibility)
+  - BDC: Lead workers
 
-Legacy roles kept in enum for DB backward compatibility:
-  - DEALERSHIP_OWNER: mapped to same permissions as DEALERSHIP_ADMIN
+Archived roles (kept in the DB enum so former staff keep their history):
+  - SALESPERSON, DEALERSHIP_OWNER: cannot log in, cannot be created,
+    hidden from user lists and pickers.
 """
 from enum import Enum
-from typing import Set
+from typing import FrozenSet, Set
 
 
 class UserRole(str, Enum):
     """User roles in the system"""
     SUPER_ADMIN = "super_admin"
-    DEALERSHIP_OWNER = "dealership_owner"  # Legacy — treated as DEALERSHIP_ADMIN
-    DEALERSHIP_ADMIN = "dealership_admin"  # Manager role
-    SALESPERSON = "salesperson"
+    DEALERSHIP_OWNER = "dealership_owner"  # Archived
+    DEALERSHIP_ADMIN = "dealership_admin"  # Manager
+    SALESPERSON = "salesperson"  # Archived
     BDC = "bdc"
+
+
+ARCHIVED_ROLES: FrozenSet[UserRole] = frozenset({
+    UserRole.SALESPERSON,
+    UserRole.DEALERSHIP_OWNER,
+})
+
+ASSIGNABLE_ROLES: FrozenSet[UserRole] = frozenset({
+    UserRole.SUPER_ADMIN,
+    UserRole.DEALERSHIP_ADMIN,
+    UserRole.BDC,
+})
+
+# Staff who work leads day to day; used for per-person reports and team counts.
+TEAM_ROLES: FrozenSet[UserRole] = frozenset({
+    UserRole.DEALERSHIP_ADMIN,
+    UserRole.BDC,
+})
+
+
+def is_archived_role(role: UserRole) -> bool:
+    """Former-staff roles that keep history but can no longer sign in."""
+    return role in ARCHIVED_ROLES
 
 
 class Permission(str, Enum):

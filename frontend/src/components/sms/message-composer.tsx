@@ -36,6 +36,8 @@ export function MessageComposer({
       if (textareaRef.current) {
         textareaRef.current.style.height = "auto";
       }
+    } catch {
+      // Keep the draft so the agent can retry; the caller shows the error
     } finally {
       setSending(false);
       // Keep focus on textarea after sending

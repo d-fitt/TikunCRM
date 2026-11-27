@@ -47,6 +47,9 @@ export function TwilioConfigModal({
     const [authToken, setAuthToken] = React.useState("");
     const [smsEnabled, setSmsEnabled] = React.useState(false);
     const [smsFrom, setSmsFrom] = React.useState("");
+    const [messagingServiceSid, setMessagingServiceSid] = React.useState("");
+    const [smsAutoFirst, setSmsAutoFirst] = React.useState(false);
+    const [smsPromo, setSmsPromo] = React.useState(false);
     const [waEnabled, setWaEnabled] = React.useState(false);
     const [waFrom, setWaFrom] = React.useState("");
     const [voiceEnabled, setVoiceEnabled] = React.useState(false);
@@ -64,6 +67,9 @@ export function TwilioConfigModal({
         setAccountSid(c.account_sid || "");
         setSmsEnabled(c.sms_enabled);
         setSmsFrom(c.sms_from_number || "");
+        setMessagingServiceSid(c.messaging_service_sid || "");
+        setSmsAutoFirst(c.sms_auto_first_message_enabled);
+        setSmsPromo(c.sms_promo_enabled);
         setWaEnabled(c.whatsapp_enabled);
         setWaFrom(c.whatsapp_from_number || "");
         setVoiceEnabled(c.voice_enabled);
@@ -122,6 +128,9 @@ export function TwilioConfigModal({
                 account_sid: accountSid || null,
                 sms_enabled: smsEnabled,
                 sms_from_number: smsFrom || null,
+                messaging_service_sid: messagingServiceSid.trim() || null,
+                sms_auto_first_message_enabled: smsAutoFirst,
+                sms_promo_enabled: smsPromo,
                 whatsapp_enabled: waEnabled,
                 whatsapp_from_number: waFrom || null,
                 voice_enabled: voiceEnabled,
@@ -251,6 +260,37 @@ export function TwilioConfigModal({
                                     placeholder="+15551234567"
                                     className="mt-1"
                                 />
+                            </div>
+                            <div>
+                                <Label htmlFor="sms-msid">Messaging Service SID (A2P campaign)</Label>
+                                <Input
+                                    id="sms-msid"
+                                    value={messagingServiceSid}
+                                    onChange={(e) => setMessagingServiceSid(e.target.value)}
+                                    placeholder="MGxxxxxxxx"
+                                    className="mt-1"
+                                />
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                    Texts go out through this service so STOP/HELP replies and delivery limits follow your registered campaign.
+                                </p>
+                            </div>
+                            <div className="flex items-start justify-between gap-4 pt-1">
+                                <div>
+                                    <Label htmlFor="sms-auto">Auto-text new leads</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        New form leads get a Spanish greeting, then the offers subscription confirmation.
+                                    </p>
+                                </div>
+                                <Switch id="sms-auto" checked={smsAutoFirst} onCheckedChange={setSmsAutoFirst} />
+                            </div>
+                            <div className="flex items-start justify-between gap-4">
+                                <div>
+                                    <Label htmlFor="sms-promo">Promotional texts</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Lets managers send offer campaigns from Text (SMS) to customers who agreed to offers. Turning this off pauses running campaigns.
+                                    </p>
+                                </div>
+                                <Switch id="sms-promo" checked={smsPromo} onCheckedChange={setSmsPromo} />
                             </div>
                         </div>
 

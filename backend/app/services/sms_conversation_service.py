@@ -4,11 +4,11 @@ SMS Conversation Service - Manages SMS conversations with leads
 import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select, or_, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.core.config import settings
 from app.core.timezone import utc_now
@@ -18,9 +18,13 @@ from app.models.lead import Lead
 from app.models.customer import Customer
 from app.models.user import User
 from app.models.activity import ActivityType
+from app.services import sms_consent_service as sms_consent
 from app.services.sms_service import sms_service
 
 logger = logging.getLogger(__name__)
+
+# Twilio: "Attempt to send to unsubscribed recipient"
+OPTED_OUT_ERROR_CODE = "21610"
 
 
 class SMSConversationService:
@@ -61,17 +65,25 @@ class SMSConversationService:
         )
         return result.scalar_one_or_none()
     
+    async def _load_customer(self, customer_id: Optional[UUID]) -> Optional[Customer]:
+        if not customer_id:
+            return None
+        result = await self.db.execute(select(Customer).where(Customer.id == customer_id))
+        return result.scalar_one_or_none()
+
     async def send_sms(
         self,
         to_number: str,
         body: str,
-        user_id: UUID,
+        user_id: Optional[UUID],
         lead_id: Optional[UUID] = None,
-        dealership_id: Optional[UUID] = None
+        dealership_id: Optional[UUID] = None,
+        category: str = sms_consent.CATEGORY_CONVERSATION,
     ) -> Tuple[bool, Optional[SMSLog], Optional[str]]:
         """
         Send an SMS message and store in database.
-        
+        Consent rules for the category are enforced before anything reaches Twilio.
+
         Returns:
             Tuple of (success, sms_log, error_message)
         """
@@ -104,7 +116,12 @@ class SMSConversationService:
 
         effective = await get_effective_twilio_config(self.db, dealership_id)
         if not effective.is_sms_ready():
-            return False, None, "SMS not configured for this dealership"
+            return False, None, "SMS is not set up for this company"
+
+        customer = await self._load_customer(customer_id)
+        blocked = sms_consent.send_block_reason(customer, category, effective.sms_promo_enabled)
+        if blocked:
+            return False, None, blocked
 
         # Create SMS log entry
         sms_log = SMSLog(
@@ -112,11 +129,12 @@ class SMSConversationService:
             lead_id=lead_id,
             user_id=user_id,
             dealership_id=dealership_id,
-            twilio_message_sid="pending",  # Will be updated
+            twilio_message_sid=f"pending-{uuid4().hex}",
             direction=MessageDirection.OUTBOUND,
             from_number=effective.sms_from_number,
             to_number=formatted_number,
             body=body,
+            category=category,
             status=SMSStatus.QUEUED,
             sent_at=utc_now()
         )
@@ -132,20 +150,27 @@ class SMSConversationService:
             sms_log.status = SMSStatus.SENT
             await self.db.flush()
             
-            # Log activity
-            await self._log_sms_activity(
-                sms_log,
-                ActivityType.SMS_SENT,
-                f"SMS sent to {formatted_number}"
-            )
+            # Automated texts must not count as agent engagement (stale-lead timer)
+            if category == sms_consent.CATEGORY_CONVERSATION and user_id:
+                await self._log_sms_activity(
+                    sms_log,
+                    ActivityType.SMS_SENT,
+                    f"SMS sent to {formatted_number}"
+                )
             
             return True, sms_log, None
         else:
             sms_log.status = SMSStatus.FAILED
+            sms_log.error_code = (result.get("error_code") or None)
             sms_log.error_message = result.get("error", "Unknown error")
+            error = result.get("error")
+            if sms_log.error_code == OPTED_OUT_ERROR_CODE:
+                if customer is not None:
+                    sms_consent.mark_opted_out(customer)
+                error = "This customer replied STOP. They can't be texted until they text START."
             await self.db.flush()
             
-            return False, sms_log, result.get("error")
+            return False, sms_log, error
     
     async def receive_sms(
         self,
@@ -155,11 +180,14 @@ class SMSConversationService:
         body: str,
         media_urls: Optional[List[str]] = None,
         resolved_dealership_id: Optional[UUID] = None,
-    ) -> SMSLog:
+        opt_out_type: Optional[str] = None,
+    ) -> Tuple[SMSLog, Optional[str], Optional[str]]:
         """
         Process incoming SMS webhook and store message.
         Conversations are at customer level; we set customer_id and optionally lead_id.
         Messages from unknown numbers are stored and can be viewed/converted later.
+
+        Returns (sms_log, keyword kind, reply the CRM must send for compliance).
         """
         customer = await self.find_customer_by_phone(from_number)
         lead = await self.find_lead_by_phone(from_number) if customer else None
@@ -171,7 +199,11 @@ class SMSConversationService:
         
         customer_id = customer.id if customer else None
         lead_id = lead.id if lead else None
-        user_id = lead.assigned_to if lead else None
+        user_id = (lead.assigned_to or lead.bdc_assigned_to_id) if lead else None
+
+        keyword, reply = sms_consent.apply_inbound_keyword(customer, body, opt_out_type)
+        if keyword is None and customer is not None:
+            sms_consent.record_customer_initiated(customer)
 
         # Create SMS log (customer_id for thread; lead_id for context/notification)
         sms_log = SMSLog(
@@ -184,6 +216,7 @@ class SMSConversationService:
             from_number=from_number,
             to_number=to_number,
             body=body,
+            category=f"keyword_{keyword}" if keyword else None,
             media_urls=media_urls or [],
             status=SMSStatus.RECEIVED,
             received_at=utc_now(),
@@ -198,10 +231,13 @@ class SMSConversationService:
             await self._log_sms_activity(
                 sms_log,
                 ActivityType.SMS_RECEIVED,
-                f"SMS received from {from_number}"
+                {
+                    sms_consent.KEYWORD_OPT_OUT: f"Customer opted out of texts ({body.strip()})",
+                    sms_consent.KEYWORD_OPT_IN: f"Customer opted back in to texts ({body.strip()})",
+                }.get(keyword, f"SMS received from {from_number}"),
             )
 
-        return sms_log
+        return sms_log, keyword, reply
     
     async def update_delivery_status(
         self,
@@ -241,6 +277,10 @@ class SMSConversationService:
             sms_log.error_code = error_code
         if error_message:
             sms_log.error_message = error_message
+        if error_code == OPTED_OUT_ERROR_CODE and sms_log.customer_id:
+            customer = await self._load_customer(sms_log.customer_id)
+            if customer is not None:
+                sms_consent.mark_opted_out(customer)
         
         await self.db.flush()
         return sms_log
@@ -331,6 +371,31 @@ class SMSConversationService:
             .group_by(SMSLog.lead_id)
         ).subquery()
 
+        unread_subq = (
+            select(SMSLog.lead_id, func.count().label("unread_count"))
+            .where(
+                SMSLog.lead_id.isnot(None),
+                SMSLog.is_read == False,
+                SMSLog.direction == MessageDirection.INBOUND,
+            )
+            .group_by(SMSLog.lead_id)
+        ).subquery()
+
+        # Threads holding only automated/campaign texts stay out of the inbox until someone replies
+        other = aliased(SMSLog)
+        has_conversation = (
+            select(other.id)
+            .where(
+                other.lead_id == SMSLog.lead_id,
+                or_(
+                    other.direction == MessageDirection.INBOUND,
+                    other.category.is_(None),
+                    other.category == "conversation",
+                ),
+            )
+            .exists()
+        )
+
         # Main query: last message per lead, join Lead and Customer for name/phone
         query = (
             select(
@@ -338,19 +403,16 @@ class SMSConversationService:
                 Customer.first_name,
                 Customer.last_name,
                 Customer.phone,
-                func.count().filter(
-                    and_(
-                        SMSLog.is_read == False,
-                        SMSLog.direction == MessageDirection.INBOUND
-                    )
-                ).over(partition_by=SMSLog.lead_id).label("unread_count")
+                func.coalesce(unread_subq.c.unread_count, 0).label("unread_count"),
             )
             .join(subq, and_(
                 SMSLog.lead_id == subq.c.lead_id,
                 SMSLog.created_at == subq.c.last_message_at
             ))
+            .outerjoin(unread_subq, unread_subq.c.lead_id == SMSLog.lead_id)
             .join(Lead, SMSLog.lead_id == Lead.id)
             .join(Customer, Lead.customer_id == Customer.id)
+            .where(has_conversation)
         )
 
         if user_id:
@@ -360,10 +422,7 @@ class SMSConversationService:
         elif dealership_id:
             query = query.where(Lead.dealership_id == dealership_id)
         if unread_only:
-            query = query.where(
-                SMSLog.is_read == False,
-                SMSLog.direction == MessageDirection.INBOUND
-            )
+            query = query.where(unread_subq.c.unread_count > 0)
 
         query = query.order_by(SMSLog.created_at.desc()).offset(offset).limit(limit)
         result = await self.db.execute(query)

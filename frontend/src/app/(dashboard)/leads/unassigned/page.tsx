@@ -267,7 +267,7 @@ export default function UnassignedLeadsPage() {
                                 title="No unassigned leads"
                                 description={search || source !== "all" 
                                     ? "Try adjusting your filters" 
-                                    : "All leads have been assigned to dealerships"
+                                    : "All leads have been assigned"
                                 }
                             />
                         ) : (

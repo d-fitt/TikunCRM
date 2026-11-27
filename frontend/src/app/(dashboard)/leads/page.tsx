@@ -587,7 +587,7 @@ export default function LeadsPage() {
     // Load BDC agents for admin/owner BDC filter
     React.useEffect(() => {
         if (!isDealershipLevel && !isSuperAdmin) return
-        TeamService.listBdcAgents(orgDealershipId ?? undefined)
+        TeamService.listBdcAgents()
             .then((list) => setBdcAgents(list))
             .catch(() => setBdcAgents([]))
     }, [isDealershipLevel, isSuperAdmin, orgDealershipId])
@@ -1661,7 +1661,7 @@ export default function LeadsPage() {
                                     </Select>
                                 </FilterField>
                                 {(isDealershipLevel || isSuperAdmin) && teamMembers.length > 0 && (
-                                    <FilterField label="Salesperson">
+                                    <FilterField label="Assigned to">
                                         <Select
                                             value={assignedTo}
                                             onValueChange={(v) => {
@@ -2285,7 +2285,7 @@ export default function LeadsPage() {
                                                         handleAssignToDealershipClick(lead)
                                                     }}>
                                                         <Building2 className="mr-2 h-4 w-4" />
-                                                        Assign to Dealership
+                                                        Move to Carvaminos
                                                     </DropdownMenuItem>
                                                 )}
                                                 {(canAssignToSalesperson || isSuperAdmin || isDealershipLevel || isBdc) && lead.dealership_id && (

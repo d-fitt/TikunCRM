@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
 from app.api import deps
-from app.core.permissions import Permission, UserRole
+from app.core.permissions import TEAM_ROLES, Permission, UserRole
 from app.core.access_scope import get_accessible_dealership_ids
 from app.core.cache import cache_get, cache_set
 from app.core.config import settings
@@ -221,7 +221,10 @@ async def get_super_admin_stats(
 
         total_sales_result = await db.execute(
             select(func.count()).select_from(User).where(
-                and_(User.role == UserRole.SALESPERSON, User.is_active == True)
+                and_(
+                    User.role.in_([UserRole.DEALERSHIP_ADMIN, UserRole.BDC]),
+                    User.is_active == True,
+                )
             )
         )
         total_sales = total_sales_result.scalar() or 0
@@ -391,7 +394,7 @@ async def get_dealership_admin_stats(
     conversion_rate = (converted_leads / total_leads * 100) if total_leads > 0 else 0
 
     # Team size
-    team_clauses = [User.role == UserRole.SALESPERSON, User.is_active == True]
+    team_clauses = [User.role.in_(TEAM_ROLES), User.is_active == True]
     if user_scope is not None:
         team_clauses.append(user_scope)
     team_result = await db.execute(

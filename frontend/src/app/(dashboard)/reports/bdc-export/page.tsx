@@ -38,8 +38,6 @@ import { PageHeader } from "@/components/ui/page-header"
 import { useRole } from "@/hooks/use-role"
 import { useAuthStore } from "@/stores/auth-store"
 import { useOrgDealershipId } from "@/hooks/use-org-dealership"
-import { useBdcDealership } from "@/contexts/bdc-dealership-context"
-import { DealershipService } from "@/services/dealership-service"
 import { TeamService } from "@/services/team-service"
 import { LeadStageService, type LeadStage } from "@/services/lead-stage-service"
 import {
@@ -53,7 +51,6 @@ import type { SavedView } from "@/services/saved-view-service"
 import { filterStorage, type BdcExportFilterState } from "@/lib/filter-storage"
 import { SavedViewService } from "@/services/saved-view-service"
 
-const ALL_DEALERSHIPS = "__all__"
 const BDC_EXPORT_ENTITY = "bdc_export"
 
 const LEAD_SOURCES = [
@@ -235,7 +232,6 @@ export default function BdcExportReportPage() {
     const { isDealershipAdmin, isDealershipOwner, isSuperAdmin, isBdc } = useRole()
     const { user } = useAuthStore()
     const orgDealershipId = useOrgDealershipId()
-    const bdcCtx = useBdcDealership()
     const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin || isBdc
 
     const [preview, setPreview] = React.useState<BdcExportPreviewResponse | null>(null)
@@ -264,7 +260,6 @@ export default function BdcExportReportPage() {
     const [selectedApptStatuses, setSelectedApptStatuses] = React.useState<string[]>([])
     const [soldOnly, setSoldOnly] = React.useState(false)
 
-    const [dealerships, setDealerships] = React.useState<Array<{ id: string; name: string }>>([])
     const [salespersons, setSalespersons] = React.useState<Array<{ id: string; first_name: string; last_name: string }>>([])
     const [bdcAgents, setBdcAgents] = React.useState<Array<{ id: string; first_name: string; last_name: string }>>([])
     const [stages, setStages] = React.useState<LeadStage[]>([])
@@ -299,38 +294,11 @@ export default function BdcExportReportPage() {
     }, [canView, filtersRestored])
 
     React.useEffect(() => {
-        if (!canView) return
-        if (isSuperAdmin) {
-            DealershipService.getDealershipsForSelect().then(setDealerships).catch(() => setDealerships([]))
-        } else if (isBdc && user?.id) {
-            TeamService.getUserDealershipAccess(user.id)
-                .then((res) => {
-                    const list = res.dealerships
-                    setDealerships(list)
-                    const fallback = list[0]?.id || orgDealershipId
-                    if (fallback) setDealershipId((prev) => prev ?? fallback)
-                })
-                .catch(() => {
-                    setDealerships(orgDealershipId ? [{ id: orgDealershipId, name: "Organization" }] : [])
-                    if (orgDealershipId) setDealershipId((prev) => prev ?? orgDealershipId)
-                })
-        } else if (user?.dealership_id) {
-            DealershipService.getDealership(user.dealership_id)
-                .then((d) => setDealerships([{ id: d.id, name: d.name }]))
-                .catch(() => setDealerships([]))
-        }
-    }, [canView, isSuperAdmin, isBdc, user?.id, user?.dealership_id, orgDealershipId])
-
-    React.useEffect(() => {
         if (!filtersRestored) return
-        if (allDealerships) return
-        if (dealershipId) return
-        if (isBdc && (bdcCtx?.selectedDealershipId || orgDealershipId)) {
-            setDealershipId(bdcCtx?.selectedDealershipId || orgDealershipId)
-        } else if (dealerships.length === 1) {
-            setDealershipId(dealerships[0].id)
-        }
-    }, [filtersRestored, isBdc, bdcCtx?.selectedDealershipId, orgDealershipId, dealerships, allDealerships, dealershipId])
+        const orgId = orgDealershipId || user?.dealership_id || null
+        if (allDealerships) setAllDealerships(false)
+        if (orgId && dealershipId !== orgId) setDealershipId(orgId)
+    }, [filtersRestored, orgDealershipId, user?.dealership_id, allDealerships, dealershipId])
 
     React.useEffect(() => {
         const scopeId = allDealerships ? undefined : dealershipId ?? undefined
@@ -341,7 +309,7 @@ export default function BdcExportReportPage() {
             return
         }
         TeamService.getSalespersons(scopeId).then(setSalespersons).catch(() => setSalespersons([]))
-        TeamService.listBdcAgents(scopeId).then(setBdcAgents).catch(() => setBdcAgents([]))
+        TeamService.listBdcAgents().then(setBdcAgents).catch(() => setBdcAgents([]))
         if (dealershipId && !allDealerships) {
             LeadStageService.list(dealershipId).then(setStages).catch(() => setStages([]))
         } else {
@@ -392,7 +360,7 @@ export default function BdcExportReportPage() {
 
     const loadPreview = React.useCallback(async () => {
         if (!hasDealershipScope(allDealerships, dealershipId)) {
-            setError("Select a dealership or choose All dealerships to preview the report.")
+            setError("Your account is not linked to Carvaminos yet. Contact a Super Admin.")
             return
         }
         setLoading(true)
@@ -411,7 +379,7 @@ export default function BdcExportReportPage() {
 
     const handleExport = async (format: "zip" | "xlsx" | "pdf") => {
         if (!hasDealershipScope(allDealerships, dealershipId)) {
-            setError("Select a dealership or choose All dealerships before exporting.")
+            setError("Your account is not linked to Carvaminos yet. Contact a Super Admin.")
             return
         }
         setExporting(true)
@@ -451,7 +419,7 @@ export default function BdcExportReportPage() {
         <div className="flex flex-col gap-6 p-6 max-w-[1600px] mx-auto">
             <PageHeader
                 title="BDC Export Report"
-                description="Filter leads by dealership, appointments, and outcomes — export PDF/Excel with guest QR codes."
+                description="Filter leads by appointments and outcomes — export PDF/Excel with guest QR codes."
             />
 
             <SavedViewsBar
@@ -472,32 +440,6 @@ export default function BdcExportReportPage() {
                         <div className="space-y-1.5 min-w-[200px] flex-1 max-w-xs">
                             <Label>Search</Label>
                             <Input placeholder="Name, email, phone…" value={search} onChange={(e) => setSearch(e.target.value)} />
-                        </div>
-                        <div className="space-y-1.5 w-[200px]">
-                            <Label>Dealership</Label>
-                            <Select
-                                value={allDealerships ? ALL_DEALERSHIPS : (dealershipId ?? "")}
-                                onValueChange={(v) => {
-                                    if (v === ALL_DEALERSHIPS) {
-                                        setAllDealerships(true)
-                                        setDealershipId(null)
-                                        setStageId(null)
-                                    } else {
-                                        setAllDealerships(false)
-                                        setDealershipId(v || null)
-                                    }
-                                }}
-                            >
-                                <SelectTrigger><SelectValue placeholder="Select dealership" /></SelectTrigger>
-                                <SelectContent>
-                                    {(dealerships.length > 1 || isSuperAdmin || isBdc) && (
-                                        <SelectItem value={ALL_DEALERSHIPS}>All dealerships</SelectItem>
-                                    )}
-                                    {dealerships.map((d) => (
-                                        <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
                         </div>
                         <div className="space-y-1.5">
                             <Label>Lead created from</Label>
@@ -552,11 +494,11 @@ export default function BdcExportReportPage() {
                                         </SelectContent>
                                     </Select>
                                 </FilterField>
-                                <FilterField label="Salesperson">
+                                <FilterField label="Assigned to">
                                     <Select value={assignedTo ?? "all"} onValueChange={(v) => setAssignedTo(v === "all" ? null : v)}>
-                                        <SelectTrigger className="w-full h-9"><SelectValue placeholder="All salespeople" /></SelectTrigger>
+                                        <SelectTrigger className="w-full h-9"><SelectValue placeholder="Everyone" /></SelectTrigger>
                                         <SelectContent>
-                                            <SelectItem value="all">All salespeople</SelectItem>
+                                            <SelectItem value="all">Everyone</SelectItem>
                                             {salespersons.map((s) => (
                                                 <SelectItem key={s.id} value={s.id}>{s.first_name} {s.last_name}</SelectItem>
                                             ))}

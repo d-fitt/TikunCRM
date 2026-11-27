@@ -34,6 +34,7 @@ import {
     Send,
     QrCode,
     Timer,
+    Smartphone,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
@@ -85,7 +86,7 @@ const allSidebarItems: SidebarItem[] = [
                 name: "Manager review",
                 icon: ClipboardCheck,
                 href: "/leads?filter=manager_review",
-                roles: ["super_admin", "dealership_admin", "dealership_owner"],
+                roles: ["super_admin", "dealership_admin"],
             },
         ],
     },
@@ -103,13 +104,13 @@ const allSidebarItems: SidebarItem[] = [
         name: "Carvaminos", 
         icon: Store, 
         href: "/showroom",
-        roles: ["super_admin", "dealership_owner", "dealership_admin", "salesperson"],
+        roles: ["super_admin", "dealership_admin"],
     },
     {
         name: "Partner Stores",
         icon: Car,
         href: "/partner-stores",
-        roles: ["super_admin", "dealership_owner", "dealership_admin"],
+        roles: ["super_admin", "dealership_admin"],
     },
     { 
         name: "Follow-ups", 
@@ -121,6 +122,7 @@ const allSidebarItems: SidebarItem[] = [
         icon: MessagesSquare,
         children: [
             { name: "Inbox", icon: Inbox, href: "/inbox" },
+            { name: "Text (SMS)", icon: Smartphone, href: "/sms" },
             { name: "WhatsApp", icon: MessageCircle, href: "/whatsapp" },
             { name: "Email", icon: MessageSquare, href: "/communications" },
         ],
@@ -133,26 +135,26 @@ const allSidebarItems: SidebarItem[] = [
                 name: "Team",
                 icon: Users,
                 href: "/team",
-                roles: ["super_admin", "dealership_admin", "dealership_owner"],
+                roles: ["super_admin", "dealership_admin"],
             },
             {
                 name: "Schedules",
                 icon: Calendar,
                 href: "/schedules",
-                roles: ["super_admin", "dealership_admin", "dealership_owner"],
+                roles: ["super_admin", "dealership_admin"],
             },
             { name: "Tasks", icon: ClipboardCheck, href: "/tasks" },
             {
                 name: "Time & Pay",
                 icon: Timer,
                 href: "/time-tracking",
-                roles: ["bdc", "super_admin", "dealership_admin", "dealership_owner"],
+                roles: ["bdc", "super_admin", "dealership_admin"],
             },
             {
                 name: "Auto WhatsApp",
                 icon: Send,
                 href: "/auto-whatsapp",
-                roles: ["super_admin", "dealership_admin", "dealership_owner"],
+                roles: ["super_admin", "dealership_admin"],
             },
         ],
     },
@@ -164,7 +166,7 @@ const allSidebarItems: SidebarItem[] = [
     {
         name: "Reports",
         icon: FileBarChart,
-        roles: ["super_admin", "dealership_admin", "dealership_owner", "bdc"],
+        roles: ["super_admin", "dealership_admin", "bdc"],
         children: [
             { name: "Analytics", icon: BarChart3, href: "/analytics" },
             { name: "Leads Analysis", icon: Users, href: "/analytics?tab=leads" },

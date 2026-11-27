@@ -7,53 +7,12 @@ from uuid import UUID
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.schemas.user import UserResponse
-from app.schemas.dealership import DealershipBrief
 
 
 class LoginRequest(BaseModel):
     """Login request schema"""
     email: EmailStr
     password: str
-    dealership_id: Optional[UUID] = None
-
-
-# ============== Dealership lookup (multi-dealership login) ==============
-
-class DealershipLookupRequest(BaseModel):
-    """Request the list of dealerships an email is registered with."""
-    email: EmailStr
-
-
-class DealershipLookupOption(BaseModel):
-    """A single dealership a given email belongs to."""
-    id: Optional[UUID] = None  # None for org-wide roles (super admin, BDC)
-    name: str
-    is_super_admin: bool = False
-    is_bdc: bool = False
-
-
-class DealershipLookupResponse(BaseModel):
-    """Result of /auth/lookup-dealerships."""
-    dealerships: List[DealershipLookupOption]
-
-
-class DealershipRequiredDetail(BaseModel):
-    """409 detail body returned when an email matches multiple dealerships."""
-    code: str = "dealership_required"
-    message: str
-    dealerships: List[DealershipLookupOption]
-
-
-class SwitchDealershipRequest(BaseModel):
-    """Switch the active session to another dealership account with the same email."""
-    dealership_id: Optional[UUID] = Field(
-        None,
-        description="Target dealership UUID. Omit or null for org-wide accounts.",
-    )
-    account_kind: Optional[str] = Field(
-        None,
-        description="When dealership_id is null: 'super_admin' or 'bdc'.",
-    )
 
 
 class RefreshTokenRequest(BaseModel):
@@ -89,40 +48,11 @@ class CurrentUser(UserResponse):
     pass
 
 
-class SignupRequest(BaseModel):
-    """Signup request schema"""
-    first_name: str = Field(..., min_length=1, max_length=100)
-    last_name: str = Field(..., min_length=1, max_length=100)
-    email: EmailStr
-    password: str = Field(..., min_length=8, max_length=100)
-    dealership_name: str = Field(..., min_length=1, max_length=255)
-
-
-class SignupResponse(BaseModel):
-    """Signup response schema"""
-    message: str
-    user: UserResponse
-    dealership: DealershipBrief
-    access_token: str
-    refresh_token: str
-    token_type: str
-    
-    class Config:
-        from_attributes = True
-
-
 # ============== Password Reset Schemas ==============
 
 class ForgotPasswordRequest(BaseModel):
     """Request to initiate password reset"""
     email: EmailStr
-    # Required when the email exists in multiple dealerships. If omitted and the
-    # email matches more than one user, the API responds 409 dealership_required.
-    dealership_id: Optional[UUID] = None
-    account_kind: Optional[str] = Field(
-        None,
-        description="When dealership_id is null: 'super_admin' or 'bdc'.",
-    )
 
 
 class ForgotPasswordResponse(BaseModel):

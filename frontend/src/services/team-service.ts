@@ -98,20 +98,8 @@ export const TeamService = {
         return response.data;
     },
 
-    async listBdcAgents(dealershipId?: string): Promise<UserBrief[]> {
-        const params = dealershipId ? { dealership_id: dealershipId } : undefined;
-        const response = await apiClient.get("/users/bdc-agents", { params });
+    async listBdcAgents(): Promise<UserBrief[]> {
+        const response = await apiClient.get("/users/bdc-agents");
         return response.data;
-    },
-
-    async getUserDealershipAccess(userId: string): Promise<{ user_id: string; dealerships: { id: string; name: string }[] }> {
-        const response = await apiClient.get(`/users/${userId}/dealership-access`);
-        return response.data;
-    },
-
-    async setUserDealershipAccess(userId: string, dealershipIds: string[]): Promise<void> {
-        await apiClient.put(`/users/${userId}/dealership-access`, {
-            dealership_ids: dealershipIds,
-        });
     },
 };

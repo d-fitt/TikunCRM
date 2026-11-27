@@ -94,19 +94,22 @@ class SMSService:
                 "error": f"Invalid phone number: {to_phone}",
             }
 
-        from_num = from_phone or effective.sms_from_number
+        create_kwargs: Dict[str, Any] = {"body": message[:1600], "to": formatted_to}
+        if effective.messaging_service_sid and not from_phone:
+            create_kwargs["messaging_service_sid"] = effective.messaging_service_sid
+        else:
+            create_kwargs["from_"] = from_phone or effective.sms_from_number
+        if settings.backend_url.startswith("https://"):
+            create_kwargs["status_callback"] = (
+                f"{settings.backend_url.rstrip('/')}/api/v1/webhooks/twilio/sms/status"
+            )
 
         try:
             import asyncio
             client = _twilio_client(effective.account_sid, effective.auth_token)
 
             # Run Twilio API call in thread pool to avoid blocking
-            sms = await asyncio.to_thread(
-                client.messages.create,
-                body=message[:1600],
-                from_=from_num,
-                to=formatted_to,
-            )
+            sms = await asyncio.to_thread(client.messages.create, **create_kwargs)
             
             logger.info(f"SMS sent successfully: SID={sms.sid}, to={formatted_to}")
             
@@ -121,7 +124,8 @@ class SMSService:
             logger.error(f"Failed to send SMS to {formatted_to}: {e}")
             return {
                 "success": False,
-                "error": str(e)
+                "error": str(e),
+                "error_code": str(getattr(e, "code", "") or ""),
             }
     
     async def send_bulk_sms(

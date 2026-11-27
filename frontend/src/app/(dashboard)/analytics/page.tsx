@@ -63,7 +63,6 @@ import {
     type ActivitiesOverTimeResponse,
 } from "@/services/reports-service"
 import { BarChart, DonutChart, AreaChart } from "@tremor/react"
-import { DealershipService } from "@/services/dealership-service"
 import { PartnerStoreService, type PartnerStore } from "@/services/partner-store-service"
 import { TeamService } from "@/services/team-service"
 import { LeadStageService, type LeadStage } from "@/services/lead-stage-service"
@@ -276,7 +275,7 @@ function downloadAnalysisCsv(analysis: DealershipAnalysisResponse) {
 
 function downloadAnalysisPdf(
     analysis: DealershipAnalysisResponse,
-    options: { dateRangeLabel: string; dealershipName: string; salespersonName: string }
+    options: { dateRangeLabel: string; salespersonName: string }
 ) {
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" })
     const pageW = doc.internal.pageSize.getWidth()
@@ -285,16 +284,14 @@ function downloadAnalysisPdf(
 
     doc.setFontSize(18)
     doc.setFont("helvetica", "bold")
-    doc.text("Dealership Analytics Report", margin, y)
+    doc.text("Carvaminos Analytics Report", margin, y)
     y += 10
 
     doc.setFontSize(10)
     doc.setFont("helvetica", "normal")
     doc.text(`Date range: ${options.dateRangeLabel}`, margin, y)
     y += 6
-    doc.text(`Dealership: ${options.dealershipName}`, margin, y)
-    y += 6
-    doc.text(`Salesperson: ${options.salespersonName}`, margin, y)
+    doc.text(`Assigned to: ${options.salespersonName}`, margin, y)
     y += 12
 
     autoTable(doc, {
@@ -440,7 +437,7 @@ function AnalyticsPageContent() {
             setSingleDate(preset.singleDate)
         }
     }
-    const [dealershipId, setDealershipId] = React.useState<string | null>(null)
+    const dealershipId = orgDealershipId || user?.dealership_id || null
     const [assignedTo, setAssignedTo] = React.useState<string | null>(null)
     const [bdcAgentId, setBdcAgentId] = React.useState<string | null>(null)
     const [source, setSource] = React.useState<string | null>(null)
@@ -448,37 +445,10 @@ function AnalyticsPageContent() {
     const [partnerStoreId, setPartnerStoreId] = React.useState<string | null>(null)
     const [partnerStores, setPartnerStores] = React.useState<PartnerStore[]>([])
 
-    const [dealerships, setDealerships] = React.useState<Array<{ id: string; name: string }>>([])
     const [salespersons, setSalespersons] = React.useState<Array<{ id: string; first_name: string; last_name: string }>>([])
     const [bdcAgents, setBdcAgents] = React.useState<Array<{ id: string; first_name: string; last_name: string }>>([])
     const [stages, setStages] = React.useState<LeadStage[]>([])
 
-    React.useEffect(() => {
-        if (!canView) return
-        if (isSuperAdmin) {
-            DealershipService.getDealershipsForSelect().then(setDealerships).catch(() => setDealerships([]))
-        } else if (isBdc && user?.id) {
-            TeamService.getUserDealershipAccess(user.id)
-                .then((res) => {
-                    const list = res.dealerships
-                    setDealerships(list)
-                    const fallback = list[0]?.id || orgDealershipId
-                    if (fallback) setDealershipId((prev) => prev ?? fallback)
-                })
-                .catch(() => {
-                    setDealerships(orgDealershipId ? [{ id: orgDealershipId, name: "Organization" }] : [])
-                    if (orgDealershipId) setDealershipId((prev) => prev ?? orgDealershipId)
-                })
-        }
-    }, [canView, isSuperAdmin, isBdc, user?.id, orgDealershipId])
-    
-    // Auto-select first dealership for BDC users
-    React.useEffect(() => {
-        if (isBdc && dealerships.length > 0 && !dealershipId) {
-            setDealershipId(dealerships[0].id)
-        }
-    }, [isBdc, dealerships, dealershipId])
-    
     React.useEffect(() => {
         if (!canView) return
         const did = dealershipId || orgDealershipId || (user?.dealership_id ?? undefined)
@@ -487,9 +457,8 @@ function AnalyticsPageContent() {
     
     React.useEffect(() => {
         if (!canView) return
-        const did = dealershipId || orgDealershipId || (user?.dealership_id ?? undefined)
-        TeamService.listBdcAgents(did).then(setBdcAgents).catch(() => setBdcAgents([]))
-    }, [canView, dealershipId, orgDealershipId, user?.dealership_id])
+        TeamService.listBdcAgents().then(setBdcAgents).catch(() => setBdcAgents([]))
+    }, [canView])
     
     React.useEffect(() => {
         LeadStageService.list().then(setStages).catch(() => setStages([]))
@@ -544,7 +513,7 @@ function AnalyticsPageContent() {
                     <CardContent className="flex flex-col items-center justify-center py-12">
                         <BarChart3 className="h-16 w-16 text-muted-foreground/30 mb-4" />
                         <p className="text-muted-foreground text-center max-w-md">
-                            You don&apos;t have permission to view dealership analytics. This page is for administrators and owners.
+                            You don&apos;t have permission to view analytics. This page is for managers and BDC agents.
                         </p>
                     </CardContent>
                 </Card>
@@ -558,7 +527,7 @@ function AnalyticsPageContent() {
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Analytics</h1>
                     <p className="text-muted-foreground">
-                        Dealership-wide summary, lead cohort analysis, and BDC/salesperson productivity.
+                        Company-wide summary, lead cohort analysis, and team productivity.
                     </p>
                 </div>
             </div>
@@ -661,7 +630,7 @@ function AnalyticsPageContent() {
                         }}
                     >
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                            <FilterField label="Salesperson">
+                            <FilterField label="Assigned to">
                                 <Select value={assignedTo ?? "all"} onValueChange={(v) => setAssignedTo(v === "all" ? null : v)}>
                                     <SelectTrigger className="w-full h-9">
                                         <SelectValue placeholder="All" />
@@ -754,12 +723,6 @@ function AnalyticsPageContent() {
                                 variant="outline"
                                 onClick={() => {
                                     const sp = assignedTo ? salespersons.find((s) => s.id === assignedTo) : null
-                                    const dealershipName =
-                                        isSuperAdmin && dealershipId
-                                            ? dealerships.find((d) => d.id === dealershipId)?.name ?? "All"
-                                            : user?.dealership_id
-                                                ? dealerships.find((d) => d.id === user.dealership_id)?.name ?? "Current"
-                                                : "All"
                                     downloadAnalysisPdf(analysis, {
                                         dateRangeLabel:
                                             dateMode === "single"
@@ -769,8 +732,7 @@ function AnalyticsPageContent() {
                                                     : dateMode === "last_month"
                                                         ? `Last month: ${dateFrom} to ${dateTo}`
                                                         : `${dateFrom} to ${dateTo}`,
-                                        dealershipName,
-                                        salespersonName: sp ? `${sp.first_name} ${sp.last_name}` : "All salespeople",
+                                        salespersonName: sp ? `${sp.first_name} ${sp.last_name}` : "Everyone",
                                     })
                                 }}
                             >
@@ -1003,7 +965,7 @@ function AnalyticsPageContent() {
                                         <TableEmpty
                                             icon={<Users className="h-10 w-10" />}
                                             title="No salespeople"
-                                            description="No active salespersons in this dealership."
+                                            description="No active team members."
                                         />
                                     ) : (
                                         analysis.salespeople.map((row: SalespersonAnalysisRow) => (

@@ -72,7 +72,7 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { TeamService, UserWithStats, CreateUserData } from "@/services/team-service"
+import { TeamService, UserWithStats } from "@/services/team-service"
 import {
     ReportsService,
     type TeamTouchSalesMetricsResponse,
@@ -85,7 +85,7 @@ import { BarChart } from "@tremor/react"
 import { SalespersonPendingTasksModal } from "@/components/team/salesperson-pending-tasks-modal"
 import { NotifySalespersonDialog } from "@/components/team/notify-salesperson-dialog"
 import { CreateUserModal } from "@/components/team/create-user-modal"
-import { EditBdcDealershipsModal } from "@/components/team/edit-bdc-dealerships-modal"
+import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import { UserBrief } from "@/services/team-service"
 import { TimeTrackingService } from "@/services/time-tracking-service"
 import { formatMoney, num } from "@/lib/time-tracking"
@@ -93,23 +93,13 @@ import { Label } from "@/components/ui/label"
 
 export default function TeamPage() {
     const { toast } = useToast()
-    const { isSuperAdmin, isDealershipOwner, isDealershipAdmin, isDealershipLevel, user } = useRole()
+    const { isSuperAdmin, isDealershipAdmin, isDealershipLevel, user } = useRole()
+    const orgDealershipId = useOrgDealershipId()
     const [team, setTeam] = React.useState<UserWithStats[]>([])
-    const [dealershipName, setDealershipName] = React.useState<string | null>(null)
-    const [teamDealershipId, setTeamDealershipId] = React.useState<string | null>(null)
     const [touchMetrics, setTouchMetrics] = React.useState<TeamTouchSalesMetricsResponse | null>(null)
     const [touchMetricsLoading, setTouchMetricsLoading] = React.useState(false)
     const [isLoading, setIsLoading] = React.useState(true)
     const [search, setSearch] = React.useState("")
-    
-    // Add member modal
-    const [isAddModalOpen, setIsAddModalOpen] = React.useState(false)
-    const [isSubmitting, setIsSubmitting] = React.useState(false)
-    const [addMemberError, setAddMemberError] = React.useState<string | null>(null)
-    const [newMember, setNewMember] = React.useState<Partial<CreateUserData>>({
-        role: "salesperson"
-    })
-    const [showPassword, setShowPassword] = React.useState(false)
     
     // Pending tasks and notify modals
     const [pendingTasksOpen, setPendingTasksOpen] = React.useState(false)
@@ -126,7 +116,6 @@ export default function TeamPage() {
     const [togglingUserId, setTogglingUserId] = React.useState<string | null>(null)
     const [bdcAgents, setBdcAgents] = React.useState<UserBrief[]>([])
     const [createUserOpen, setCreateUserOpen] = React.useState(false)
-    const [editBdcUser, setEditBdcUser] = React.useState<UserBrief | null>(null)
     const [rateAgent, setRateAgent] = React.useState<UserBrief | null>(null)
     const [rateValue, setRateValue] = React.useState("")
     const [savingRate, setSavingRate] = React.useState(false)
@@ -135,8 +124,6 @@ export default function TeamPage() {
         try {
             const data = await TeamService.getTeamWithStats()
             setTeam(data.items)
-            setDealershipName(data.dealership_name || null)
-            setTeamDealershipId(data.dealership_id ? String(data.dealership_id) : null)
         } catch (error) {
             console.error("Failed to fetch team:", error)
         } finally {
@@ -154,7 +141,7 @@ export default function TeamPage() {
     }, [fetchTeam, isSuperAdmin])
 
     React.useEffect(() => {
-        const dealershipKey = teamDealershipId ?? user?.dealership_id
+        const dealershipKey = orgDealershipId ?? user?.dealership_id
         if (!dealershipKey) {
             setTouchMetrics(null)
             return
@@ -181,41 +168,13 @@ export default function TeamPage() {
         return () => {
             cancelled = true
         }
-    }, [teamDealershipId, user?.dealership_id, isSuperAdmin])
+    }, [orgDealershipId, user?.dealership_id, isSuperAdmin])
 
     const filteredTeam = team.filter(member =>
         member.first_name.toLowerCase().includes(search.toLowerCase()) ||
         member.last_name.toLowerCase().includes(search.toLowerCase()) ||
         member.email.toLowerCase().includes(search.toLowerCase())
     )
-
-    const handleAddMember = async () => {
-        setAddMemberError(null)
-        
-        if (!newMember.email || !newMember.first_name || !newMember.last_name || !newMember.password) {
-            setAddMemberError("Please fill in all required fields")
-            return
-        }
-        
-        if (newMember.password.length < 6) {
-            setAddMemberError("Password must be at least 6 characters")
-            return
-        }
-        
-        setIsSubmitting(true)
-        try {
-            await TeamService.createUser(newMember as CreateUserData)
-            setIsAddModalOpen(false)
-            setNewMember({ role: "salesperson" })
-            setAddMemberError(null)
-            fetchTeam()
-        } catch (error: unknown) {
-            console.error("Failed to add member:", error)
-            setAddMemberError(getApiErrorMessage(error, "Failed to add team member. Please try again."))
-        } finally {
-            setIsSubmitting(false)
-        }
-    }
 
     const handleToggleStatusClick = (member: UserWithStats) => {
         if (member.is_active) {
@@ -277,7 +236,6 @@ export default function TeamPage() {
         "Converted": m.converted_leads
     }))
 
-    // Access check - Super Admin, Dealership Owner, or Dealership Admin
     if (!isSuperAdmin && !isDealershipLevel) {
         return (
             <div className="flex h-[50vh] items-center justify-center">
@@ -286,7 +244,7 @@ export default function TeamPage() {
                         <Users className="mx-auto h-12 w-12 text-muted-foreground/20" />
                         <h2 className="mt-4 text-lg font-semibold">Access Restricted</h2>
                         <p className="mt-2 text-sm text-muted-foreground">
-                            Team management is only available to Dealership Owners, Admins, and Super Admins.
+                            Team management is only available to Managers and Super Admins.
                         </p>
                     </CardContent>
                 </Card>
@@ -301,20 +259,11 @@ export default function TeamPage() {
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">Team Management</h1>
                     <p className="text-muted-foreground">
-                        {dealershipName 
-                            ? `Manage your team at ${dealershipName}`
-                            : "Manage your dealership staff and permissions."
-                        }
+                        Manage Carvaminos managers and BDC agents.
                     </p>
                 </div>
                 <div className="flex gap-2">
-                    {isSuperAdmin && (
-                        <Button variant="outline" onClick={() => setCreateUserOpen(true)}>
-                            <UserPlus className="mr-2 h-4 w-4" />
-                            Add BDC Agent
-                        </Button>
-                    )}
-                    <Button onClick={() => { setAddMemberError(null); setIsAddModalOpen(true); }} leftIcon={<UserPlus className="h-4 w-4" />}>
+                    <Button onClick={() => setCreateUserOpen(true)} leftIcon={<UserPlus className="h-4 w-4" />}>
                         Add Team Member
                     </Button>
                 </div>
@@ -341,7 +290,7 @@ export default function TeamPage() {
                                     <TableHead>Email</TableHead>
                                     <TableHead>Status</TableHead>
                                     <TableHead className="text-right">Hourly rate</TableHead>
-                                    <TableHead className="w-48">Actions</TableHead>
+                                    <TableHead className="w-32">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -375,13 +324,6 @@ export default function TeamPage() {
                                                 >
                                                     <Pencil className="h-3.5 w-3.5" />
                                                     Rate
-                                                </Button>
-                                                <Button
-                                                    size="sm"
-                                                    variant="outline"
-                                                    onClick={() => setEditBdcUser(agent)}
-                                                >
-                                                    Dealerships
                                                 </Button>
                                             </div>
                                         </TableCell>
@@ -493,7 +435,7 @@ export default function TeamPage() {
                                             {touchMetrics.avg_leads_touched_per_salesperson}
                                         </p>
                                         <p className="text-xs text-muted-foreground">
-                                            Avg per salesperson ({touchMetrics.salespeople_count} reps)
+                                            Avg per team member ({touchMetrics.salespeople_count} people)
                                         </p>
                                     </div>
                                 </div>
@@ -575,7 +517,7 @@ export default function TeamPage() {
                                 description={search ? "Try adjusting your search" : "Add your first team member to get started"}
                                 action={
                                     !search && (
-                                        <Button size="sm" onClick={() => { setAddMemberError(null); setIsAddModalOpen(true); }}>
+                                        <Button size="sm" onClick={() => setCreateUserOpen(true)}>
                                             <UserPlus className="mr-2 h-4 w-4" />
                                             Add Member
                                         </Button>
@@ -639,8 +581,7 @@ export default function TeamPage() {
                                                 </Button>
                                             </DropdownMenuTrigger>
                                             <DropdownMenuContent align="end">
-                                                {/* Show pending tasks for salespersons */}
-                                                {member.role === "salesperson" && (isDealershipOwner || isDealershipAdmin) && (
+                                                {member.role === "bdc" && (isSuperAdmin || isDealershipAdmin) && (
                                                     <>
                                                         <DropdownMenuItem
                                                             onClick={() => {
@@ -673,8 +614,7 @@ export default function TeamPage() {
                                                     <Mail className="mr-2 h-4 w-4" />
                                                     Send Email
                                                 </DropdownMenuItem>
-                                                {/* Only dealership admin or owner can deactivate/activate team members; cannot deactivate yourself */}
-                                                {(isSuperAdmin || isDealershipAdmin || isDealershipOwner) && (
+                                                {(isSuperAdmin || isDealershipAdmin) && (
                                                     <>
                                                         <DropdownMenuSeparator />
                                                         <DropdownMenuItem 
@@ -708,128 +648,6 @@ export default function TeamPage() {
                     </TableBody>
                 </Table>
             </Card>
-
-            {/* Add Member Modal */}
-            <Dialog open={isAddModalOpen} onOpenChange={setIsAddModalOpen}>
-                <DialogContent className="sm:max-w-md">
-                    <DialogHeader>
-                        <DialogTitle className="flex items-center gap-2">
-                            <UserPlus className="h-5 w-5 text-primary" />
-                            Add Team Member
-                        </DialogTitle>
-                        <DialogDescription>
-                            Add a new salesperson or admin to your team.
-                        </DialogDescription>
-                    </DialogHeader>
-
-                    <div className="space-y-4 py-4">
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="text-sm font-medium mb-2 block">First Name</label>
-                                <Input
-                                    value={newMember.first_name || ""}
-                                    onChange={(e) => setNewMember({ ...newMember, first_name: e.target.value })}
-                                    placeholder="John"
-                                />
-                            </div>
-                            <div>
-                                <label className="text-sm font-medium mb-2 block">Last Name</label>
-                                <Input
-                                    value={newMember.last_name || ""}
-                                    onChange={(e) => setNewMember({ ...newMember, last_name: e.target.value })}
-                                    placeholder="Doe"
-                                />
-                            </div>
-                        </div>
-                        
-                        <div>
-                            <label className="text-sm font-medium mb-2 block">Email</label>
-                            <Input
-                                type="email"
-                                value={newMember.email || ""}
-                                onChange={(e) => setNewMember({ ...newMember, email: e.target.value })}
-                                placeholder="john@example.com"
-                            />
-                        </div>
-
-                        <div>
-                            <label className="text-sm font-medium mb-2 block">Phone (Optional)</label>
-                            <Input
-                                type="tel"
-                                value={newMember.phone || ""}
-                                onChange={(e) => setNewMember({ ...newMember, phone: e.target.value })}
-                                placeholder="+1 234 567 8900"
-                            />
-                        </div>
-
-                        <div>
-                            <label className="text-sm font-medium mb-2 block">Password</label>
-                            <div className="relative">
-                                <Input
-                                    type={showPassword ? "text" : "password"}
-                                    value={newMember.password || ""}
-                                    onChange={(e) => setNewMember({ ...newMember, password: e.target.value })}
-                                    placeholder="Minimum 6 characters"
-                                    className="pr-10"
-                                />
-                                <button
-                                    type="button"
-                                    onClick={() => setShowPassword(!showPassword)}
-                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                                    tabIndex={-1}
-                                >
-                                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                                </button>
-                            </div>
-                        </div>
-
-                        <div>
-                            <label className="text-sm font-medium mb-2 block">Role</label>
-                            <Select 
-                                value={newMember.role} 
-                                onValueChange={(value) => setNewMember({ ...newMember, role: value as any })}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="salesperson">Salesperson</SelectItem>
-                                    {/* Dealership Owner can add Admins, Dealership Admin cannot */}
-                                    {(isSuperAdmin || isDealershipOwner) && (
-                                        <SelectItem value="dealership_admin">Dealership Admin</SelectItem>
-                                    )}
-                                    {isSuperAdmin && (
-                                        <>
-                                            <SelectItem value="dealership_owner">Dealership Owner</SelectItem>
-                                            <SelectItem value="super_admin">Super Admin</SelectItem>
-                                        </>
-                                    )}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        
-                        {addMemberError && (
-                            <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-lg">
-                                {addMemberError}
-                            </div>
-                        )}
-                    </div>
-
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setIsAddModalOpen(false)} disabled={isSubmitting}>
-                            Cancel
-                        </Button>
-                        <Button 
-                            onClick={handleAddMember}
-                            disabled={!newMember.email || !newMember.first_name || !newMember.last_name || !newMember.password || isSubmitting}
-                            loading={isSubmitting}
-                            loadingText="Adding..."
-                        >
-                            Add Member
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
 
             {/* Pending Tasks Modal */}
             {selectedUserId && (
@@ -892,15 +710,8 @@ export default function TeamPage() {
                 isOpen={createUserOpen}
                 onClose={() => setCreateUserOpen(false)}
                 onSuccess={() => {
-                    TeamService.listBdcAgents().then(setBdcAgents).catch(() => {})
-                }}
-            />
-            <EditBdcDealershipsModal
-                user={editBdcUser}
-                isOpen={!!editBdcUser}
-                onClose={() => setEditBdcUser(null)}
-                onSuccess={() => {
-                    TeamService.listBdcAgents().then(setBdcAgents).catch(() => {})
+                    fetchTeam()
+                    if (isSuperAdmin) TeamService.listBdcAgents().then(setBdcAgents).catch(() => {})
                 }}
             />
             <Dialog open={!!rateAgent} onOpenChange={(open) => !open && setRateAgent(null)}>
