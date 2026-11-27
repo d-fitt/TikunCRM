@@ -9,11 +9,33 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConversationList, ConversationThread } from "@/components/sms";
 import { CampaignsPanel } from "@/components/sms/campaigns-panel";
-import { ConversationListItem, SMSConfig, SMSLeadSearchItem, smsService } from "@/services/sms-service";
+import {
+  ConversationListItem,
+  SMSConfig,
+  SMSDeliveryCounts,
+  SMSLeadSearchItem,
+  SMSListCounts,
+  SMSListView,
+  smsService,
+} from "@/services/sms-service";
 import { useWebSocketEvent, useWebSocketResync } from "@/hooks/use-websocket";
 import { useAuthStore } from "@/stores/auth-store";
 
 const CAMPAIGN_ROLES = new Set(["super_admin", "dealership_admin", "dealership_owner"]);
+
+const LIST_FILTERS: { id: SMSListView; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "unread", label: "Unread" },
+  { id: "automatic", label: "Automatic" },
+  { id: "campaigns", label: "Campaigns" },
+];
+
+const EMPTY_BY_VIEW: Record<SMSListView, string> = {
+  all: "No conversations yet",
+  unread: "No unread texts",
+  automatic: "No automatic texts yet",
+  campaigns: "No campaign texts yet",
+};
 
 export default function SMSPage() {
   const searchParams = useSearchParams();
@@ -24,6 +46,9 @@ export default function SMSPage() {
   const [configLoading, setConfigLoading] = useState(true);
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
   const [totalUnread, setTotalUnread] = useState(0);
+  const [listView, setListView] = useState<SMSListView>("all");
+  const [counts, setCounts] = useState<SMSListCounts>({ all: 0, unread: 0, automatic: 0, campaigns: 0 });
+  const [delivery, setDelivery] = useState<SMSDeliveryCounts>({ delivered: 0, sent: 0, undelivered: 0, failed: 0 });
   const [loading, setLoading] = useState(false);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -55,15 +80,20 @@ export default function SMSPage() {
     if (!config?.sms_enabled) return;
     try {
       if (!opts?.silent) setLoading(true);
-      const response = await smsService.listConversations({ limit: 100 });
+      const response = await smsService.listConversations({
+        view: listView,
+        limit: listView === "campaigns" ? 500 : 100,
+      });
       setConversations(response.items);
       setTotalUnread(response.total_unread);
+      if (response.counts) setCounts(response.counts);
+      if (response.delivery) setDelivery(response.delivery);
     } catch (err) {
       console.error("Failed to load SMS conversations:", err);
     } finally {
       if (!opts?.silent) setLoading(false);
     }
-  }, [config?.sms_enabled]);
+  }, [config?.sms_enabled, listView]);
 
   useEffect(() => {
     void loadConversations();
@@ -85,6 +115,7 @@ export default function SMSPage() {
   useWebSocketEvent("sms:received", reloadList, [reloadList]);
   useWebSocketEvent("sms:sent", reloadList, [reloadList]);
   useWebSocketEvent("sms:read", reloadList, [reloadList]);
+  useWebSocketEvent("sms:status", reloadList, [reloadList]);
   useWebSocketResync(reloadList, [reloadList]);
 
   useWebSocketEvent<{ lead_id?: string; user_id?: string; user_name?: string; is_typing?: boolean }>(
@@ -241,7 +272,7 @@ export default function SMSPage() {
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           </Button>
         </div>
-        <div className="p-2 border-b">
+        <div className="p-2 border-b space-y-2">
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
@@ -251,6 +282,35 @@ export default function SMSPage() {
               className="pl-8"
             />
           </div>
+          <div className="flex gap-1 overflow-x-auto">
+            {LIST_FILTERS.map((filter) => {
+              const active = listView === filter.id;
+              const count = counts[filter.id];
+              return (
+                <button
+                  key={filter.id}
+                  type="button"
+                  onClick={() => setListView(filter.id)}
+                  className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
+                    active
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {filter.label}
+                  {count > 0 && <span className="ml-1 tabular-nums">{count}</span>}
+                </button>
+              );
+            })}
+          </div>
+          {listView === "campaigns" && (
+            <p className="px-0.5 text-[11px] leading-relaxed text-muted-foreground">
+              <span className="text-emerald-700 dark:text-emerald-400">{delivery.delivered} delivered</span>
+              {delivery.sent > 0 && <span> · {delivery.sent} waiting</span>}
+              {delivery.undelivered > 0 && <span> · {delivery.undelivered} not delivered</span>}
+              {delivery.failed > 0 && <span className="text-destructive"> · {delivery.failed} failed</span>}
+            </p>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto min-h-0">
           {loading ? (
@@ -307,6 +367,8 @@ export default function SMSPage() {
                     selectedLeadId={selectedLeadId || undefined}
                     onSelect={handleSelect}
                     typingByLead={typingByLead}
+                    emptyMessage={EMPTY_BY_VIEW[listView]}
+                    showDelivery={listView === "campaigns" || listView === "automatic"}
                   />
                 )
               )}

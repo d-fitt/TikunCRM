@@ -54,6 +54,8 @@ export interface Appointment {
     reminder_sent: boolean
     outcome_notes?: string
     completed_at?: string
+    is_checked_in?: boolean
+    checked_in_at?: string | null
     created_at: string
     updated_at: string
     lead?: LeadBrief
@@ -262,7 +264,7 @@ export function getAppointmentStatusLabel(status: AppointmentStatus): string {
         scheduled: "Scheduled",
         confirmed: "Confirmed",
         arrived: "Arrived",
-        in_showroom: "In Showroom",
+        in_showroom: "In Store",
         in_progress: "In Progress",
         completed: "Completed",
         sold: "Sold",

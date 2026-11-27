@@ -277,6 +277,23 @@ export function CampaignsPanel() {
   );
   useWebSocketResync(useCallback(() => void load(), [load]), [load]);
 
+  // Carrier delivery reports arrive after the send. Refresh the delivered counts, but not on every single text.
+  const deliveryRefresh = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useWebSocketEvent(
+    "sms:status",
+    useCallback(() => {
+      if (deliveryRefresh.current) clearTimeout(deliveryRefresh.current);
+      deliveryRefresh.current = setTimeout(() => void load(), 1500);
+    }, [load]),
+    [load]
+  );
+  useEffect(
+    () => () => {
+      if (deliveryRefresh.current) clearTimeout(deliveryRefresh.current);
+    },
+    []
+  );
+
   // Live filtered audience preview
   useEffect(() => {
     setAudienceLoading(true);
@@ -1564,8 +1581,15 @@ export function CampaignsPanel() {
                               {done.toLocaleString()}/{c.total_recipients.toLocaleString()} ({pct}%)
                             </span>
                             <span className="text-emerald-700 dark:text-emerald-400">
-                              {c.sent_count.toLocaleString()} sent
+                              {(c.delivered_count ?? 0).toLocaleString()} delivered
                             </span>
+                            {(c.pending_count ?? 0) > 0 && (
+                              <span>{(c.pending_count ?? 0).toLocaleString()} waiting</span>
+                            )}
+                            {(c.undelivered_count ?? 0) > 0 && (
+                              <span>{(c.undelivered_count ?? 0).toLocaleString()} not delivered</span>
+                            )}
+                            <span>{c.sent_count.toLocaleString()} accepted</span>
                             {c.failed_count > 0 && (
                               <span className="text-destructive">{c.failed_count.toLocaleString()} failed</span>
                             )}

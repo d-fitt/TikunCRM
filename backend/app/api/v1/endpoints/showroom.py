@@ -86,11 +86,13 @@ async def _resolve_check_in_appointment(
 
 
 def _confirm_appointment_on_check_in(appointment: Appointment) -> None:
-    """Confirm today's appointment when the customer checks in."""
-    if appointment.status == AppointmentStatus.SCHEDULED:
-        appointment.status = AppointmentStatus.CONFIRMED
-    elif appointment.status == AppointmentStatus.CONFIRMED:
-        appointment.status = AppointmentStatus.ARRIVED
+    """Mark today's appointment as In Store when the customer checks in."""
+    if appointment.status in (
+        AppointmentStatus.SCHEDULED,
+        AppointmentStatus.CONFIRMED,
+        AppointmentStatus.ARRIVED,
+    ):
+        appointment.status = AppointmentStatus.IN_SHOWROOM
 
 
 async def _finalize_appointment_on_check_out(

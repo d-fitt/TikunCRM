@@ -66,6 +66,7 @@ class SMSMessageResponse(BaseModel):
     id: UUID
     lead_id: Optional[UUID]
     user_id: Optional[UUID]
+    sender_name: Optional[str] = None
     direction: str
     from_number: str
     to_number: str
@@ -136,10 +137,27 @@ class ConversationListItem(BaseModel):
     unread_count: int
 
 
+class ConversationTabCounts(BaseModel):
+    all: int = 0
+    unread: int = 0
+    automatic: int = 0
+    campaigns: int = 0
+
+
+class CampaignDeliveryCounts(BaseModel):
+    """Offer-campaign texts by what the carrier reported."""
+    delivered: int = 0
+    sent: int = 0
+    undelivered: int = 0
+    failed: int = 0
+
+
 class ConversationsListResponse(BaseModel):
     """List of conversations"""
     items: List[ConversationListItem]
     total_unread: int
+    counts: ConversationTabCounts = Field(default_factory=ConversationTabCounts)
+    delivery: CampaignDeliveryCounts = Field(default_factory=CampaignDeliveryCounts)
 
 
 class UnreadCountResponse(BaseModel):
@@ -296,14 +314,17 @@ async def search_leads_for_sms(
 @router.get("/conversations", response_model=ConversationsListResponse)
 async def list_conversations(
     unread_only: bool = Query(False),
-    limit: int = Query(50, ge=1, le=100),
+    view: str = Query("all"),
+    limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(deps.get_current_active_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """List SMS conversations"""
+    """List SMS conversations. view is all, unread, automatic, or campaigns."""
     service = get_sms_conversation_service(db)
-    
+    if view not in ("all", "unread", "automatic", "campaigns"):
+        view = "all"
+
     # Apply role-based filtering
     user_id = None
     dealership_id = None
@@ -316,24 +337,24 @@ async def list_conversations(
     elif current_user.role == UserRole.BDC:
         dealership_ids = await get_accessible_dealership_ids(db, current_user)
 
+    scope = dict(user_id=user_id, dealership_id=dealership_id, dealership_ids=dealership_ids)
     conversations = await service.get_conversations_list(
-        user_id=user_id,
-        dealership_id=dealership_id,
-        dealership_ids=dealership_ids,
         unread_only=unread_only,
+        view=view,
         limit=limit,
-        offset=offset
+        offset=offset,
+        **scope,
     )
 
-    total_unread = await service.get_unread_count(
-        user_id=user_id,
-        dealership_id=dealership_id,
-        dealership_ids=dealership_ids,
-    )
-    
+    total_unread = await service.get_unread_count(**scope)
+    counts = await service.conversation_tab_counts(**scope)
+    delivery = await service.promotional_delivery_counts(**scope)
+
     return ConversationsListResponse(
         items=[ConversationListItem(**c) for c in conversations],
-        total_unread=total_unread
+        total_unread=total_unread,
+        counts=ConversationTabCounts(**counts),
+        delivery=CampaignDeliveryCounts(**delivery),
     )
 
 
@@ -405,6 +426,17 @@ async def get_conversation(
 
     if newly_read:
         await _broadcast_sms_read(lead)
+
+    sender_ids = {msg.user_id for msg in messages if msg.user_id}
+    sender_names: Dict[UUID, str] = {}
+    if sender_ids:
+        sender_rows = (
+            await db.execute(select(User).where(User.id.in_(sender_ids)))
+        ).scalars().all()
+        sender_names = {
+            u.id: f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email
+            for u in sender_rows
+        }
     
     return ConversationResponse(
         lead_id=lead.id,
@@ -416,6 +448,7 @@ async def get_conversation(
                 id=msg.id,
                 lead_id=msg.lead_id,
                 user_id=msg.user_id,
+                sender_name=sender_names.get(msg.user_id) if msg.user_id else None,
                 direction=msg.direction.value,
                 from_number=msg.from_number,
                 to_number=msg.to_number,
@@ -879,6 +912,9 @@ class CampaignResponse(BaseModel):
     sent_count: int
     failed_count: int
     skipped_count: int
+    delivered_count: int = 0
+    undelivered_count: int = 0
+    pending_count: int = 0
     created_at: datetime
     completed_at: Optional[datetime]
     created_by_name: Optional[str] = None
@@ -892,7 +928,8 @@ class CampaignOverviewResponse(BaseModel):
     timezone: str
 
 
-def _campaign_response(b: SMSBroadcast, names: dict) -> CampaignResponse:
+def _campaign_response(b: SMSBroadcast, names: dict, delivery: Optional[dict] = None) -> CampaignResponse:
+    stats = delivery or {}
     return CampaignResponse(
         id=b.id,
         name=b.name,
@@ -905,6 +942,9 @@ def _campaign_response(b: SMSBroadcast, names: dict) -> CampaignResponse:
         sent_count=b.sent_count,
         failed_count=b.failed_count,
         skipped_count=b.skipped_count,
+        delivered_count=int(stats.get("delivered", 0)),
+        undelivered_count=int(stats.get("undelivered", 0)),
+        pending_count=int(stats.get("pending", 0)),
         created_at=b.created_at,
         completed_at=b.completed_at,
         created_by_name=names.get(b.created_by),
@@ -1141,7 +1181,8 @@ async def list_campaigns(
     if creator_ids:
         users = (await db.execute(select(User).where(User.id.in_(creator_ids)))).scalars().all()
         names = {u.id: u.full_name for u in users}
-    return [_campaign_response(b, names) for b in rows]
+    delivery = await broadcasts.delivery_breakdown(db, [b.id for b in rows])
+    return [_campaign_response(b, names, delivery.get(b.id)) for b in rows]
 
 
 @router.post("/campaigns/{campaign_id}/cancel", response_model=CampaignResponse)

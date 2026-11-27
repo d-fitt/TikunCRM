@@ -18,6 +18,7 @@ import {
 import { MessageBubble } from "./message-bubble";
 import { MessageComposer } from "./message-composer";
 import { SMSCallLogCard } from "./call-log-card";
+import { LeadQuickViewModal } from "./lead-quick-view-modal";
 import { SMSCallLog, SMSConsentStatus, SMSMessage, smsService } from "@/services/sms-service";
 import { useToast } from "@/hooks/use-toast";
 import { useWebSocketEvent, useWebSocketResync } from "@/hooks/use-websocket";
@@ -71,7 +72,12 @@ function ConsentBadge({ consent }: { consent: SMSConsentStatus }) {
 export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMessageSent }: ConversationThreadProps) {
   const { toast } = useToast();
   const callLeadCtx = useCallLeadOptional();
-  const currentUserId = useAuthStore((s) => s.user?.id);
+  const currentUser = useAuthStore((s) => s.user);
+  const currentUserId = currentUser?.id;
+  const currentUserName = currentUser
+    ? `${currentUser.first_name || ""} ${currentUser.last_name || ""}`.trim() || currentUser.email || null
+    : null;
+  const [leadModalOpen, setLeadModalOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const timelineContentRef = useRef<HTMLDivElement>(null);
@@ -432,7 +438,8 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
         const newMessage: SMSMessage = {
           id: result.message_id,
           lead_id: leadId,
-          user_id: null,
+          user_id: currentUserId || null,
+          sender_name: currentUserName,
           direction: "outbound",
           from_number: "",
           to_number: leadPhone || "",
@@ -526,7 +533,14 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
         )}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <h2 className="font-semibold truncate">{displayName}</h2>
+            <button
+              type="button"
+              onClick={() => setLeadModalOpen(true)}
+              className="font-semibold truncate hover:underline text-left cursor-pointer"
+              title="View lead details"
+            >
+              {displayName}
+            </button>
             {consent && <ConsentBadge consent={consent} />}
           </div>
           {displayPhone && (
@@ -642,6 +656,12 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
         enableVoice
         onTypingChange={handleTypingChange}
         placeholder={blocked ? "Texting is blocked for this customer" : "Type a message..."}
+      />
+
+      <LeadQuickViewModal
+        leadId={leadId}
+        open={leadModalOpen}
+        onOpenChange={setLeadModalOpen}
       />
 
       <AlertDialog open={confirmOptOut} onOpenChange={setConfirmOptOut}>

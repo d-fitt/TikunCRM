@@ -12,6 +12,23 @@ interface ConversationListProps {
   selectedLeadId?: string;
   onSelect: (leadId: string) => void;
   typingByLead?: Record<string, string[]>;
+  emptyMessage?: string;
+  showDelivery?: boolean;
+}
+
+const DELIVERY_LABEL: Record<string, string> = {
+  delivered: "Delivered",
+  sent: "Sent",
+  queued: "Sending",
+  sending: "Sending",
+  undelivered: "Not delivered",
+  failed: "Failed",
+};
+
+function deliveryClass(status: string) {
+  if (status === "delivered") return "text-emerald-700 dark:text-emerald-400";
+  if (status === "undelivered" || status === "failed") return "text-destructive";
+  return "text-muted-foreground";
 }
 
 function MediaTypeIcon({ kind }: { kind: MediaKind }) {
@@ -42,6 +59,8 @@ export function ConversationList({
   selectedLeadId,
   onSelect,
   typingByLead = {},
+  emptyMessage = "No conversations yet",
+  showDelivery = false,
 }: ConversationListProps) {
   const formatTime = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -58,7 +77,7 @@ export function ConversationList({
     return (
       <div className="flex flex-col items-center justify-center h-full text-center p-4">
         <MessageSquare className="h-12 w-12 text-muted-foreground/50 mb-4" />
-        <p className="text-muted-foreground">No conversations yet</p>
+        <p className="text-muted-foreground">{emptyMessage}</p>
       </div>
     );
   }
@@ -104,8 +123,15 @@ export function ConversationList({
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-2">
                 <span className="font-medium truncate">{conversation.lead_name}</span>
-                <span className="text-xs text-muted-foreground shrink-0">
-                  {formatTime(last.created_at)}
+                <span className="flex items-center gap-2 shrink-0">
+                  {showDelivery && last.direction === "outbound" && DELIVERY_LABEL[last.status] && (
+                    <span className={cn("text-[10px] font-medium", deliveryClass(last.status))}>
+                      {DELIVERY_LABEL[last.status]}
+                    </span>
+                  )}
+                  <span className="text-xs text-muted-foreground">
+                    {formatTime(last.created_at)}
+                  </span>
                 </span>
               </div>
 

@@ -486,6 +486,32 @@ async def cancel_broadcast(db: AsyncSession, broadcast: SMSBroadcast) -> None:
     await refresh_counts(db, broadcast)
 
 
+async def delivery_breakdown(db: AsyncSession, broadcast_ids: List[UUID]) -> Dict[UUID, Dict[str, int]]:
+    """Carrier result for each campaign: delivered, still waiting, or undelivered."""
+    empty = {"delivered": 0, "undelivered": 0, "pending": 0}
+    out = {bid: dict(empty) for bid in broadcast_ids}
+    if not broadcast_ids:
+        return out
+    rows = (
+        await db.execute(
+            select(SMSBroadcastRecipient.broadcast_id, SMSLog.status, func.count())
+            .join(SMSLog, SMSLog.id == SMSBroadcastRecipient.sms_log_id)
+            .where(SMSBroadcastRecipient.broadcast_id.in_(broadcast_ids))
+            .group_by(SMSBroadcastRecipient.broadcast_id, SMSLog.status)
+        )
+    ).all()
+    for bid, status, count in rows:
+        key = status.value if hasattr(status, "value") else str(status)
+        bucket = out.setdefault(bid, dict(empty))
+        if key == "delivered":
+            bucket["delivered"] += count
+        elif key == "undelivered":
+            bucket["undelivered"] += count
+        elif key in ("queued", "sending", "sent"):
+            bucket["pending"] += count
+    return out
+
+
 async def refresh_counts(db: AsyncSession, broadcast: SMSBroadcast) -> int:
     """Update the sent/failed/skipped counters; returns how many are still waiting."""
     rows = (

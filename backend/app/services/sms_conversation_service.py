@@ -508,12 +508,96 @@ class SMSConversationService:
         rows = [m for m in result.scalars().all() if not (m.meta_data or {}).get("tapback_applied")]
         return list(reversed(rows))
     
+    def _apply_lead_scope(self, query, user_id, dealership_id, dealership_ids):
+        if user_id:
+            return query.where(Lead.assigned_to == user_id)
+        if dealership_ids:
+            return query.where(Lead.dealership_id.in_(dealership_ids))
+        if dealership_id:
+            return query.where(Lead.dealership_id == dealership_id)
+        return query
+
+    def _view_message_filter(self, view: str, log=SMSLog):
+        """Which messages put a lead on this tab."""
+        if view == "automatic":
+            return log.category.in_(("auto_first", "compliance"))
+        if view == "campaigns":
+            return log.category == "promotional"
+        # All and Unread: real conversations. Offer blasts stay on the Campaigns tab.
+        return or_(
+            log.direction == MessageDirection.INBOUND,
+            log.category.is_(None),
+            log.category.in_(("conversation", "auto_first", "compliance")),
+        )
+
+    async def _count_leads(
+        self,
+        message_filter,
+        *,
+        user_id: Optional[UUID],
+        dealership_id: Optional[UUID],
+        dealership_ids: Optional[List[UUID]],
+        unread: bool = False,
+    ) -> int:
+        query = (
+            select(func.count(func.distinct(Lead.id)))
+            .select_from(Lead)
+            .join(SMSLog, SMSLog.lead_id == Lead.id)
+            .where(message_filter)
+        )
+        if unread:
+            query = query.where(
+                SMSLog.direction == MessageDirection.INBOUND,
+                SMSLog.is_read.is_(False),
+            )
+        query = self._apply_lead_scope(query, user_id, dealership_id, dealership_ids)
+        return (await self.db.execute(query)).scalar() or 0
+
+    async def conversation_tab_counts(
+        self,
+        user_id: Optional[UUID] = None,
+        dealership_id: Optional[UUID] = None,
+        dealership_ids: Optional[List[UUID]] = None,
+    ) -> Dict[str, int]:
+        scope = dict(user_id=user_id, dealership_id=dealership_id, dealership_ids=dealership_ids)
+        inbox = self._view_message_filter("all")
+        return {
+            "all": await self._count_leads(inbox, **scope),
+            "unread": await self._count_leads(inbox, unread=True, **scope),
+            "automatic": await self._count_leads(self._view_message_filter("automatic"), **scope),
+            "campaigns": await self._count_leads(self._view_message_filter("campaigns"), **scope),
+        }
+
+    async def promotional_delivery_counts(
+        self,
+        user_id: Optional[UUID] = None,
+        dealership_id: Optional[UUID] = None,
+        dealership_ids: Optional[List[UUID]] = None,
+    ) -> Dict[str, int]:
+        """How many offer-campaign texts reached a phone, for the people this user can see."""
+        query = (
+            select(SMSLog.status, func.count())
+            .join(Lead, SMSLog.lead_id == Lead.id)
+            .where(SMSLog.category == "promotional")
+            .group_by(SMSLog.status)
+        )
+        query = self._apply_lead_scope(query, user_id, dealership_id, dealership_ids)
+        buckets = {"delivered": 0, "sent": 0, "undelivered": 0, "failed": 0}
+        for status, count in (await self.db.execute(query)).all():
+            key = status.value if hasattr(status, "value") else str(status)
+            if key in ("queued", "sending", "sent"):
+                buckets["sent"] += count
+            elif key in buckets:
+                buckets[key] += count
+        return buckets
+
     async def get_conversations_list(
         self,
         user_id: Optional[UUID] = None,
         dealership_id: Optional[UUID] = None,
         dealership_ids: Optional[List[UUID]] = None,
         unread_only: bool = False,
+        view: str = "all",
         limit: int = 50,
         offset: int = 0
     ) -> List[Dict[str, Any]]:
@@ -521,7 +605,18 @@ class SMSConversationService:
         Get list of SMS conversations with last message and unread count.
         Groups by lead (so assignee sees their leads); name/phone from Customer.
         Opening a conversation shows full customer-level history.
+
+        view:
+          all — replies, hand-typed texts, and automatic new-lead texts
+          unread — those with an unread reply
+          automatic — new-lead greeting or offers confirmation
+          campaigns — offer blasts, including people who never replied
         """
+        if view not in ("all", "unread", "automatic", "campaigns"):
+            view = "all"
+        if view == "unread":
+            unread_only = True
+
         # Subquery: last message per lead (lead is the conversation key for list)
         subq = (
             select(
@@ -542,19 +637,10 @@ class SMSConversationService:
             .group_by(SMSLog.lead_id)
         ).subquery()
 
-        # Bulk offer campaigns stay out of the inbox until someone replies.
-        # The new-lead greeting and the offers confirmation must show up on their own.
         other = aliased(SMSLog)
-        has_conversation = (
+        on_this_tab = (
             select(other.id)
-            .where(
-                other.lead_id == SMSLog.lead_id,
-                or_(
-                    other.direction == MessageDirection.INBOUND,
-                    other.category.is_(None),
-                    other.category.in_(("conversation", "auto_first", "compliance")),
-                ),
-            )
+            .where(other.lead_id == SMSLog.lead_id, self._view_message_filter(view, other))
             .exists()
         )
 
@@ -574,7 +660,7 @@ class SMSConversationService:
             .outerjoin(unread_subq, unread_subq.c.lead_id == SMSLog.lead_id)
             .join(Lead, SMSLog.lead_id == Lead.id)
             .join(Customer, Lead.customer_id == Customer.id)
-            .where(has_conversation)
+            .where(on_this_tab)
         )
 
         if user_id:
@@ -607,6 +693,7 @@ class SMSConversationService:
                     "direction": sms.direction.value,
                     "created_at": sms.created_at.isoformat(),
                     "status": sms.status.value,
+                    "category": sms.category,
                     "media_urls": media_urls,
                     "media_content_types": media_content_types,
                 },

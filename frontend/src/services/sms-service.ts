@@ -82,6 +82,9 @@ export interface SMSCampaign {
   sent_count: number;
   failed_count: number;
   skipped_count: number;
+  delivered_count?: number;
+  undelivered_count?: number;
+  pending_count?: number;
   created_at: string;
   completed_at: string | null;
   created_by_name: string | null;
@@ -130,6 +133,7 @@ export interface SMSMessage {
   id: string;
   lead_id: string | null;
   user_id: string | null;
+  sender_name?: string | null;
   direction: "inbound" | "outbound";
   from_number: string;
   to_number: string;
@@ -187,15 +191,34 @@ export interface ConversationListItem {
     direction: string;
     created_at: string;
     status: string;
+    category?: string | null;
     media_urls?: string[];
     media_content_types?: string[];
   };
   unread_count: number;
 }
 
+export type SMSListView = "all" | "unread" | "automatic" | "campaigns";
+
+export interface SMSListCounts {
+  all: number;
+  unread: number;
+  automatic: number;
+  campaigns: number;
+}
+
+export interface SMSDeliveryCounts {
+  delivered: number;
+  sent: number;
+  undelivered: number;
+  failed: number;
+}
+
 export interface ConversationsListResponse {
   items: ConversationListItem[];
   total_unread: number;
+  counts?: SMSListCounts;
+  delivery?: SMSDeliveryCounts;
 }
 
 class SMSService {
@@ -220,6 +243,7 @@ class SMSService {
    */
   async listConversations(params?: {
     unread_only?: boolean;
+    view?: SMSListView;
     limit?: number;
     offset?: number;
   }): Promise<ConversationsListResponse> {

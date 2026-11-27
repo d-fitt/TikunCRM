@@ -127,6 +127,8 @@ class AppointmentResponse(AppointmentBase):
     reminder_sent: bool
     outcome_notes: Optional[str] = None
     completed_at: Optional[datetime] = None
+    is_checked_in: bool = False
+    checked_in_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
     

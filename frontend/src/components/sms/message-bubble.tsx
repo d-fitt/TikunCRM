@@ -93,11 +93,21 @@ export function MessageBubble({ message, onReact }: MessageBubbleProps) {
               : "bg-muted text-foreground rounded-bl-sm"
           )}
         >
-          {isOutbound && message.category && CATEGORY_LABELS[message.category] && (
-            <p className="text-[10px] font-medium uppercase tracking-wide text-primary-foreground/70 mb-0.5">
-              {CATEGORY_LABELS[message.category]}
-            </p>
-          )}
+          {(() => {
+            if (!isOutbound) return null;
+            const categoryLabel = message.category ? CATEGORY_LABELS[message.category] : null;
+            const headerLabel = categoryLabel
+              ? message.category === "promotional" && message.sender_name
+                ? `${categoryLabel} · ${message.sender_name}`
+                : categoryLabel
+              : message.sender_name || null;
+            if (!headerLabel) return null;
+            return (
+              <p className="text-[10px] font-medium uppercase tracking-wide text-primary-foreground/70 mb-0.5">
+                {headerLabel}
+              </p>
+            );
+          })()}
 
           {mediaUrls.length > 0 && (
             <div className={cn("space-y-2", message.body && "mb-2")}>

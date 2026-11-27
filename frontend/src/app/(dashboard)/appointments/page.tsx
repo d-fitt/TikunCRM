@@ -982,9 +982,14 @@ export default function AppointmentsPage() {
     const [totalPages, setTotalPages] = React.useState(1)
     const [listTotal, setListTotal] = React.useState(0)
 
-    // Filters - initial from URL or localStorage
-    const [filter, setFilterState] = React.useState<FilterType>("all")
-    const [statusFilter, setStatusFilterState] = React.useState<AppointmentStatus | "">("")
+    // Filters - default to Today unless URL explicitly specifies another filter
+    const [filter, setFilterState] = React.useState<FilterType>(() => {
+        const urlFilter = searchParams.get("filter") as FilterType | null
+        return urlFilter && VALID_FILTERS.includes(urlFilter) ? urlFilter : "today"
+    })
+    const [statusFilter, setStatusFilterState] = React.useState<AppointmentStatus | "">(() => {
+        return (searchParams.get("status") as AppointmentStatus | null) || ""
+    })
     const [storeFilter, setStoreFilter] = React.useState("")
     const [pagePartnerStores, setPagePartnerStores] = React.useState<PartnerStore[]>([])
     const [sharingWhatsApp, setSharingWhatsApp] = React.useState(false)
@@ -999,26 +1004,17 @@ export default function AppointmentsPage() {
             .catch(() => setPagePartnerStores([]))
     }, [])
 
-    // Restore from URL or localStorage
+    // Sync from URL params when navigated directly
     React.useEffect(() => {
         const urlFilter = searchParams.get("filter") as FilterType | null
         const urlStatus = searchParams.get("status") as AppointmentStatus | null
         if (urlFilter && VALID_FILTERS.includes(urlFilter)) {
             setFilterState(urlFilter)
+        } else {
+            setFilterState("today")
         }
-        if (urlStatus) setStatusFilterState(urlStatus)
+        setStatusFilterState(urlStatus || "")
     }, [searchParams])
-
-    // When no URL params, restore from localStorage
-    React.useEffect(() => {
-        if (searchParams.get("filter") != null || searchParams.get("status") != null) return
-        const saved = filterStorage.getAppointments()
-        if (!saved) return
-        const params = new URLSearchParams()
-        if (saved.filter && VALID_FILTERS.includes(saved.filter as FilterType)) params.set("filter", saved.filter)
-        if (saved.status) params.set("status", saved.status)
-        if (params.toString()) router.replace(`/appointments?${params.toString()}`)
-    }, [router, searchParams])
 
     const setFilter = React.useCallback(
         (v: FilterType) => {
@@ -1245,6 +1241,19 @@ export default function AppointmentsPage() {
         }
     }
 
+    async function handleCheckInStatus(appointment: Appointment) {
+        try {
+            await AppointmentService.update(appointment.id, { status: "in_showroom" })
+            toast({
+                title: "Status updated",
+                description: "Appointment marked as Checked In / In Store.",
+            })
+            loadData()
+        } catch (err) {
+            console.error("Failed to mark appointment as in store:", err)
+        }
+    }
+
     function handleReschedule(appointment: Appointment) {
         setSelectedAppointment(appointment)
         setShowRescheduleModal(true)
@@ -1260,6 +1269,7 @@ export default function AppointmentsPage() {
     }
     
     function isOverdue(appointment: Appointment): boolean {
+        if (appointment.is_checked_in) return false
         return new Date(appointment.scheduled_at) < new Date() && 
                ["scheduled", "confirmed"].includes(appointment.status)
     }
@@ -1624,7 +1634,7 @@ export default function AppointmentsPage() {
                                 <SelectItem value="scheduled">Scheduled</SelectItem>
                                 <SelectItem value="confirmed">Confirmed</SelectItem>
                                 <SelectItem value="arrived">Arrived</SelectItem>
-                                <SelectItem value="in_showroom">In Showroom</SelectItem>
+                                <SelectItem value="in_showroom">In Store</SelectItem>
                                 <SelectItem value="in_progress">In Progress</SelectItem>
                                 <SelectItem value="completed">Completed</SelectItem>
                                 <SelectItem value="sold">Sold</SelectItem>
@@ -2066,6 +2076,10 @@ export default function AppointmentsPage() {
                                                                 <CheckCircle className="mr-2 h-4 w-4 text-blue-600" />
                                                                 Confirm
                                                             </DropdownMenuItem>
+                                                            <DropdownMenuItem onSelect={() => handleCheckInStatus(appointment)}>
+                                                                <Store className="mr-2 h-4 w-4 text-teal-600" />
+                                                                Checked In / In Store
+                                                            </DropdownMenuItem>
                                                             <DropdownMenuItem onSelect={() => handleReschedule(appointment)}>
                                                                 <CalendarClock className="mr-2 h-4 w-4" />
                                                                 Reschedule
@@ -2097,6 +2111,12 @@ export default function AppointmentsPage() {
                                                 }>
                                                     {getAppointmentStatusLabel(appointment.status)}
                                                 </Badge>
+                                                )}
+                                                {appointment.is_checked_in && (
+                                                    <Badge className="text-xs bg-teal-100 text-teal-800 border-teal-200 hover:bg-teal-100">
+                                                        <Store className="h-3 w-3 mr-1" />
+                                                        Checked In · In Store
+                                                    </Badge>
                                                 )}
                                                 {isOverdue(appointment) && (
                                                     <Badge variant="destructive" className="text-xs">
@@ -2190,6 +2210,10 @@ export default function AppointmentsPage() {
                                                             <DropdownMenuItem onSelect={() => handleConfirm(appointment)}>
                                                                 <CheckCircle className="mr-2 h-4 w-4 text-blue-600" />
                                                                 Confirm
+                                                            </DropdownMenuItem>
+                                                            <DropdownMenuItem onSelect={() => handleCheckInStatus(appointment)}>
+                                                                <Store className="mr-2 h-4 w-4 text-teal-600" />
+                                                                Checked In / In Store
                                                             </DropdownMenuItem>
                                                             <DropdownMenuItem onSelect={() => handleReschedule(appointment)}>
                                                                 <CalendarClock className="mr-2 h-4 w-4" />
