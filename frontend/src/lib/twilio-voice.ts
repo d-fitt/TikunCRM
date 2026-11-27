@@ -85,6 +85,7 @@ class TwilioVoiceManager {
   private keepAliveWorker: Worker | null = null;
   private keepAliveTicks = 0;
   private reconnectInFlight: Promise<void> | null = null;
+  private initInFlight = false;
   private isInitialized = false;
   private dealershipId: string | null = null;
   /** Dealerships currently registered (for change detection) */
@@ -139,6 +140,11 @@ class TwilioVoiceManager {
     // while still registering every accessible store for inbound.
     const key = `${primary ?? ""}::${[...extras].sort().join(",")}`;
 
+    if (this.initInFlight) {
+      console.log("Twilio initialize already in progress");
+      return;
+    }
+
     if (this.isInitialized && this.registeredDealershipKey === key) {
       console.log("Twilio already initialized for dealerships:", key || "(user default)");
       this.callbacks = callbacks;
@@ -154,6 +160,7 @@ class TwilioVoiceManager {
     this.dealershipId = primary;
     this.registeredDealershipKey = key;
     this.notifyStateChange("connecting");
+    this.initInFlight = true;
 
     try {
       const { Device } = await import("@twilio/voice-sdk");
@@ -230,6 +237,8 @@ class TwilioVoiceManager {
       this.isInitialized = false;
       this.registeredDealershipKey = "";
       throw error;
+    } finally {
+      this.initInFlight = false;
     }
   }
 

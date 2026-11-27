@@ -54,6 +54,8 @@ export interface Appointment {
     reminder_sent: boolean
     outcome_notes?: string
     completed_at?: string
+    is_checked_in?: boolean
+    checked_in_at?: string | null
     created_at: string
     updated_at: string
     lead?: LeadBrief
@@ -102,6 +104,11 @@ export interface AppointmentStoreCount {
     count: number
 }
 
+export interface AppointmentStatusCount {
+    status: AppointmentStatus | string
+    count: number
+}
+
 export interface AppointmentListResponse {
     items: Appointment[]
     total: number
@@ -109,6 +116,7 @@ export interface AppointmentListResponse {
     page_size: number
     total_pages: number
     store_counts?: AppointmentStoreCount[]
+    status_counts?: AppointmentStatusCount[]
 }
 
 /** Store on the appointment, or the lead's store when the appointment was booked before one was saved. */
@@ -256,7 +264,7 @@ export function getAppointmentStatusLabel(status: AppointmentStatus): string {
         scheduled: "Scheduled",
         confirmed: "Confirmed",
         arrived: "Arrived",
-        in_showroom: "In Showroom",
+        in_showroom: "In Store",
         in_progress: "In Progress",
         completed: "Completed",
         sold: "Sold",

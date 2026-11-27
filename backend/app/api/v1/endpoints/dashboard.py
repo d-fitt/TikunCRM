@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
 from app.api import deps
-from app.core.permissions import Permission, UserRole
+from app.core.permissions import TEAM_ROLES, Permission, UserRole
 from app.core.access_scope import get_accessible_dealership_ids
 from app.core.cache import cache_get, cache_set
 from app.core.config import settings
@@ -221,7 +221,10 @@ async def get_super_admin_stats(
 
         total_sales_result = await db.execute(
             select(func.count()).select_from(User).where(
-                and_(User.role == UserRole.SALESPERSON, User.is_active == True)
+                and_(
+                    User.role.in_([UserRole.DEALERSHIP_ADMIN, UserRole.BDC]),
+                    User.is_active == True,
+                )
             )
         )
         total_sales = total_sales_result.scalar() or 0
@@ -391,7 +394,7 @@ async def get_dealership_admin_stats(
     conversion_rate = (converted_leads / total_leads * 100) if total_leads > 0 else 0
 
     # Team size
-    team_clauses = [User.role == UserRole.SALESPERSON, User.is_active == True]
+    team_clauses = [User.role.in_(TEAM_ROLES), User.is_active == True]
     if user_scope is not None:
         team_clauses.append(user_scope)
     team_result = await db.execute(
@@ -799,9 +802,7 @@ async def claim_bdc_work_queue_lead(
     current_user: User = Depends(deps.require_role(UserRole.BDC)),
 ) -> Any:
     """Remove this lead from the shared list the moment a BDC starts the call."""
-    ok = await claim_lead_for_call(db, current_user, lead_id)
-    if not ok:
-        raise HTTPException(status_code=409, detail="Another person already started this call")
+    await claim_lead_for_call(db, current_user, lead_id)
     payload = await snapshot_view(db, current_user, None)
     return BdcWorkQueueResponse(**payload)
 

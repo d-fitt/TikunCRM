@@ -1,6 +1,7 @@
 """
 WebSocket Endpoint for real-time updates
 """
+import json
 import logging
 from typing import List, Optional
 from uuid import UUID
@@ -81,10 +82,12 @@ async def websocket_endpoint(
         return
     
     # Refresh BDC / org-wide subscriptions from DB so new dealership assignments apply without re-login
+    user_name: str = payload.get("full_name") or payload.get("email") or "Someone"
     try:
         async with async_session_maker() as db:
             user = await db.get(User, UUID(str(user_id)))
             if user and user.is_active:
+                user_name = user.full_name or user.email or user_name
                 if user.role == UserRole.BDC:
                     ids = await get_accessible_dealership_ids(db, user)
                     accessible_dealership_ids = [str(i) for i in (ids or [])]
@@ -112,12 +115,65 @@ async def websocket_endpoint(
         str(dealership_id) if dealership_id else None,
         accessible_dealership_ids=accessible_dealership_ids or None,
     )
+
+    try:
+        async with async_session_maker() as db:
+            user = await db.get(User, UUID(str(user_id)))
+            if user and user.is_active:
+                from app.services.shell_badges import push_shell_badges
+
+                await push_shell_badges(db, user)
+    except Exception as e:
+        logger.warning("WebSocket sms unread snapshot failed for user %s: %s", user_id, e)
     
     try:
         while True:
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_text("pong")
+                continue
+            try:
+                msg = json.loads(data)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            msg_type = msg.get("type")
+            if msg_type == "softphone:presence":
+                presence_status = str((msg.get("payload") or {}).get("status") or "")
+                try:
+                    from app.services.softphone_presence_service import apply_presence_status
+
+                    async with async_session_maker() as db:
+                        await apply_presence_status(db, UUID(str(user_id)), presence_status)
+                except Exception as e:
+                    logger.warning("WebSocket presence update failed for user %s: %s", user_id, e)
+            elif msg_type == "sms:active_thread":
+                msg_payload = msg.get("payload") or {}
+                active_lead_id = msg_payload.get("lead_id")
+                ws_manager.set_active_sms_thread(
+                    websocket, user_id, str(active_lead_id) if active_lead_id else None
+                )
+            elif msg_type == "sms:typing":
+                msg_payload = msg.get("payload") or {}
+                lead_id = msg_payload.get("lead_id")
+                is_typing = bool(msg_payload.get("is_typing"))
+                if lead_id:
+                    target_dealerships = accessible_dealership_ids or ([str(dealership_id)] if dealership_id else [])
+                    for did in target_dealerships:
+                        await ws_manager.broadcast_to_dealership(
+                            did,
+                            {
+                                "type": "sms:typing",
+                                "payload": {
+                                    "lead_id": str(lead_id),
+                                    "user_id": str(user_id),
+                                    "user_name": user_name,
+                                    "is_typing": is_typing,
+                                },
+                            },
+                            exclude_user=str(user_id),
+                        )
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected: user={user_id}")
         ws_manager.disconnect(websocket, user_id, dealership_id)

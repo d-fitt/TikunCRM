@@ -17,11 +17,13 @@ from app.services.sms_conversation_service import get_sms_conversation_service
 from app.services.whatsapp_conversation_service import get_whatsapp_conversation_service
 from app.services.dealership_twilio_config_service import (
     find_dealership_id_by_inbound_to,
+    get_effective_twilio_config,
 )
 from app.services.notification_service import NotificationService
 from app.core.websocket_manager import ws_manager
 from app.core.config import settings
 from app.models.lead import Lead
+from app.models.notification import NotificationType
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +189,38 @@ def _normalize_whatsapp_number(raw: str) -> str:
     return raw.strip()
 
 
+async def _is_valid_twilio_request(request: Request, form_data, db: AsyncSession) -> bool:
+    """Check X-Twilio-Signature against every auth token and public URL we might be reached at."""
+    if not settings.twilio_validate_webhooks:
+        return True
+    signature = request.headers.get("X-Twilio-Signature", "")
+    if not signature:
+        return False
+    from twilio.request_validator import RequestValidator
+
+    tokens = {settings.twilio_auth_token}
+    to_number = form_data.get("To", "")
+    dealership_id = await find_dealership_id_by_inbound_to(db, to_number) if to_number else None
+    if dealership_id:
+        tokens.add((await get_effective_twilio_config(db, dealership_id)).auth_token)
+    path_qs = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+    urls = {
+        f"{settings.backend_url.rstrip('/')}{path_qs}",
+        str(request.url),
+        str(request.url).replace("http://", "https://", 1),
+    }
+    params = {k: v for k, v in form_data.multi_items()}
+    for token in filter(None, tokens):
+        validator = RequestValidator(token)
+        if any(validator.validate(url, params, signature) for url in urls):
+            return True
+    logger.warning("Rejected Twilio webhook with invalid signature: %s", request.url.path)
+    return False
+
+
+_EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+
+
 @router.post("/sms/incoming", response_class=PlainTextResponse)
 async def handle_incoming_sms(
     request: Request,
@@ -194,14 +228,17 @@ async def handle_incoming_sms(
 ):
     """
     Twilio webhook for incoming SMS messages.
-    Stores the message and notifies the assigned user.
+    Stores the message, applies STOP/START/HELP consent changes and notifies the agent.
     """
     form_data = await request.form()
+    if not await _is_valid_twilio_request(request, form_data, db):
+        return Response(status_code=403)
     
     message_sid = form_data.get("MessageSid", "")
     from_number = form_data.get("From", "")
     to_number = form_data.get("To", "")
     body = form_data.get("Body", "")
+    opt_out_type = form_data.get("OptOutType") or None
     num_media = int(form_data.get("NumMedia", "0"))
     
     # Extract media URLs and content types
@@ -217,6 +254,12 @@ async def handle_incoming_sms(
     logger.info(f"Incoming SMS webhook: {message_sid} from {from_number}")
 
     resolved_dealership_id = await find_dealership_id_by_inbound_to(db, to_number)
+
+    # Twilio retries webhooks; store each message once.
+    from app.models.sms_log import SMSLog
+    already = await db.execute(select(SMSLog.id).where(SMSLog.twilio_message_sid == message_sid))
+    if message_sid and already.scalar_one_or_none():
+        return Response(content=_EMPTY_TWIML, media_type="application/xml")
 
     # Transfer media from Twilio to Azure Blob storage
     media_urls = twilio_media_urls
@@ -234,22 +277,34 @@ async def handle_incoming_sms(
 
     service = get_sms_conversation_service(db)
 
-    sms_log = await service.receive_sms(
+    sms_log, keyword, compliance_reply = await service.receive_sms(
         message_sid=message_sid,
         from_number=from_number,
         to_number=to_number,
         body=body,
         media_urls=media_urls,
+        media_content_types=twilio_content_types,
         resolved_dealership_id=resolved_dealership_id,
+        opt_out_type=opt_out_type,
     )
     
     await db.commit()
+
+    if compliance_reply:
+        from app.services.sms_consent_service import CATEGORY_COMPLIANCE
+        await service.send_sms(
+            to_number=from_number,
+            body=compliance_reply,
+            user_id=None,
+            lead_id=sms_log.lead_id,
+            dealership_id=sms_log.dealership_id or resolved_dealership_id,
+            category=CATEGORY_COMPLIANCE,
+        )
+        await db.commit()
     
-    # Send real-time notification
-    if sms_log.lead_id and sms_log.user_id:
-        # Notify the assigned user via WebSocket
-        await ws_manager.send_to_user(
-            str(sms_log.user_id),
+    if sms_log.lead_id:
+        await ws_manager.broadcast_to_dealership(
+            str(sms_log.dealership_id) if sms_log.dealership_id else None,
             {
                 "type": "sms:received",
                 "payload": {
@@ -257,44 +312,84 @@ async def handle_incoming_sms(
                     "lead_id": str(sms_log.lead_id),
                     "from_number": from_number,
                     "body_preview": body[:100] if body else "",
-                    "has_media": len(media_urls) > 0
+                    "has_media": len(media_urls) > 0,
+                    "keyword": keyword,
                 }
             }
         )
-        
-        # Create a notification
+
+    # Notify the agent working the lead (or active team members when unassigned)
+    if sms_log.lead_id:
         notification_service = NotificationService(db)
-        
-        # Get lead name (eager-load customer for first_name/last_name)
+
         result = await db.execute(
             select(Lead).options(selectinload(Lead.customer)).where(Lead.id == sms_log.lead_id)
         )
         lead = result.scalar_one_or_none()
         lead_name = f"{lead.first_name} {lead.last_name or ''}".strip() if lead else "Unknown"
-        
-        await notification_service.create_notification(
-            user_id=sms_log.user_id,
-            title="New SMS Received",
-            message=f"Message from {lead_name}: {body[:50]}..." if len(body) > 50 else f"Message from {lead_name}: {body}",
-            link=f"/leads/{sms_log.lead_id}?tab=sms",
-            notification_type="sms_received",
-            meta_data={
-                "lead_id": str(sms_log.lead_id),
-                "message_id": str(sms_log.id),
-                "from_number": from_number
-            },
-            send_push=True,
-            send_email=False,  # Don't email for SMS
-            send_sms=False     # Don't SMS about SMS
+
+        if keyword == "opt_out":
+            title, text = "Customer opted out of texts", f"{lead_name} replied {body.strip()}. Texts to them are now blocked."
+        elif keyword == "opt_in":
+            title, text = "Customer opted back in to texts", f"{lead_name} replied {body.strip()} and can be texted again."
+        else:
+            title = "New SMS Received"
+            preview = (body or "").strip() or ("[Attachment]" if media_urls else "")
+            text = f"Message from {lead_name}: {preview[:50]}..." if len(preview) > 50 else f"Message from {lead_name}: {preview}"
+
+        # If any agent is actively viewing this chat right now, mark it read immediately
+        if ws_manager.anyone_viewing_sms_lead(str(sms_log.lead_id)):
+            sms_log.is_read = True
+            from app.core.timezone import utc_now
+            sms_log.read_at = utc_now()
+
+        if sms_log.user_id:
+            recipient_ids = [sms_log.user_id]
+        else:
+            from app.models.user import User
+            from app.core.permissions import UserRole
+            users_res = await db.execute(
+                select(User.id).where(
+                    User.dealership_id == sms_log.dealership_id,
+                    User.is_active.is_(True),
+                    User.role.in_([UserRole.BDC, UserRole.DEALERSHIP_ADMIN, UserRole.SUPER_ADMIN]),
+                )
+            )
+            recipient_ids = list(users_res.scalars().all())
+
+        notified_any = False
+        for uid in recipient_ids:
+            # Skip bell/push/email notification for users who currently have this chat open
+            if ws_manager.is_viewing_sms_lead(str(uid), str(sms_log.lead_id)):
+                continue
+            await notification_service.create_notification(
+                user_id=uid,
+                title=title,
+                message=text,
+                link=f"/sms?lead={sms_log.lead_id}",
+                notification_type=NotificationType.SMS_RECEIVED,
+                meta_data={
+                    "lead_id": str(sms_log.lead_id),
+                    "message_id": str(sms_log.id),
+                    "from_number": from_number,
+                },
+                send_push=True,
+                send_email=True,   # Chat isn't open — also notify via email
+                send_sms=False,    # Don't SMS about SMS
+            )
+            notified_any = True
+
+        if notified_any or sms_log.is_read:
+            await db.commit()
+
+        from app.services.sms_unread_realtime import push_sms_unread_for_dealership
+
+        await push_sms_unread_for_dealership(
+            db, str(sms_log.dealership_id) if sms_log.dealership_id else None
         )
-        
-        await db.commit()
     
-    # Return empty TwiML response (no auto-reply)
-    return Response(
-        content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
-        media_type="application/xml"
-    )
+    # Empty TwiML: Twilio answers English keywords itself, the CRM sends everything else via the API
+    return Response(content=_EMPTY_TWIML, media_type="application/xml")
 
 
 @router.post("/sms/status")
@@ -307,6 +402,8 @@ async def handle_sms_status(
     Updates the message status in the database.
     """
     form_data = await request.form()
+    if not await _is_valid_twilio_request(request, form_data, db):
+        return Response(status_code=403)
     
     message_sid = form_data.get("MessageSid", "")
     message_status = form_data.get("MessageStatus", "")

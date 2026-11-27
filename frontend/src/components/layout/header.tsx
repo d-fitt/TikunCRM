@@ -8,6 +8,7 @@ import { ThemeToggle } from "@/components/theme-toggle"
 import { NotificationBell } from "@/components/layout/notification-bell"
 import { MissedCallsBell } from "@/components/layout/missed-calls-bell"
 import { NewLeadsBell } from "@/components/layout/new-leads-bell"
+import { UnreadSmsBell } from "@/components/layout/unread-sms-bell"
 import { HeaderClock } from "@/components/time-tracking/header-clock"
 import { useSidebarOptional } from "@/contexts/sidebar-context"
 import { useAiCopilotOptional } from "@/contexts/ai-copilot-context"
@@ -30,7 +31,6 @@ const SEGMENT_LABELS: Record<string, string> = {
     communications: "Communications",
     "auto-whatsapp": "Auto WhatsApp",
     jobs: "Jobs",
-    dealerships: "Dealerships",
     team: "Team",
     "team-activity": "Team Activity",
     integrations: "Integrations",
@@ -41,12 +41,12 @@ const SEGMENT_LABELS: Record<string, string> = {
     "team-sales-touch": "Team Touch & Close",
     settings: "Settings",
     "email-config": "Email Config",
-    "dealership-email": "Dealership Email",
+    "dealership-email": "Company Email",
     "email-templates": "Email Templates",
     "whatsapp-templates": "WhatsApp Templates",
     profile: "Profile",
     appearance: "Appearance",
-    dealership: "Dealership",
+    dealership: "Company Settings",
     "lead-stages": "Lead Stages",
     "campaign-mappings": "Campaign Mappings",
     "sync-sources": "Sync Sources",
@@ -140,6 +140,7 @@ export function Header() {
 
                 <HeaderClock />
                 <NewLeadsBell />
+                <UnreadSmsBell />
                 <MissedCallsBell />
                 <NotificationBell />
 

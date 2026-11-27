@@ -160,6 +160,196 @@ export interface AnalyticsFilters {
     partner_store_id?: string;
 }
 
+export interface LeadsCohortFilters {
+    date_from?: string;
+    date_to?: string;
+    dealership_id?: string;
+    assigned_to?: string[];
+    bdc_agent_id?: string[];
+    source?: string[];
+    stage_id?: string[];
+    partner_store_id?: string[];
+    campaign?: string[];
+    has_stip?: "yes" | "no";
+    include_returning?: boolean;
+    bdc_mode?: "activity" | "cohort";
+}
+
+export interface CohortDrillLead {
+    id: string;
+    name: string;
+    phone?: string | null;
+    email?: string | null;
+    outcome?: string | null;
+    stage?: string | null;
+    source?: string | null;
+    created_at?: string | null;
+    last_inbound_at?: string | null;
+    repeat_submission: boolean;
+}
+
+export interface CohortDrillResponse {
+    metric: string;
+    label: string;
+    total: number;
+    leads: CohortDrillLead[];
+}
+
+export interface CohortFunnelStep {
+    key: string;
+    label: string;
+    count: number;
+    pct_of_total: number;
+    pct_of_prev?: number | null;
+}
+
+export interface CohortSummary {
+    total_leads: number;
+    worked_leads: number;
+    worked_pct: number;
+    untouched_leads: number;
+    untouched_pct: number;
+    interested_leads: number;
+    interested_pct: number;
+    interested_of_worked_pct: number;
+    stips_leads: number;
+    stips_pct: number;
+    stips_of_interested_pct: number;
+    partner_sent_leads: number;
+    partner_sent_pct: number;
+    appointment_set_leads: number;
+    appointment_set_pct: number;
+    showed_up_leads: number;
+    showed_up_pct: number;
+    show_rate_pct: number;
+    no_show_leads: number;
+    no_show_pct: number;
+    converted_leads: number;
+    converted_pct: number;
+    close_rate_of_showed_pct: number;
+    lost_leads: number;
+    lost_pct: number;
+    active_leads: number;
+    active_pct: number;
+    median_speed_to_lead_minutes?: number | null;
+    avg_days_to_appointment?: number | null;
+}
+
+export interface CampaignMatrixRow {
+    campaign_name: string;
+    leads: number;
+    share_pct: number;
+    worked: number;
+    worked_pct: number;
+    interested: number;
+    interested_pct: number;
+    stips: number;
+    stips_pct: number;
+    partner_sent: number;
+    partner_sent_pct: number;
+    appt_set: number;
+    appt_set_pct: number;
+    showed_up: number;
+    show_rate_pct: number;
+    no_show: number;
+    no_show_pct: number;
+    converted: number;
+    converted_pct: number;
+    lost: number;
+    lost_pct: number;
+}
+
+export interface StageMatrixRow {
+    stage_id: string;
+    stage_name: string;
+    display_name: string;
+    color?: string | null;
+    is_terminal: boolean;
+    count: number;
+    pct_of_total: number;
+}
+
+export interface AppointmentStatusMatrixRow {
+    status: string;
+    label: string;
+    count: number;
+    pct_of_appointments: number;
+}
+
+export interface AppointmentsSummary {
+    total_appointments: number;
+    active_outcome_denominator: number;
+    showed_up: number;
+    show_rate_pct: number;
+    no_show: number;
+    no_show_rate_pct: number;
+    cancelled: number;
+    cancel_rate_pct: number;
+    rescheduled: number;
+    sold_leads: number;
+    by_status: AppointmentStatusMatrixRow[];
+}
+
+export interface PartnerStoreMatrixRow {
+    partner_store_id?: string | null;
+    partner_store_name: string;
+    leads_sent: number;
+    share_pct: number;
+    appt_set: number;
+    appt_set_pct: number;
+    showed_up: number;
+    show_rate_pct: number;
+    no_show: number;
+    no_show_pct: number;
+    cancelled: number;
+    sold: number;
+    close_rate_of_showed_pct: number;
+    sold_of_sent_pct: number;
+}
+
+export interface BdcAgentProductivityRow {
+    user_id: string;
+    user_name: string;
+    email?: string | null;
+    role?: string | null;
+    leads_worked: number;
+    calls_made: number;
+    connected_calls: number;
+    connect_rate_pct: number;
+    avg_call_duration_seconds: number;
+    notes_added: number;
+    touches_total: number;
+    avg_touches_per_lead: number;
+    median_speed_to_lead_minutes?: number | null;
+    stips_leads: number;
+    appts_scheduled: number;
+    appt_set_rate_pct: number;
+    appts_arrived: number;
+    show_rate_pct: number;
+    appts_no_show: number;
+    no_show_rate_pct: number;
+    appts_cancelled: number;
+    sold_leads: number;
+    sold_rate_pct: number;
+}
+
+export interface LeadCohortAnalysisResponse {
+    date_from?: string | null;
+    date_to?: string | null;
+    dealership_id?: string | null;
+    bdc_mode: "activity" | "cohort";
+    include_returning: boolean;
+    available_campaigns: string[];
+    summary: CohortSummary;
+    funnel: CohortFunnelStep[];
+    campaigns: CampaignMatrixRow[];
+    stages: StageMatrixRow[];
+    appointments: AppointmentsSummary;
+    partner_stores: PartnerStoreMatrixRow[];
+    bdc_agents: BdcAgentProductivityRow[];
+    bdc_totals: BdcAgentProductivityRow;
+}
+
 export interface LeadsOverTimeItem {
     date: string;
     leads_created: number;
@@ -441,6 +631,22 @@ export const ReportsService = {
 
     async getActivitiesOverTime(filters?: AnalyticsFilters): Promise<ActivitiesOverTimeResponse> {
         const response = await apiClient.get("/reports/analytics/activities-over-time", { params: filters });
+        return response.data;
+    },
+
+    async getLeadsCohortAnalysis(filters?: LeadsCohortFilters): Promise<LeadCohortAnalysisResponse> {
+        const response = await apiClient.get("/reports/analytics/leads-cohort", {
+            params: filters,
+            paramsSerializer: { indexes: null },
+        });
+        return response.data;
+    },
+
+    async getLeadsCohortDrill(metric: string, filters?: LeadsCohortFilters): Promise<CohortDrillResponse> {
+        const response = await apiClient.get("/reports/analytics/leads-cohort/drill", {
+            params: { ...filters, metric },
+            paramsSerializer: { indexes: null },
+        });
         return response.data;
     },
 

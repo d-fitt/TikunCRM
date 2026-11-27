@@ -74,6 +74,7 @@ import {
     CampaignMappingInput,
 } from "@/services/sync-source-service"
 import { DealershipService, Dealership } from "@/services/dealership-service"
+import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import { formatDistanceToNow } from "date-fns"
 
 const MATCH_TYPE_OPTIONS: { value: MatchType; label: string }[] = [
@@ -148,13 +149,16 @@ export default function SyncSourcesSettingsPage() {
     const [syncingSourceId, setSyncingSourceId] = React.useState<string | null>(null)
     
     const { isSuperAdmin } = useRole()
+    const orgDealershipId = useOrgDealershipId()
     const { toast } = useToast()
 
     const loadData = React.useCallback(async () => {
         try {
             const [sourcesData, dealershipsData] = await Promise.all([
                 getSyncSources(),
-                DealershipService.listDealerships(),
+                orgDealershipId
+                    ? DealershipService.getDealership(orgDealershipId).then((d) => [d])
+                    : Promise.resolve([]),
             ])
             setSources(Array.isArray(sourcesData) ? sourcesData : [])
             setDealerships(Array.isArray(dealershipsData) ? dealershipsData : [])
@@ -170,7 +174,7 @@ export default function SyncSourcesSettingsPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [toast])
+    }, [toast, orgDealershipId])
 
     React.useEffect(() => {
         if (isSuperAdmin) {

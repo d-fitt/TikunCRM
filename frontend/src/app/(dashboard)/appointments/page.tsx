@@ -51,6 +51,7 @@ import {
     isAppointmentStatusTerminal,
     appointmentStoreLabel,
     type AppointmentStoreCount,
+    type AppointmentStatusCount,
 } from "@/services/appointment-service"
 import { LeadService, Lead, getLeadFullName } from "@/services/lead-service"
 import { TeamService, UserBrief } from "@/services/team-service"
@@ -67,6 +68,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Calendar as CalendarPicker } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { AdvancedFiltersMenu, FilterField } from "@/components/ui/filter-bar"
 import {
     Select,
     SelectContent,
@@ -92,6 +94,46 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
+
+const STATUS_COUNT_TONE: Record<string, string> = {
+    completed: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    sold: "border-emerald-200 bg-emerald-50 text-emerald-900",
+    no_show: "border-amber-200 bg-amber-50 text-amber-800",
+    cancelled: "border-gray-200 bg-gray-100 text-gray-700",
+    scheduled: "border-blue-200 bg-blue-50 text-blue-800",
+    confirmed: "border-sky-200 bg-sky-50 text-sky-800",
+    arrived: "border-cyan-200 bg-cyan-50 text-cyan-800",
+    in_showroom: "border-orange-200 bg-orange-50 text-orange-800",
+    in_progress: "border-yellow-200 bg-yellow-50 text-yellow-800",
+    rescheduled: "border-violet-200 bg-violet-50 text-violet-800",
+}
+
+function statusCountTone(status: string): string {
+    return STATUS_COUNT_TONE[status] || "border-border bg-muted text-foreground"
+}
+
+const STATUS_COUNT_ORDER = [
+    "completed",
+    "no_show",
+    "cancelled",
+    "sold",
+    "scheduled",
+    "confirmed",
+    "arrived",
+    "in_showroom",
+    "in_progress",
+    "rescheduled",
+]
+
+function countsFromAppointments(items: Appointment[]): AppointmentStatusCount[] {
+    const totals = new Map<string, number>()
+    for (const item of items) {
+        totals.set(item.status, (totals.get(item.status) || 0) + 1)
+    }
+    return STATUS_COUNT_ORDER
+        .filter((status) => (totals.get(status) || 0) > 0)
+        .map((status) => ({ status, count: totals.get(status) || 0 }))
+}
 
 // Stats Card Component
 function StatsCard({ 
@@ -933,13 +975,21 @@ export default function AppointmentsPage() {
     )
     const [stats, setStats] = React.useState<AppointmentStats | null>(null)
     const [storeCounts, setStoreCounts] = React.useState<AppointmentStoreCount[]>([])
+    const [statusCounts, setStatusCounts] = React.useState<AppointmentStatusCount[]>([])
+    const visibleStatusCounts = statusCounts.length > 0 ? statusCounts : countsFromAppointments(appointments)
     const [loading, setLoading] = React.useState(true)
     const [page, setPage] = React.useState(1)
     const [totalPages, setTotalPages] = React.useState(1)
+    const [listTotal, setListTotal] = React.useState(0)
 
-    // Filters - initial from URL or localStorage
-    const [filter, setFilterState] = React.useState<FilterType>("all")
-    const [statusFilter, setStatusFilterState] = React.useState<AppointmentStatus | "">("")
+    // Filters - default to Today unless URL explicitly specifies another filter
+    const [filter, setFilterState] = React.useState<FilterType>(() => {
+        const urlFilter = searchParams.get("filter") as FilterType | null
+        return urlFilter && VALID_FILTERS.includes(urlFilter) ? urlFilter : "today"
+    })
+    const [statusFilter, setStatusFilterState] = React.useState<AppointmentStatus | "">(() => {
+        return (searchParams.get("status") as AppointmentStatus | null) || ""
+    })
     const [storeFilter, setStoreFilter] = React.useState("")
     const [pagePartnerStores, setPagePartnerStores] = React.useState<PartnerStore[]>([])
     const [sharingWhatsApp, setSharingWhatsApp] = React.useState(false)
@@ -954,26 +1004,17 @@ export default function AppointmentsPage() {
             .catch(() => setPagePartnerStores([]))
     }, [])
 
-    // Restore from URL or localStorage
+    // Sync from URL params when navigated directly
     React.useEffect(() => {
         const urlFilter = searchParams.get("filter") as FilterType | null
         const urlStatus = searchParams.get("status") as AppointmentStatus | null
         if (urlFilter && VALID_FILTERS.includes(urlFilter)) {
             setFilterState(urlFilter)
+        } else {
+            setFilterState("today")
         }
-        if (urlStatus) setStatusFilterState(urlStatus)
+        setStatusFilterState(urlStatus || "")
     }, [searchParams])
-
-    // When no URL params, restore from localStorage
-    React.useEffect(() => {
-        if (searchParams.get("filter") != null || searchParams.get("status") != null) return
-        const saved = filterStorage.getAppointments()
-        if (!saved) return
-        const params = new URLSearchParams()
-        if (saved.filter && VALID_FILTERS.includes(saved.filter as FilterType)) params.set("filter", saved.filter)
-        if (saved.status) params.set("status", saved.status)
-        if (params.toString()) router.replace(`/appointments?${params.toString()}`)
-    }, [router, searchParams])
 
     const setFilter = React.useCallback(
         (v: FilterType) => {
@@ -1139,7 +1180,9 @@ export default function AppointmentsPage() {
             
             setAppointments(appointmentsRes.items)
             setTotalPages(appointmentsRes.total_pages)
+            setListTotal(appointmentsRes.total || 0)
             setStoreCounts(appointmentsRes.store_counts || [])
+            setStatusCounts(appointmentsRes.status_counts || [])
             setStats(statsRes)
         } catch (err) {
             console.error("Failed to load appointments:", err)
@@ -1198,6 +1241,19 @@ export default function AppointmentsPage() {
         }
     }
 
+    async function handleCheckInStatus(appointment: Appointment) {
+        try {
+            await AppointmentService.update(appointment.id, { status: "in_showroom" })
+            toast({
+                title: "Status updated",
+                description: "Appointment marked as Checked In / In Store.",
+            })
+            loadData()
+        } catch (err) {
+            console.error("Failed to mark appointment as in store:", err)
+        }
+    }
+
     function handleReschedule(appointment: Appointment) {
         setSelectedAppointment(appointment)
         setShowRescheduleModal(true)
@@ -1213,6 +1269,7 @@ export default function AppointmentsPage() {
     }
     
     function isOverdue(appointment: Appointment): boolean {
+        if (appointment.is_checked_in) return false
         return new Date(appointment.scheduled_at) < new Date() && 
                ["scheduled", "confirmed"].includes(appointment.status)
     }
@@ -1555,7 +1612,7 @@ export default function AppointmentsPage() {
                         
                         {/* Quick Filter */}
                         <Select value={filter} onValueChange={(v) => setFilter(v as FilterType)}>
-                            <SelectTrigger className="w-[130px] h-9">
+                            <SelectTrigger className="w-[145px] h-9">
                                 <SelectValue placeholder="All" />
                             </SelectTrigger>
                             <SelectContent>
@@ -1564,27 +1621,6 @@ export default function AppointmentsPage() {
                                 <SelectItem value="upcoming">Upcoming</SelectItem>
                                 <SelectItem value="overdue">Overdue</SelectItem>
                                 <SelectItem value="completed">Completed</SelectItem>
-                            </SelectContent>
-                        </Select>
-                        
-                        <Select
-                            value={storeFilter || "all_stores"}
-                            onValueChange={(v) => {
-                                setStoreFilter(v === "all_stores" ? "" : v)
-                                setPage(1)
-                            }}
-                        >
-                            <SelectTrigger className="w-[180px] h-9">
-                                <Store className="mr-2 h-4 w-4 shrink-0" />
-                                <SelectValue placeholder="All stores" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all_stores">All stores</SelectItem>
-                                {pagePartnerStores.map((store) => (
-                                    <SelectItem key={store.id} value={store.id}>
-                                        {store.brand ? `${store.name} · ${store.brand}` : store.name}
-                                    </SelectItem>
-                                ))}
                             </SelectContent>
                         </Select>
 
@@ -1598,7 +1634,7 @@ export default function AppointmentsPage() {
                                 <SelectItem value="scheduled">Scheduled</SelectItem>
                                 <SelectItem value="confirmed">Confirmed</SelectItem>
                                 <SelectItem value="arrived">Arrived</SelectItem>
-                                <SelectItem value="in_showroom">In Showroom</SelectItem>
+                                <SelectItem value="in_showroom">In Store</SelectItem>
                                 <SelectItem value="in_progress">In Progress</SelectItem>
                                 <SelectItem value="completed">Completed</SelectItem>
                                 <SelectItem value="sold">Sold</SelectItem>
@@ -1607,9 +1643,7 @@ export default function AppointmentsPage() {
                                 <SelectItem value="rescheduled">Rescheduled</SelectItem>
                             </SelectContent>
                         </Select>
-                        
-                        <div className="h-6 w-px bg-border" />
-                        
+
                         {/* Date Range Preset */}
                         <Select value={dateRangePreset} onValueChange={(v) => handleDatePresetChange(v as DateRangePreset)}>
                             <SelectTrigger className="w-[140px] h-9">
@@ -1624,6 +1658,38 @@ export default function AppointmentsPage() {
                                 ))}
                             </SelectContent>
                         </Select>
+
+                        <AdvancedFiltersMenu
+                            align="start"
+                            activeCount={storeFilter ? 1 : 0}
+                            onReset={() => {
+                                setStoreFilter("")
+                                setPage(1)
+                            }}
+                        >
+                            <FilterField label="Partner Store">
+                                <Select
+                                    value={storeFilter || "all_stores"}
+                                    onValueChange={(v) => {
+                                        setStoreFilter(v === "all_stores" ? "" : v)
+                                        setPage(1)
+                                    }}
+                                >
+                                    <SelectTrigger className="w-full h-9">
+                                        <Store className="mr-2 h-4 w-4 shrink-0" />
+                                        <SelectValue placeholder="All stores" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all_stores">All stores</SelectItem>
+                                        {pagePartnerStores.map((store) => (
+                                            <SelectItem key={store.id} value={store.id}>
+                                                {store.brand ? `${store.name} · ${store.brand}` : store.name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </FilterField>
+                        </AdvancedFiltersMenu>
                         
                         {/* Clear Filters */}
                         {(dateRangePreset !== "all_time" || filter !== "all" || statusFilter || storeFilter) && (
@@ -1872,19 +1938,35 @@ export default function AppointmentsPage() {
             {/* Appointments List */}
             <div className="border rounded-lg bg-card">
                 {/* List Header */}
-                <div className="flex items-center justify-between px-4 py-3 border-b bg-muted/30">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b bg-muted/30">
                     <h3 className="font-semibold">
                         {filter === "today" ? "Today's Appointments" :
                          filter === "upcoming" ? "Upcoming Appointments" :
                          filter === "overdue" ? "Overdue Appointments" :
                          filter === "completed" ? "Completed Appointments" :
                          "All Appointments"}
-                        {!loading && appointments.length > 0 && (
+                        {!loading && listTotal > 0 && (
                             <span className="ml-2 text-sm font-normal text-muted-foreground">
-                                ({appointments.length} {appointments.length === 1 ? "appointment" : "appointments"})
+                                ({listTotal} {listTotal === 1 ? "appointment" : "appointments"})
                             </span>
                         )}
                     </h3>
+                    {!loading && visibleStatusCounts.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                            {visibleStatusCounts.map((row) => (
+                                <span
+                                    key={row.status}
+                                    className={cn(
+                                        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                                        statusCountTone(row.status)
+                                    )}
+                                >
+                                    {getAppointmentStatusLabel(row.status as AppointmentStatus)}
+                                    <span className="tabular-nums">{row.count}</span>
+                                </span>
+                            ))}
+                        </div>
+                    )}
                     {totalPages > 1 && !loading && (
                         <span className="text-sm text-muted-foreground">
                             Page {page} of {totalPages}
@@ -1994,6 +2076,10 @@ export default function AppointmentsPage() {
                                                                 <CheckCircle className="mr-2 h-4 w-4 text-blue-600" />
                                                                 Confirm
                                                             </DropdownMenuItem>
+                                                            <DropdownMenuItem onSelect={() => handleCheckInStatus(appointment)}>
+                                                                <Store className="mr-2 h-4 w-4 text-teal-600" />
+                                                                Checked In / In Store
+                                                            </DropdownMenuItem>
                                                             <DropdownMenuItem onSelect={() => handleReschedule(appointment)}>
                                                                 <CalendarClock className="mr-2 h-4 w-4" />
                                                                 Reschedule
@@ -2025,6 +2111,12 @@ export default function AppointmentsPage() {
                                                 }>
                                                     {getAppointmentStatusLabel(appointment.status)}
                                                 </Badge>
+                                                )}
+                                                {appointment.is_checked_in && (
+                                                    <Badge className="text-xs bg-teal-100 text-teal-800 border-teal-200 hover:bg-teal-100">
+                                                        <Store className="h-3 w-3 mr-1" />
+                                                        Checked In · In Store
+                                                    </Badge>
                                                 )}
                                                 {isOverdue(appointment) && (
                                                     <Badge variant="destructive" className="text-xs">
@@ -2118,6 +2210,10 @@ export default function AppointmentsPage() {
                                                             <DropdownMenuItem onSelect={() => handleConfirm(appointment)}>
                                                                 <CheckCircle className="mr-2 h-4 w-4 text-blue-600" />
                                                                 Confirm
+                                                            </DropdownMenuItem>
+                                                            <DropdownMenuItem onSelect={() => handleCheckInStatus(appointment)}>
+                                                                <Store className="mr-2 h-4 w-4 text-teal-600" />
+                                                                Checked In / In Store
                                                             </DropdownMenuItem>
                                                             <DropdownMenuItem onSelect={() => handleReschedule(appointment)}>
                                                                 <CalendarClock className="mr-2 h-4 w-4" />

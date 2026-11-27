@@ -176,6 +176,15 @@ class Settings(BaseSettings):
     twilio_auth_token: str = ""
     twilio_phone_number: str = ""  # The Twilio phone number to send from (e.g., +1234567890)
     sms_notifications_enabled: bool = False
+    # A2P 10DLC Messaging Service (MG...) holding the registered campaign
+    twilio_messaging_service_sid: str = ""
+    # Reject Twilio webhooks whose X-Twilio-Signature does not match
+    twilio_validate_webhooks: bool = True
+    # Brand name used in automatic and compliance texts (must match the A2P campaign)
+    sms_brand_name: str = "Carvamonos"
+    sms_help_url: str = "carvamonos.com/contact"
+    # Domains allowed in links inside promotional texts
+    sms_allowed_link_domains: str = "carvamonos.com"
     
     # Twilio WhatsApp (same account; number is often different from SMS, e.g. sandbox)
     twilio_whatsapp_number: str = ""  # e.g. +14155238886 for sandbox
@@ -279,15 +288,71 @@ class Settings(BaseSettings):
     # Firebase Cloud Messaging (FCM) HTTP V1 - for push notifications
     # Path to the service account JSON file from Firebase Console (Project Settings > Service accounts)
     fcm_service_account_path: str = ""  # e.g. /path/to/firebase-service-account.json
+    # Or inline JSON / base64-encoded JSON (also supports FIREBASE_CREDENTIALS from docker-compose.prod.yml)
+    fcm_service_account_json: str = ""
+    firebase_credentials: str = ""
     # Or set GOOGLE_APPLICATION_CREDENTIALS env var to the same path
     fcm_project_id: str = ""  # Optional: Firebase project ID (can be read from JSON if not set)
 
+    def resolve_fcm_service_account_path(self) -> Optional[str]:
+        """Resolve FCM service account JSON path, supporting relative paths from backend/."""
+        import os
+        from pathlib import Path
+
+        candidates = [
+            self.fcm_service_account_path,
+            os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", ""),
+            # Also allow FIREBASE_CREDENTIALS to be a file path
+            self.firebase_credentials if self.firebase_credentials and not self.firebase_credentials.strip().startswith("{") else "",
+        ]
+        backend_root = Path(__file__).resolve().parents[2]
+        for raw in candidates:
+            p = (raw or "").strip()
+            if not p:
+                continue
+            if os.path.isfile(p):
+                return p
+            rel = backend_root / p
+            if rel.is_file():
+                return str(rel)
+        # Fallback: default service account filenames in backend/ if present
+        for default_name in ("firebase-service-account.json", ".firebase-service-account.json"):
+            default_file = backend_root / default_name
+            if default_file.is_file():
+                return str(default_file)
+        return None
+
+    def get_fcm_service_account_info(self) -> Optional[dict]:
+        """Parse inline JSON or base64-encoded JSON service account credentials if provided."""
+        import base64
+        import json
+
+        for raw in (self.fcm_service_account_json, self.firebase_credentials):
+            val = (raw or "").strip()
+            if not val:
+                continue
+            if val.startswith("{"):
+                try:
+                    data = json.loads(val)
+                    if isinstance(data, dict) and data.get("private_key"):
+                        return data
+                except Exception:
+                    pass
+            else:
+                try:
+                    decoded = base64.b64decode(val).decode("utf-8")
+                    if decoded.strip().startswith("{"):
+                        data = json.loads(decoded)
+                        if isinstance(data, dict) and data.get("private_key"):
+                            return data
+                except Exception:
+                    pass
+        return None
+
     @property
     def is_fcm_configured(self) -> bool:
-        """Check if FCM is configured (service account path or GOOGLE_APPLICATION_CREDENTIALS)"""
-        import os
-        path = self.fcm_service_account_path or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-        return bool(path and os.path.isfile(path))
+        """Check if FCM is configured via service account file, inline JSON, or GOOGLE_APPLICATION_CREDENTIALS"""
+        return bool(self.resolve_fcm_service_account_path() or self.get_fcm_service_account_info())
 
     @property
     def is_push_configured(self) -> bool:

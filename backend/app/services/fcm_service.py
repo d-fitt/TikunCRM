@@ -2,6 +2,7 @@
 Firebase Cloud Messaging (FCM) HTTP V1 API Service
 Sends push notifications via FCM using a service account.
 """
+import asyncio
 import json
 import logging
 import os
@@ -30,33 +31,46 @@ class FCMService:
     def __init__(self) -> None:
         self._credentials = None
         self._project_id: Optional[str] = None
+        self._token_lock = asyncio.Lock()
 
     @property
     def is_configured(self) -> bool:
         return settings.is_fcm_configured
 
     def _get_credentials_path(self) -> Optional[str]:
-        path = settings.fcm_service_account_path or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-        if path and os.path.isfile(path):
-            return path
-        return None
+        return settings.resolve_fcm_service_account_path()
 
     def _load_credentials(self) -> bool:
         if self._credentials is not None:
             return True
-        path = self._get_credentials_path()
-        if not path:
-            return False
         try:
             from google.oauth2 import service_account
-            self._credentials = service_account.Credentials.from_service_account_file(
-                path,
-                scopes=[FCM_SCOPE],
+
+            path = self._get_credentials_path()
+            if path:
+                self._credentials = service_account.Credentials.from_service_account_file(
+                    path,
+                    scopes=[FCM_SCOPE],
+                )
+                with open(path) as f:
+                    data = json.load(f)
+                self._project_id = data.get("project_id") or settings.fcm_project_id
+                return True
+
+            info = settings.get_fcm_service_account_info()
+            if info:
+                self._credentials = service_account.Credentials.from_service_account_info(
+                    info,
+                    scopes=[FCM_SCOPE],
+                )
+                self._project_id = info.get("project_id") or settings.fcm_project_id
+                return True
+
+            logger.warning(
+                "FCM credentials not found. Set FCM_SERVICE_ACCOUNT_PATH, FCM_SERVICE_ACCOUNT_JSON, "
+                "FIREBASE_CREDENTIALS, or GOOGLE_APPLICATION_CREDENTIALS."
             )
-            with open(path) as f:
-                data = json.load(f)
-            self._project_id = data.get("project_id") or settings.fcm_project_id
-            return True
+            return False
         except Exception as e:
             logger.exception("Failed to load FCM service account: %s", e)
             self._credentials = None
@@ -108,7 +122,7 @@ class FCMService:
             True if sent successfully, False otherwise
         """
         if not self.is_configured:
-            logger.debug("FCM not configured - skipping")
+            logger.warning("FCM not configured - skipping push send")
             return False
 
         project_id = self._get_project_id()
@@ -116,7 +130,8 @@ class FCMService:
             logger.error("FCM project_id not found")
             return False
 
-        access_token = self._get_access_token()
+        async with self._token_lock:
+            access_token = self._get_access_token()
         if not access_token:
             logger.error("FCM failed to get access token")
             return False

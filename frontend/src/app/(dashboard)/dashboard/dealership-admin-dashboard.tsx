@@ -142,7 +142,7 @@ export function DealershipAdminDashboard() {
             {/* Header */}
             <div className="flex items-end justify-between">
                 <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Dealership Dashboard</h1>
+                    <h1 className="text-3xl font-bold tracking-tight">Manager Dashboard</h1>
                     <p className="text-muted-foreground">Manage your team and track lead performance.</p>
                 </div>
                 <div className="flex gap-2">

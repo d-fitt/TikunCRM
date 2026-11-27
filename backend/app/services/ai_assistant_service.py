@@ -21,7 +21,7 @@ from app.models.ai_assistant import AiConversation, AiMessage
 from app.models.lead import Lead
 from app.models.user import User
 from app.core.permissions import UserRole
-from app.services.ai_db_query import SCHEMA as DB_SCHEMA
+from app.services.ai_db_query import SCHEMA as DB_SCHEMA, business_clock
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +32,9 @@ QUERY_DATABASE_TOOL = {
         "description": (
             "Run one read-only PostgreSQL SELECT against the CRM database. "
             "Use this whenever the answer is a number, a percentage, a list, or anything "
-            "stored in the CRM. Write the SQL yourself from the question. "
-            "If the database returns an error, fix the SQL and call this again. "
+            "stored in the CRM. The user will not specify tables, statuses, or years. "
+            "Decide those yourself and put every number the question needs in this one SELECT. "
+            "If the database returns an error, fix the SQL and call this again without telling the user. "
             + DB_SCHEMA
         ),
         "parameters": {
@@ -365,7 +366,7 @@ ALL_TOOLS = [
     RANK_LEADS_TOOL,
 ]
 
-SYSTEM_PROMPT = """You are Tikun AI, a CRM assistant inside TikunCRM for car dealerships.
+SYSTEM_PROMPT = """You are Tikun AI inside TikunCRM. You already have this dealership's database. The user asks the way they would ask a coworker. You work out the date, the records, and the filters. They should never have to name a table, a status, or a year.
 
 Role / access (always honor — tools already enforce this):
 - bdc: can see and act on ALL leads in their accessible dealership(s). Never force pool=mine unless they ask for "my" leads. They can assign salespeople within a lead's dealership.
@@ -374,10 +375,13 @@ Role / access (always honor — tools already enforce this):
 - super_admin: all dealerships.
 
 Rules:
-- You are ChatGPT with this CRM's database. When a question needs facts, write a SELECT and call query_database. Use the rows it returns. If it errors, read the error and query again. Never invent a count or a percentage.
+- For a fact, a count, a list, or a percentage, call query_database once. Put every figure in that one SELECT. Use the dates under "Right now".
+- If that query errors, fix it and call query_database again. Do not mention the error, the SQL, or that you tried more than once.
+- Answer in one or two plain sentences, using only numbers the query returned. Do not invent a count.
 - A salesperson's queries stay on leads assigned to them unless they ask for the whole company. Admins, owners, and BDC can query every lead.
-- "SSN" / "DL" / "driver license" means stip documents on file, not the ID number itself.
+- "SSN" / "DL" / "driver license" means a stip document on file, not an ID number. A document exists only when a stip-document row exists.
 - "Business" / "business customer" maps to is_business (trust-score Business Yes/No).
+- Appointments are the appointments table, counted on scheduled_at in the dealership timezone. Check-ins are showroom_visits, counted on checked_in_at. Do not invent a status.
 - For anything in notes, calls, texts, emails, or "what did they say/mention/want" → use search_crm_content.
 - For pipeline filters (stips, down payment, stage, source) → use search_leads.
 - When search_crm_content returns snippets, cite the lead name and quote or paraphrase the snippet. If nothing matched, say so clearly.
@@ -386,12 +390,24 @@ Rules:
 - For assign / stage change / follow-ups: call write tools with lead_ids from a prior search. Those only PROPOSE — user must Confirm in the UI.
 - Resolve people with list_salespersons before assign when the name is ambiguous (BDC: use dealership_id when multi-store).
 - Resolve stages with list_stages when needed.
-- Be concise. If ambiguous, ask one clarifying question.
+- Be concise. Ask a question only when two different business meanings are both plausible.
 - For "who should I call first", use rank_leads_to_call.
 """
 
 
-def _system_prompt_for_user(user: User) -> str:
+async def _assistant_timezone(db: AsyncSession, user: User) -> str:
+    from app.models.dealership import Dealership
+    from app.utils.timezone import resolve_dealership_timezone
+
+    if not user.dealership_id:
+        return resolve_dealership_timezone(None)
+    row = await db.execute(
+        select(Dealership.timezone).where(Dealership.id == user.dealership_id)
+    )
+    return resolve_dealership_timezone(row.scalar_one_or_none())
+
+
+def _system_prompt_for_user(user: User, clock: str) -> str:
     role = user.role.value if user.role else "unknown"
     extra = ""
     if user.role == UserRole.BDC:
@@ -413,11 +429,93 @@ def _system_prompt_for_user(user: User) -> str:
     else:
         extra = f"\nCurrent user role: {role}."
     extra += f"\nCurrent user id: {user.id}."
+    extra += "\n\nRight now:\n" + clock
     return SYSTEM_PROMPT + extra
 
 
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+_RECENT_TURNS = 12
+_MEMORY_BUDGET = 14_000
+
+
+def _clip(text: str, limit: int) -> str:
+    flat = " ".join((text or "").split())
+    if len(flat) <= limit:
+        return flat
+    return flat[: limit - 1].rstrip() + "…"
+
+
+def _tool_facts(message: AiMessage) -> str:
+    bits: List[str] = []
+    for trace in message.tool_traces or []:
+        if not isinstance(trace, dict):
+            continue
+        summary = str(trace.get("result_summary") or "").strip()
+        if summary:
+            bits.append(summary)
+    return "; ".join(bits[:4])
+
+
+def pack_chat_history(messages: List[AiMessage]) -> tuple[str, List[dict]]:
+    """
+    Older turns become a compact memory. The latest turns stay verbatim.
+    The memory grows with the chat until a fixed budget, so later questions
+    still see earlier answers and database facts.
+    """
+    turns = [
+        message
+        for message in messages
+        if message.role in ("user", "assistant") and (message.content or "").strip()
+    ]
+    recent = turns[-_RECENT_TURNS:]
+    older = turns[:-_RECENT_TURNS] if len(turns) > _RECENT_TURNS else []
+
+    bullets: List[str] = []
+    for message in older:
+        if message.role == "user":
+            bullets.append(f"User: {_clip(message.content, 180)}")
+            continue
+        line = f"Assistant: {_clip(message.content, 280)}"
+        facts = _tool_facts(message)
+        if facts:
+            line += f" Data: {_clip(facts, 220)}"
+        bullets.append(line)
+
+    memory = ""
+    if bullets:
+        kept: List[str] = []
+        used = 0
+        dropped = 0
+        for bullet in reversed(bullets):
+            extra = len(bullet) + 1
+            if used + extra > _MEMORY_BUDGET:
+                dropped += 1
+                continue
+            kept.append(bullet)
+            used += extra
+        kept.reverse()
+        prefix = (
+            f"{dropped} older turns are folded into the lines below.\n"
+            if dropped
+            else ""
+        )
+        memory = prefix + "\n".join(kept)
+
+    packed: List[dict] = []
+    for message in recent:
+        text = message.content.strip()
+        if message.role == "assistant":
+            facts = _tool_facts(message)
+            if facts:
+                text = f"{text}\n\nDatabase facts: {facts}"
+            text = _clip(text, 2500)
+        else:
+            text = _clip(text, 2000)
+        packed.append({"role": message.role, "content": text})
+    return memory, packed
 
 
 def build_thinking_plan(user_text: str, role: str) -> str:
@@ -443,7 +541,7 @@ def build_thinking_plan(user_text: str, role: str) -> str:
         x in t
         for x in (
             "said", "mention", "note", "talked", "discussed", "trade", "financ",
-            "credit", "vehicle", "appointment", "callback", "message", "whatsapp",
+            "credit", "vehicle", "callback", "message", "whatsapp",
             "email", "timeline", "activity",
         )
     ):
@@ -864,15 +962,23 @@ class AiAssistantService:
                     yield _sse("ui_block", note_block)
                 rag_context = CrmContentSearchService.format_rag_context(retrieve_result)
 
-        # Build chat history for OpenAI
+        # Newest 200 turns. Older ones are packed into a compact memory.
         hist_res = await db.execute(
             select(AiMessage)
             .where(AiMessage.conversation_id == conv.id)
-            .order_by(AiMessage.created_at.asc())
-            .limit(40)
+            .order_by(AiMessage.created_at.desc())
+            .limit(200)
         )
-        history = list(hist_res.scalars().all())
-        system_content = _system_prompt_for_user(user)
+        history = list(reversed(hist_res.scalars().all()))
+        memory, packed_history = pack_chat_history(history)
+        clock = business_clock(await _assistant_timezone(db, user))
+        system_content = _system_prompt_for_user(user, clock)
+        if memory:
+            system_content += (
+                "\n\nEarlier in this same chat. Use it when the user says "
+                "\"that\", \"those\", or asks a follow-up:\n"
+                + memory
+            )
         if rag_context:
             system_content += (
                 "\n\n--- Retrieved CRM timeline context (use ONLY this for note/call/message claims) ---\n"
@@ -881,9 +987,7 @@ class AiAssistantService:
         oai_messages: List[dict] = [
             {"role": "system", "content": system_content}
         ]
-        for m in history:
-            if m.role in ("user", "assistant") and m.content:
-                oai_messages.append({"role": m.role, "content": m.content})
+        oai_messages.extend(packed_history)
 
         client = AiAssistantService._client()
         tools = ALL_TOOLS
@@ -997,6 +1101,11 @@ class AiAssistantService:
                             "row_count": result.get("row_count"),
                             "truncated": result.get("truncated"),
                         }
+                        ui_blocks[:] = [
+                            existing
+                            for existing in ui_blocks
+                            if existing.get("type") != "query_result"
+                        ]
                         ui_blocks.append(block)
                         yield _sse("ui_block", block)
 

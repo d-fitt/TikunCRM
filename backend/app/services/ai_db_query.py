@@ -6,10 +6,11 @@ schema. This only runs a single SELECT and refuses writes and secrets.
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,26 +44,92 @@ _DANGEROUS_FN_RE = re.compile(
 )
 
 SCHEMA = """
-PostgreSQL. Call query_database with one SELECT. Call it again if you need another number or the error shows a bad column. Then answer in plain language from the rows. Do not invent a number the query did not return.
+PostgreSQL. The user asks in everyday language. You choose the date, the table, and the filters. They will not name columns or statuses.
+
+Call query_database with ONE SELECT that returns every number the question needs (COUNT(*) FILTER or GROUP BY). Then answer from those rows. Do not invent a number. If the query errors, fix the SQL and call again. Never tell the user about SQL or the error.
+
+Dates are timestamptz. A calendar day is (column AT TIME ZONE '<the timezone under Right now>')::date. Use the dates under Right now. Do not guess a year.
+Compare every enum with column::text, using only the values below.
 
 leads(id, customer_id, secondary_customer_id, stage_id, source, is_active, outcome, dealership_id, assigned_to, bdc_assigned_to_id, down_payment, has_ssn_stip, has_dl_stip, is_business, converted_at, created_at)
-  outcome is 'converted', 'lost', or null. Converted leads are usually is_active = false, so do not add is_active = true when counting conversions.
-  source is an enum. Compare with source::text.
+  outcome is 'converted', 'lost', or null. Converted leads are usually is_active = false. Do not add is_active = true when counting conversions.
+  source::text is GOOGLE_SHEETS, META_ADS, MANUAL, WEBSITE, REFERRAL, WALK_IN, whatsapp_inbound, sms_inbound, WHATSAPP_INBOUND.
 customers(id, first_name, last_name, phone, email, postal_code, city, state, credit_score, has_license)
 lead_stip_documents(id, lead_id, stips_category_id, file_name, uploaded_at)
 customer_stip_documents(id, customer_id, stips_category_id, file_name, uploaded_at)
-  A stip was uploaded when a row exists in either stip table for that lead or its customer (customer_id or secondary_customer_id), or leads.has_ssn_stip / has_dl_stip is true.
+  A document was uploaded only when a row exists in one of those tables, for the lead or for its customer (customer_id or secondary_customer_id). has_ssn_stip and has_dl_stip can be true with no file.
 lead_stages(id, name, display_name)
-appointments(id, lead_id, scheduled_at, status, appointment_type)
+appointments(id, lead_id, scheduled_at, status, appointment_type, completed_at)
+  status::text is scheduled, confirmed, arrived, in_showroom, in_progress, completed, cancelled, no_show, rescheduled, sold.
+  appointment_type::text is phone_call, email, in_person, video_call, other.
+  "How many appointments" means every appointment that day unless they name a status. Return the total and each status in the same SELECT. There is no check-in status.
+showroom_visits(id, lead_id, appointment_id, checked_in_at, checked_out_at, outcome)
+  A check-in is a row here. Count it with checked_in_at.
+  Use lower(outcome::text) in sold, not_interested, follow_up, reschedule, browsing, couldnt_qualify.
 call_logs(id, lead_id, customer_id, user_id, direction, status, created_at, duration)
-  direction::text is INBOUND or OUTBOUND. status::text is COMPLETED, NO_ANSWER, and the other Twilio names.
+  direction::text is inbound or outbound.
+  status::text is initiated, ringing, in-progress, completed, busy, no-answer, failed, canceled.
 activities(id, lead_id, user_id, type, description, created_at)
+  type::text examples: NOTE_ADDED, CALL_LOGGED, SMS_SENT, SMS_RECEIVED, EMAIL_SENT, EMAIL_RECEIVED, WHATSAPP_SENT, WHATSAPP_RECEIVED, APPOINTMENT_SCHEDULED, APPOINTMENT_COMPLETED.
 follow_ups(id, lead_id, assigned_to, scheduled_at, status, notes)
+  status::text is PENDING, COMPLETED, MISSED, CANCELLED.
 users(id, first_name, last_name, email, role, is_active, dealership_id)
   role::text is BDC, SALESPERSON, DEALERSHIP_ADMIN, DEALERSHIP_OWNER, SUPER_ADMIN.
 partner_stores(id, name, brand, city, state, postal_code, address)
 dealerships(id, name, slug)
 """.strip()
+
+
+def business_clock(tz_name: str, now: Optional[datetime] = None) -> str:
+    """Dates the assistant must use, so 'last Saturday' is never a guessed year."""
+    tz = ZoneInfo(tz_name)
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    local = moment.astimezone(tz)
+    today = local.date()
+    days_since_saturday = (today.weekday() - 5) % 7
+    last_saturday = today - timedelta(days=days_since_saturday)
+    yesterday = today - timedelta(days=1)
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+    hour = local.hour % 12 or 12
+    ampm = "AM" if local.hour < 12 else "PM"
+    saturday_line = (
+        f"Today is Saturday ({today.isoformat()}). The Saturday before was "
+        f"{(today - timedelta(days=7)).isoformat()}."
+        if days_since_saturday == 0
+        else f"Last Saturday was {last_saturday.isoformat()}."
+    )
+    return (
+        f"Today is {local.strftime('%A')}, {local.strftime('%B')} {today.day}, {today.year} "
+        f"({today.isoformat()}) in {tz_name}. Local time is {hour}:{local.strftime('%M')} {ampm}.\n"
+        f"Yesterday was {yesterday.isoformat()} ({yesterday.strftime('%A')}).\n"
+        f"{saturday_line}\n"
+        f"This week is {week_start.isoformat()} through {week_end.isoformat()}.\n"
+        f"Last week was {(week_start - timedelta(days=7)).isoformat()} through "
+        f"{(week_start - timedelta(days=1)).isoformat()}.\n"
+        f"This month starts {today.replace(day=1).isoformat()}.\n"
+        f"Filter a calendar day with (column AT TIME ZONE '{tz_name}')::date. Use these dates."
+    )
+
+
+def _error_hint(message: str) -> str:
+    low = message.lower()
+    if "enum" in low or "invalid input value" in low:
+        return (
+            " Compare enums with column::text. "
+            "appointments.status: scheduled, confirmed, arrived, in_showroom, in_progress, "
+            "completed, cancelled, no_show, rescheduled, sold. "
+            "Check-ins are showroom_visits.checked_in_at, not an appointment status. "
+            "showroom outcome: lower(outcome::text). "
+            "follow_ups.status: PENDING, COMPLETED, MISSED, CANCELLED. "
+            "call_logs.direction: inbound, outbound. "
+            "call_logs.status: completed, no-answer, busy, failed, canceled, in-progress."
+        )
+    if "does not exist" in low or "undefinedcolumn" in low:
+        return " Use only columns listed in the schema."
+    return ""
 
 
 class QueryRejected(Exception):
@@ -122,7 +189,7 @@ async def run_select(db: AsyncSession, sql: str) -> Dict[str, Any]:
             mappings = result.mappings().fetchall()
     except Exception as exc:
         message = str(getattr(exc, "orig", None) or exc)
-        return {"error": message, "sql": statement}
+        return {"error": message + _error_hint(message), "sql": statement}
 
     truncated = len(mappings) > MAX_ROWS
     kept = mappings[:MAX_ROWS]

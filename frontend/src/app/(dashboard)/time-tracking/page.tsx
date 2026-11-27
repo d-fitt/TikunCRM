@@ -55,6 +55,7 @@ import { ClockWidget } from "@/components/time-tracking/clock-widget"
 import { useRole } from "@/hooks/use-role"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { useToast } from "@/hooks/use-toast"
+import { useWebSocketEvent, useWebSocketResync } from "@/hooks/use-websocket"
 import { getApiErrorMessage } from "@/lib/api-errors"
 import { formatDateInLocal } from "@/utils/timezone"
 import { formatElapsed, formatHours, formatMoney, formatPayHint, formatPercent, num } from "@/lib/time-tracking"
@@ -282,6 +283,20 @@ export default function TimeTrackingPage() {
     React.useEffect(() => {
         void loadRoster()
     }, [loadRoster])
+
+    // Agents clocking in/out and starting/ending calls change the roster live
+    const rosterTimer = React.useRef<number | null>(null)
+    const refreshRoster = React.useCallback(() => {
+        if (rosterTimer.current) window.clearTimeout(rosterTimer.current)
+        rosterTimer.current = window.setTimeout(() => void loadRoster(), 500)
+    }, [loadRoster])
+    React.useEffect(() => () => {
+        if (rosterTimer.current) window.clearTimeout(rosterTimer.current)
+    }, [])
+    useWebSocketEvent("time_clock:updated", refreshRoster, [refreshRoster])
+    useWebSocketEvent("call:answered", refreshRoster, [refreshRoster])
+    useWebSocketEvent("call:completed", refreshRoster, [refreshRoster])
+    useWebSocketResync(refreshRoster, [refreshRoster])
 
     React.useEffect(() => {
         let cancelled = false

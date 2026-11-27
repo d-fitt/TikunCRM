@@ -2465,15 +2465,28 @@ export default function LeadDetailsPage() {
                                         <span className="whitespace-nowrap">Log contact</span>
                                     </Button>
                                     {getLeadPhone(lead) && (
-                                        <Button
-                                            variant="outline"
-                                            className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
-                                            onClick={handleCallClick}
-                                            title={voiceEnabled ? "Call in app" : "Call this lead"}
-                                        >
-                                            <Phone className="h-4 w-4 mr-2 shrink-0" />
-                                            <span className="whitespace-nowrap">Call</span>
-                                        </Button>
+                                        <div className="grid grid-cols-2 gap-2 w-full">
+                                            <Button
+                                                variant="outline"
+                                                className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
+                                                onClick={handleCallClick}
+                                                title={voiceEnabled ? "Call in app" : "Call this lead"}
+                                            >
+                                                <Phone className="h-4 w-4 mr-2 shrink-0 text-emerald-600" />
+                                                <span className="whitespace-nowrap">Call</span>
+                                            </Button>
+                                            <Button
+                                                variant="outline"
+                                                className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
+                                                asChild
+                                                title="Send a text message"
+                                            >
+                                                <Link href={`/sms?lead=${leadId}`}>
+                                                    <MessageSquare className="h-4 w-4 mr-2 shrink-0 text-primary" />
+                                                    <span className="whitespace-nowrap">Text</span>
+                                                </Link>
+                                            </Button>
+                                        </div>
                                     )}
                                     {getLeadEmail(lead) && (
                                         <Button
@@ -2525,7 +2538,7 @@ export default function LeadDetailsPage() {
                                             className="w-full h-10 rounded-lg transition-all duration-200 hover:shadow-sm hover:bg-muted/50 active:scale-[0.99]"
                                             onClick={handleCheckIn}
                                             disabled={isCheckingIn || !effectiveDealershipId}
-                                            title={!effectiveDealershipId ? "Organization dealership is not configured yet." : undefined}
+                                            title={!effectiveDealershipId ? "Your account is not linked to Carvaminos yet." : undefined}
                                         >
                                             {isCheckingIn ? (
                                                 <Loader2 className="h-4 w-4 mr-2 animate-spin shrink-0" />
@@ -3381,10 +3394,12 @@ export default function LeadDetailsPage() {
                                     <Button 
                                         className="w-full justify-start" 
                                         variant="outline"
-                                        onClick={() => setShowCallTextComingSoon(true)}
+                                        asChild
                                     >
-                                        <MessageSquare className="h-4 w-4 mr-2 text-purple-500" />
-                                        Text
+                                        <Link href={`/sms?lead=${leadId}`}>
+                                            <MessageSquare className="h-4 w-4 mr-2 text-purple-500" />
+                                            Text
+                                        </Link>
                                     </Button>
                                 </div>
                             )}
@@ -3428,7 +3443,7 @@ export default function LeadDetailsPage() {
                                     variant="outline"
                                     onClick={handleCheckIn}
                                     disabled={isCheckingIn || !effectiveDealershipId}
-                                    title={!effectiveDealershipId ? "Organization dealership is not configured yet." : undefined}
+                                    title={!effectiveDealershipId ? "Your account is not linked to Carvaminos yet." : undefined}
                                 >
                                     {isCheckingIn ? (
                                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />

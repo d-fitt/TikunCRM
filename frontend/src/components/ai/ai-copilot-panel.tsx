@@ -58,6 +58,8 @@ type LiveAssistant = {
   uiBlocks: AiUiBlock[]
 }
 
+const CHAT_STORAGE_KEY = "tikun-copilot-chat"
+
 const SUGGESTIONS = [
   "Leads with SSN, DL, and about 2000–3000 down",
   "Who should I call first this morning?",
@@ -904,7 +906,10 @@ function AssistantBubble({
 }
 
 function mergeUiBlock(blocks: AiUiBlock[], incoming: AiUiBlock): AiUiBlock[] {
-  if (incoming.type === "query_result") return [...blocks, incoming]
+  if (incoming.type === "query_result") {
+    const withoutCounts = blocks.filter((block) => block.type !== "query_result")
+    return [...withoutCounts, incoming]
+  }
   const idx = blocks.findIndex((b) => b.type === incoming.type)
   if (idx >= 0) {
     const next = [...blocks]
@@ -918,6 +923,8 @@ export function AiCopilotPanel() {
   const { open, setOpen } = useAiCopilot()
   const queryClient = useQueryClient()
   const [conversationId, setConversationId] = React.useState<string | null>(null)
+  const [conversationTitle, setConversationTitle] = React.useState("New chat")
+  const restoredRef = React.useRef(false)
   const [input, setInput] = React.useState("")
   const [sending, setSending] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -939,6 +946,8 @@ export function AiCopilotPanel() {
     queryFn: () => AiAssistantService.listConversations(),
     enabled: open,
   })
+  const conversationsRef = React.useRef<AiConversationBrief[]>([])
+  conversationsRef.current = convQuery.data || []
 
   React.useEffect(() => {
     if (open) {
@@ -955,14 +964,29 @@ export function AiCopilotPanel() {
     setError(null)
     setLive(null)
     setConversationId(id)
+    sessionStorage.setItem(CHAT_STORAGE_KEY, id)
     setShowHistory(false)
     const data = await AiAssistantService.getConversation(id)
+    setConversationTitle(data.title || "Chat")
     setMessages(data.messages || [])
   }
+
+  React.useEffect(() => {
+    if (!open || restoredRef.current || convQuery.isLoading) return
+    restoredRef.current = true
+    const saved = sessionStorage.getItem(CHAT_STORAGE_KEY)
+    const nextId = saved || conversationsRef.current[0]?.id
+    if (!nextId) return
+    void loadConversation(nextId).catch(() => {
+      sessionStorage.removeItem(CHAT_STORAGE_KEY)
+    })
+  }, [open, convQuery.isLoading, convQuery.data])
 
   const startNew = () => {
     abortRef.current?.abort()
     setConversationId(null)
+    setConversationTitle("New chat")
+    sessionStorage.removeItem(CHAT_STORAGE_KEY)
     setMessages([])
     setLive(null)
     setError(null)
@@ -1008,6 +1032,8 @@ export function AiCopilotPanel() {
         {
           onConversation: (c) => {
             setConversationId(c.id)
+            setConversationTitle(c.title || "Chat")
+            sessionStorage.setItem(CHAT_STORAGE_KEY, c.id)
             queryClient.invalidateQueries({ queryKey: ["ai-conversations"] })
           },
           onThinkingStart: () => {
@@ -1033,22 +1059,31 @@ export function AiCopilotPanel() {
             )
           },
           onToolStart: (d) => {
-            setLive((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    tools: [
-                      ...prev.tools,
-                      {
-                        name: d.name,
-                        label: d.label,
-                        args: d.args,
-                        status: "running",
-                      },
-                    ],
-                  }
-                : prev
-            )
+            setLive((prev) => {
+              if (!prev) return prev
+              const existing = prev.tools.findIndex((tool) => tool.name === d.name)
+              if (existing >= 0) {
+                const tools = [...prev.tools]
+                tools[existing] = {
+                  ...tools[existing],
+                  status: "running",
+                  label: d.label || tools[existing].label,
+                }
+                return { ...prev, tools }
+              }
+              return {
+                ...prev,
+                tools: [
+                  ...prev.tools,
+                  {
+                    name: d.name,
+                    label: d.label,
+                    args: d.args,
+                    status: "running",
+                  },
+                ],
+              }
+            })
           },
           onToolResult: (d) => {
             setLive((prev) => {
@@ -1160,10 +1195,7 @@ export function AiCopilotPanel() {
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-semibold leading-tight">Tikun Copilot</h2>
             <p className="truncate text-[11px] text-muted-foreground">
-              Uses your CRM permissions · ⌘⇧J
-              {statusQuery.data?.crm_search?.azure_configured
-                ? " · Azure search"
-                : " · DB search"}
+              {conversationTitle}
             </p>
           </div>
           <Button
@@ -1196,9 +1228,9 @@ export function AiCopilotPanel() {
         </header>
 
         {showHistory && (
-          <div className="max-h-48 shrink-0 overflow-y-auto border-b bg-muted/30 px-2 py-2">
-            <p className="mb-1 px-2 text-[11px] font-medium text-muted-foreground">
-              Recent chats
+          <div className="min-h-0 flex-1 overflow-y-auto border-b bg-muted/20 px-2 py-2">
+            <p className="mb-2 px-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Chat history
             </p>
             {conversations.map((c) => (
               <button
@@ -1206,24 +1238,34 @@ export function AiCopilotPanel() {
                 type="button"
                 onClick={() => loadConversation(c.id)}
                 className={cn(
-                  "group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted",
+                  "group mb-1 flex w-full items-start gap-2 rounded-xl px-2.5 py-2 text-left hover:bg-muted",
                   conversationId === c.id && "bg-muted"
                 )}
               >
-                <span className="min-w-0 flex-1 truncate">{c.title}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{c.title}</span>
+                  <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                    {new Date(c.updated_at).toLocaleString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                </span>
                 <Trash2
-                  className="h-3 w-3 shrink-0 opacity-0 group-hover:opacity-70"
+                  className="mt-1 h-3.5 w-3.5 shrink-0 opacity-0 group-hover:opacity-70"
                   onClick={(e) => deleteConv(c.id, e)}
                 />
               </button>
             ))}
             {!conversations.length && (
-              <p className="px-2 py-1 text-xs text-muted-foreground">No chats yet</p>
+              <p className="px-2 py-2 text-xs text-muted-foreground">No chats yet</p>
             )}
           </div>
         )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
+        <div className={cn("min-h-0 flex-1 overflow-y-auto px-3 py-4", showHistory && "hidden")}>
           <div className="flex flex-col gap-4">
             {!messages.length && !live && (
               <div className="px-1 py-6 text-center">

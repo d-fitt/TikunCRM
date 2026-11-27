@@ -1,6 +1,7 @@
 """
 Voice API Endpoints - Twilio WebRTC Softphone
 """
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional, List
@@ -53,24 +54,25 @@ async def _notify_incoming_ring_background(
     from app.db.database import async_session_maker
     from app.services.push_service import push_service
 
-    try:
-        for uid in user_ids:
-            await ws_manager.send_to_user(
-                uid,
-                {
-                    "type": "call:incoming",
-                    "payload": {
-                        "call_log_id": call_log_id,
-                        "call_sid": call_sid,
-                        "from_number": from_number,
-                        "lead_id": lead_id,
-                        "lead_name": lead_name,
-                        "is_ring_group": len(user_ids) > 1,
-                    },
-                },
-            )
-    except Exception as e:
-        logger.warning("Incoming-call WebSocket notify failed: %s", e)
+    payload = {
+        "type": "call:incoming",
+        "payload": {
+            "call_log_id": call_log_id,
+            "call_sid": call_sid,
+            "from_number": from_number,
+            "lead_id": lead_id,
+            "lead_name": lead_name,
+            "is_ring_group": len(user_ids) > 1,
+        },
+    }
+
+    async def _ring_one(uid: str) -> None:
+        try:
+            await ws_manager.send_to_user(uid, payload)
+        except Exception as e:
+            logger.warning("Incoming-call WebSocket notify failed for %s: %s", uid, e)
+
+    await asyncio.gather(*[_ring_one(uid) for uid in user_ids])
 
     try:
         async with async_session_maker() as db:
@@ -463,18 +465,11 @@ async def report_softphone_presence(
     from app.services import softphone_presence_service as presence
 
     presence_status = (body.status or "").strip().lower()
-    if presence_status in {"registered", "heartbeat", "idle"}:
-        await presence.upsert_presence(db, current_user.id, busy=False)
-    elif presence_status == "busy":
-        await presence.upsert_presence(db, current_user.id, busy=True)
-    elif presence_status == "unregistered":
-        await presence.clear_presence(db, current_user.id)
-    else:
+    if not await presence.apply_presence_status(db, current_user.id, presence_status):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="status must be registered|heartbeat|busy|idle|unregistered",
         )
-    await db.commit()
     return {"ok": True, "status": presence_status}
 
 
@@ -572,14 +567,10 @@ async def initiate_call(
         )
     
     # Do not create call_log here; it is created in the outgoing webhook when Twilio sends the real CallSid.
+    # Several people, including managers, can call the same customer.
     if lead is not None:
         from app.services.bdc_attention_service import claim_lead_for_call
-        claimed = await claim_lead_for_call(db, current_user, lead.id)
-        if not claimed:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Another person already started this call",
-            )
+        await claim_lead_for_call(db, current_user, lead.id)
     return InitiateCallResponse(
         call_log_id=None,
         call_sid="connecting",
@@ -712,6 +703,10 @@ async def mark_all_missed_calls_seen(
 
     if marked:
         await db.commit()
+        await ws_manager.broadcast_all({"type": "missed_calls:changed", "payload": {}})
+        from app.services.shell_badges import schedule_shell_badges_push
+
+        schedule_shell_badges_push()
     return {"ok": True, "marked": marked}
 
 
@@ -735,6 +730,10 @@ async def mark_missed_call_seen(
     call.meta_data = meta
     flag_modified(call, "meta_data")
     await db.commit()
+    await ws_manager.broadcast_all({"type": "missed_calls:changed", "payload": {}})
+    from app.services.shell_badges import schedule_shell_badges_push
+
+    schedule_shell_badges_push()
     return {"ok": True, "id": str(call.id)}
 
 
@@ -1499,6 +1498,9 @@ async def handle_call_status(
                         )
                     except Exception as e:
                         logger.warning("call:completed broadcast failed: %s", e)
+                    from app.services.shell_badges import schedule_shell_badges_push
+
+                    schedule_shell_badges_push()
 
             # Missed inbound — stamp outcome now; email/push AFTER TwiML (Twilio 15s limit)
             dial_status_for_notify = (form_data.get("DialCallStatus") or "").lower()

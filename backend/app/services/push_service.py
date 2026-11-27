@@ -2,6 +2,7 @@
 Push Notification Service - FCM Only
 Uses Firebase Cloud Messaging (FCM) HTTP V1 API for all push notifications.
 """
+import asyncio
 import logging
 from typing import Optional, List, Dict, Any
 from uuid import UUID
@@ -60,55 +61,86 @@ class PushService:
             Number of successful sends
         """
         if not self.is_configured:
-            logger.debug("FCM not configured - skipping push notification")
+            logger.warning("FCM not configured - skipping push notification for user %s", user_id)
             return 0
 
-        success_count = 0
-        fcm_tokens: list = []
+        # Own session. Committing the caller's session here expired every
+        # other user still waiting in the same notification loop, so only
+        # the first recipient was delivered.
+        del db
+        from app.db.database import async_session_maker
+        from app.services.fcm_service import fcm_service, InvalidFCMTokenError
 
         try:
-            from app.services.fcm_service import fcm_service, InvalidFCMTokenError
-            
-            # Get all active FCM tokens for this user
-            fcm_result = await db.execute(
-                select(FCMToken).where(
-                    FCMToken.user_id == user_id,
-                    FCMToken.is_active == True
-                )
-            )
-            fcm_tokens = list(fcm_result.scalars().all())
-            
-            if not fcm_tokens:
-                logger.debug(f"No active FCM tokens for user {user_id}")
-                return 0
-            
-            # Send to each FCM token
-            for fcm_token in fcm_tokens:
-                try:
-                    ok = await fcm_service.send(
-                        token=fcm_token.token,
-                        title=title,
-                        body=body,
-                        url=url,
-                        tag=tag,
-                        data=data,
-                        ttl_seconds=ttl_seconds,
+            async with async_session_maker() as push_db:
+                fcm_result = await push_db.execute(
+                    select(FCMToken).where(
+                        FCMToken.user_id == user_id,
+                        FCMToken.is_active == True,
                     )
-                    if ok:
-                        success_count += 1
-                        fcm_token.mark_success()
-                    else:
-                        fcm_token.mark_failed()
-                except InvalidFCMTokenError:
-                    # Token is definitively invalid - delete it immediately
-                    logger.info(f"Deleting invalid FCM token {fcm_token.id} for user {user_id}")
-                    await db.delete(fcm_token)
-                    
-        except Exception as e:
-            logger.exception(f"FCM send_to_user error: {e}")
+                )
+                fcm_tokens = list(fcm_result.scalars().all())
+                if not fcm_tokens:
+                    logger.debug("No active FCM tokens for user %s", user_id)
+                    return 0
 
-        await db.commit()
-        logger.info(f"Sent push to {success_count}/{len(fcm_tokens)} FCM device(s) for user {user_id}")
+                payloads = [(row.id, row.token) for row in fcm_tokens]
+
+                async def _send_one(token_id: UUID, token_value: str):
+                    try:
+                        ok = await fcm_service.send(
+                            token=token_value,
+                            title=title,
+                            body=body,
+                            url=url,
+                            tag=tag,
+                            data=data,
+                            ttl_seconds=ttl_seconds,
+                        )
+                        return token_id, "ok" if ok else "fail"
+                    except InvalidFCMTokenError:
+                        return token_id, "invalid"
+                    except Exception as exc:
+                        logger.warning(
+                            "FCM send failed for user %s token %s: %s",
+                            user_id,
+                            token_id,
+                            exc,
+                        )
+                        return token_id, "fail"
+
+                outcomes = await asyncio.gather(
+                    *[_send_one(token_id, token_value) for token_id, token_value in payloads]
+                )
+                by_id = {row.id: row for row in fcm_tokens}
+                success_count = 0
+                for token_id, outcome in outcomes:
+                    row = by_id.get(token_id)
+                    if row is None:
+                        continue
+                    if outcome == "ok":
+                        row.mark_success()
+                        success_count += 1
+                    elif outcome == "invalid":
+                        logger.info(
+                            "Deleting invalid FCM token %s for user %s",
+                            token_id,
+                            user_id,
+                        )
+                        await push_db.delete(row)
+                    else:
+                        row.mark_failed()
+                await push_db.commit()
+        except Exception as e:
+            logger.exception("FCM send_to_user error: %s", e)
+            return 0
+
+        logger.info(
+            "Sent push to %s/%s FCM device(s) for user %s",
+            success_count,
+            len(fcm_tokens),
+            user_id,
+        )
         return success_count
 
     async def notify_incoming_call(
@@ -137,10 +169,9 @@ class PushService:
             "lead_name": lead_name or "",
             "from_number": from_number or "",
         }
-        total = 0
-        for uid in user_ids:
+        async def _one(uid: UUID) -> int:
             try:
-                total += await self.send_to_user(
+                return await self.send_to_user(
                     db,
                     uid,
                     title="Incoming Call",
@@ -152,7 +183,10 @@ class PushService:
                 )
             except Exception as e:
                 logger.warning("Incoming-call push failed for user %s: %s", uid, e)
-        return total
+                return 0
+
+        counts = await asyncio.gather(*[_one(uid) for uid in user_ids])
+        return sum(counts)
     
     async def send_to_users(
         self,
@@ -175,19 +209,25 @@ class PushService:
         if not self.is_configured:
             return {"total_users": 0, "total_devices": 0, "success_count": 0}
 
-        success_count = 0
-        for uid in user_ids:
-            success_count += await self.send_to_user(
-                db=db,
-                user_id=uid,
-                title=title,
-                body=body,
-                url=url,
-                icon=icon,
-                tag=tag,
-                data=data,
-                ttl_seconds=ttl_seconds,
-            )
+        async def _one(uid: UUID) -> int:
+            try:
+                return await self.send_to_user(
+                    db=db,
+                    user_id=uid,
+                    title=title,
+                    body=body,
+                    url=url,
+                    icon=icon,
+                    tag=tag,
+                    data=data,
+                    ttl_seconds=ttl_seconds,
+                )
+            except Exception as e:
+                logger.warning("Push failed for user %s: %s", uid, e)
+                return 0
+
+        counts = await asyncio.gather(*[_one(uid) for uid in user_ids])
+        success_count = sum(counts)
 
         # Count total FCM devices for response
         total_devices = 0

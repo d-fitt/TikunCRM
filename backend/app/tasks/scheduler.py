@@ -159,6 +159,18 @@ def setup_scheduler():
         misfire_grace_time=600,
     )
 
+    from app.services.sms_broadcast_service import run_sms_broadcasts
+    scheduler.add_job(
+        run_sms_broadcasts,
+        trigger=IntervalTrigger(minutes=1, start_date=datetime.now() + timedelta(seconds=40)),
+        id="sms_broadcasts",
+        name="Send promotional SMS campaigns in batches (8 AM - 8 PM)",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=60,
+    )
+
     logger.info("Background scheduler configured (lead sync + appointments only):")
     logger.info("  - Google Sheets lead sync (every 2 minutes)")
     logger.info("  - Lead auto-assignment (every 2 minutes)")

@@ -50,6 +50,9 @@ class EffectiveTwilioConfig:
     twilio_api_key_sid: str
     twilio_api_key_secret: str
     voice_caller_id_number: str
+    messaging_service_sid: str = ""
+    sms_auto_first_message_enabled: bool = False
+    sms_promo_enabled: bool = False
 
     def is_sms_ready(self) -> bool:
         return bool(
@@ -156,6 +159,11 @@ def _merge(row: Optional[DealershipTwilioConfig], s: Settings) -> EffectiveTwili
         twilio_api_key_sid=api_sid,
         twilio_api_key_secret=api_secret,
         voice_caller_id_number=voice_caller,
+        messaging_service_sid=(
+            (row.messaging_service_sid if row else None) or s.twilio_messaging_service_sid or ""
+        ).strip(),
+        sms_auto_first_message_enabled=bool(row and row.sms_auto_first_message_enabled),
+        sms_promo_enabled=bool(row and row.sms_promo_enabled),
     )
 
 

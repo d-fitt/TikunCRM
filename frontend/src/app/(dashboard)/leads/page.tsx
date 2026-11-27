@@ -82,6 +82,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { AdvancedFiltersMenu, FilterField } from "@/components/ui/filter-bar"
 import { Calendar as CalendarPicker } from "@/components/ui/calendar"
 import { LeadService, Lead, type LeadListParams, type LeadExportFilters, type CampaignFilterOption, type LeadIntakeSummary, getLeadFullName, getLeadPhone, getLeadEmail, isFreshLead, isLeadReturnedToPool, getLeadArrival, leadVisibleSource } from "@/services/lead-service"
 import type { StoreSendResult } from "@/services/partner-store-service"
@@ -586,7 +587,7 @@ export default function LeadsPage() {
     // Load BDC agents for admin/owner BDC filter
     React.useEffect(() => {
         if (!isDealershipLevel && !isSuperAdmin) return
-        TeamService.listBdcAgents(orgDealershipId ?? undefined)
+        TeamService.listBdcAgents()
             .then((list) => setBdcAgents(list))
             .catch(() => setBdcAgents([]))
     }, [isDealershipLevel, isSuperAdmin, orgDealershipId])
@@ -1479,209 +1480,6 @@ export default function LeadsPage() {
                                 </PopoverContent>
                             </Popover>
                         )}
-                        <Select
-                            value={source}
-                            onValueChange={(v) => {
-                                setSource(v)
-                                setPage(1)
-                                const params = new URLSearchParams(searchParams.toString())
-                                if (v && v !== "all") params.set("source", v)
-                                else params.delete("source")
-                                params.delete("page")
-                                router.replace(`/leads?${params.toString()}`)
-                                filterStorage.setLeads({
-                                    filter: viewMode,
-                                    status,
-                                    source: v,
-                                    view: displayView,
-                                    assigned_to: assignedTo !== "all" ? assignedTo : undefined,
-                                    campaign: campaignFilter.length > 0 ? campaignFilter.join(",") : undefined,
-                                })
-                            }}
-                        >
-                            <SelectTrigger className="w-36 shrink-0">
-                                <SelectValue placeholder="Source" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {LEAD_SOURCES.map((s) => (
-                                    <SelectItem key={s.value} value={s.value}>
-                                        {s.label}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                        {(isDealershipLevel || isSuperAdmin) && teamMembers.length > 0 && (
-                            <Select
-                                value={assignedTo}
-                                onValueChange={(v) => {
-                                    setAssignedTo(v)
-                                    setPage(1)
-                                    const params = new URLSearchParams(searchParams.toString())
-                                    if (v && v !== "all") params.set("assigned_to", v)
-                                    else params.delete("assigned_to")
-                                    params.delete("page")
-                                    router.replace(`/leads?${params.toString()}`)
-                                    filterStorage.setLeads({
-                                        filter: viewMode,
-                                        status,
-                                        source,
-                                        view: displayView,
-                                        assigned_to: v !== "all" ? v : undefined,
-                                        campaign: campaignFilter.length > 0 ? campaignFilter.join(",") : undefined,
-                                    })
-                                }}
-                            >
-                                <SelectTrigger className="w-44 shrink-0">
-                                    <SelectValue placeholder="Team member" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All team members</SelectItem>
-                                    {teamMembers.map((u) => (
-                                        <SelectItem key={u.id} value={u.id}>
-                                            {u.first_name} {u.last_name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        )}
-                        {(isDealershipLevel || isSuperAdmin) && bdcAgents.length > 0 && (
-                            <Select
-                                value={bdcAgentFilter}
-                                onValueChange={(v) => {
-                                    setBdcAgentFilter(v)
-                                    setPage(1)
-                                }}
-                            >
-                                <SelectTrigger className="w-44 shrink-0">
-                                    <SelectValue placeholder="BDC Agent" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All BDC agents</SelectItem>
-                                    {bdcAgents.map((a) => (
-                                        <SelectItem key={a.id} value={a.id}>
-                                            {a.first_name} {a.last_name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        )}
-                        {activeCampaignOptions.length > 0 && (
-                            <Popover>
-                                <PopoverTrigger asChild>
-                                    <Button
-                                        variant="outline"
-                                        className="w-[220px] min-w-[10rem] shrink-0 justify-between px-3 font-normal"
-                                    >
-                                        <span className="truncate text-left">
-                                            {campaignFilter.length === 0
-                                                ? "All campaigns"
-                                                : campaignFilter.length === 1
-                                                  ? activeCampaignOptions.find((c) => c.id === campaignFilter[0])?.display_name || "1 campaign"
-                                                  : `${campaignFilter.length} campaigns`}
-                                        </span>
-                                        <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
-                                    </Button>
-                                </PopoverTrigger>
-                                <PopoverContent className="w-[280px] p-1" align="start">
-                                    <div className="max-h-72 overflow-y-auto">
-                                        <div
-                                            role="button"
-                                            tabIndex={0}
-                                            className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
-                                            onClick={() => applyCampaignFilter([])}
-                                            onKeyDown={(event) => {
-                                                if (event.key === "Enter" || event.key === " ") {
-                                                    event.preventDefault()
-                                                    applyCampaignFilter([])
-                                                }
-                                            }}
-                                        >
-                                            <Checkbox checked={campaignFilter.length === 0} tabIndex={-1} className="pointer-events-none" />
-                                            All campaigns
-                                        </div>
-                                        {activeCampaignOptions.map((c) => {
-                                            const checked = campaignFilter.includes(c.id)
-                                            const toggle = () => {
-                                                const next = checked
-                                                    ? campaignFilter.filter((id) => id !== c.id)
-                                                    : [...campaignFilter, c.id]
-                                                applyCampaignFilter(next)
-                                            }
-                                            return (
-                                                <div
-                                                    key={c.id}
-                                                    role="button"
-                                                    tabIndex={0}
-                                                    title={c.match_pattern}
-                                                    className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
-                                                    onClick={toggle}
-                                                    onKeyDown={(event) => {
-                                                        if (event.key === "Enter" || event.key === " ") {
-                                                            event.preventDefault()
-                                                            toggle()
-                                                        }
-                                                    }}
-                                                >
-                                                    <Checkbox checked={checked} tabIndex={-1} className="pointer-events-none" />
-                                                    <span className="truncate">{c.display_name}</span>
-                                                </div>
-                                            )
-                                        })}
-                                    </div>
-                                </PopoverContent>
-                            </Popover>
-                        )}
-                        <div className="flex shrink-0 items-center gap-2 rounded-md border px-2 py-1.5">
-                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                                <Checkbox
-                                    checked={hasSsnStip}
-                                    onCheckedChange={(v) => {
-                                        setHasSsnStip(v === true)
-                                        setPage(1)
-                                    }}
-                                />
-                                SSN
-                            </label>
-                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                                <Checkbox
-                                    checked={hasDlStip}
-                                    onCheckedChange={(v) => {
-                                        setHasDlStip(v === true)
-                                        setPage(1)
-                                    }}
-                                />
-                                DL
-                            </label>
-                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                                <Checkbox
-                                    checked={isBusiness}
-                                    onCheckedChange={(v) => {
-                                        setIsBusiness(v === true)
-                                        setPage(1)
-                                    }}
-                                />
-                                Business
-                            </label>
-                            <Input
-                                className="h-7 w-16 text-xs"
-                                placeholder="Min $"
-                                value={downMin}
-                                onChange={(e) => {
-                                    setDownMin(e.target.value.replace(/[^\d.]/g, ""))
-                                    setPage(1)
-                                }}
-                            />
-                            <span className="text-xs text-muted-foreground">–</span>
-                            <Input
-                                className="h-7 w-16 text-xs"
-                                placeholder="Max $"
-                                value={downMax}
-                                onChange={(e) => {
-                                    setDownMax(e.target.value.replace(/[^\d.]/g, ""))
-                                    setPage(1)
-                                }}
-                            />
-                        </div>
                         {/* Date Filter */}
                         <Popover>
                             <PopoverTrigger asChild>
@@ -1795,6 +1593,259 @@ export default function LeadsPage() {
                                 </div>
                             </PopoverContent>
                         </Popover>
+
+                        <AdvancedFiltersMenu
+                            align="start"
+                            contentClassName="w-[min(92vw,480px)]"
+                            activeCount={
+                                (source !== "all" ? 1 : 0) +
+                                (assignedTo !== "all" ? 1 : 0) +
+                                (bdcAgentFilter !== "all" ? 1 : 0) +
+                                (campaignFilter.length > 0 ? 1 : 0) +
+                                (hasSsnStip ? 1 : 0) +
+                                (hasDlStip ? 1 : 0) +
+                                (isBusiness ? 1 : 0) +
+                                (downMin.trim() || downMax.trim() ? 1 : 0)
+                            }
+                            onReset={() => {
+                                setSource("all")
+                                setAssignedTo("all")
+                                setBdcAgentFilter("all")
+                                applyCampaignFilter([])
+                                setHasSsnStip(false)
+                                setHasDlStip(false)
+                                setIsBusiness(false)
+                                setDownMin("")
+                                setDownMax("")
+                                setPage(1)
+                                const params = new URLSearchParams(searchParams.toString())
+                                params.delete("source")
+                                params.delete("assigned_to")
+                                params.delete("campaign")
+                                params.delete("page")
+                                router.replace(`/leads?${params.toString()}`)
+                            }}
+                        >
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                <FilterField label="Source">
+                                    <Select
+                                        value={source}
+                                        onValueChange={(v) => {
+                                            setSource(v)
+                                            setPage(1)
+                                            const params = new URLSearchParams(searchParams.toString())
+                                            if (v && v !== "all") params.set("source", v)
+                                            else params.delete("source")
+                                            params.delete("page")
+                                            router.replace(`/leads?${params.toString()}`)
+                                            filterStorage.setLeads({
+                                                filter: viewMode,
+                                                status,
+                                                source: v,
+                                                view: displayView,
+                                                assigned_to: assignedTo !== "all" ? assignedTo : undefined,
+                                                campaign: campaignFilter.length > 0 ? campaignFilter.join(",") : undefined,
+                                            })
+                                        }}
+                                    >
+                                        <SelectTrigger className="w-full h-9">
+                                            <SelectValue placeholder="Source" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {LEAD_SOURCES.map((s) => (
+                                                <SelectItem key={s.value} value={s.value}>
+                                                    {s.label}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </FilterField>
+                                {(isDealershipLevel || isSuperAdmin) && teamMembers.length > 0 && (
+                                    <FilterField label="Assigned to">
+                                        <Select
+                                            value={assignedTo}
+                                            onValueChange={(v) => {
+                                                setAssignedTo(v)
+                                                setPage(1)
+                                                const params = new URLSearchParams(searchParams.toString())
+                                                if (v && v !== "all") params.set("assigned_to", v)
+                                                else params.delete("assigned_to")
+                                                params.delete("page")
+                                                router.replace(`/leads?${params.toString()}`)
+                                                filterStorage.setLeads({
+                                                    filter: viewMode,
+                                                    status,
+                                                    source,
+                                                    view: displayView,
+                                                    assigned_to: v !== "all" ? v : undefined,
+                                                    campaign: campaignFilter.length > 0 ? campaignFilter.join(",") : undefined,
+                                                })
+                                            }}
+                                        >
+                                            <SelectTrigger className="w-full h-9">
+                                                <SelectValue placeholder="Team member" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="all">All team members</SelectItem>
+                                                {teamMembers.map((u) => (
+                                                    <SelectItem key={u.id} value={u.id}>
+                                                        {u.first_name} {u.last_name}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </FilterField>
+                                )}
+                                {(isDealershipLevel || isSuperAdmin) && bdcAgents.length > 0 && (
+                                    <FilterField label="BDC Agent">
+                                        <Select
+                                            value={bdcAgentFilter}
+                                            onValueChange={(v) => {
+                                                setBdcAgentFilter(v)
+                                                setPage(1)
+                                            }}
+                                        >
+                                            <SelectTrigger className="w-full h-9">
+                                                <SelectValue placeholder="BDC Agent" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="all">All BDC agents</SelectItem>
+                                                {bdcAgents.map((a) => (
+                                                    <SelectItem key={a.id} value={a.id}>
+                                                        {a.first_name} {a.last_name}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </FilterField>
+                                )}
+                                {activeCampaignOptions.length > 0 && (
+                                    <FilterField label="Campaign">
+                                        <Popover>
+                                            <PopoverTrigger asChild>
+                                                <Button
+                                                    variant="outline"
+                                                    className="w-full h-9 justify-between px-3 font-normal"
+                                                >
+                                                    <span className="truncate text-left">
+                                                        {campaignFilter.length === 0
+                                                            ? "All campaigns"
+                                                            : campaignFilter.length === 1
+                                                              ? activeCampaignOptions.find((c) => c.id === campaignFilter[0])?.display_name || "1 campaign"
+                                                              : `${campaignFilter.length} campaigns`}
+                                                    </span>
+                                                    <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
+                                                </Button>
+                                            </PopoverTrigger>
+                                            <PopoverContent className="w-[280px] p-1" align="start">
+                                                <div className="max-h-72 overflow-y-auto">
+                                                    <div
+                                                        role="button"
+                                                        tabIndex={0}
+                                                        className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+                                                        onClick={() => applyCampaignFilter([])}
+                                                        onKeyDown={(event) => {
+                                                            if (event.key === "Enter" || event.key === " ") {
+                                                                event.preventDefault()
+                                                                applyCampaignFilter([])
+                                                            }
+                                                        }}
+                                                    >
+                                                        <Checkbox checked={campaignFilter.length === 0} tabIndex={-1} className="pointer-events-none" />
+                                                        All campaigns
+                                                    </div>
+                                                    {activeCampaignOptions.map((c) => {
+                                                        const checked = campaignFilter.includes(c.id)
+                                                        const toggle = () => {
+                                                            const next = checked
+                                                                ? campaignFilter.filter((id) => id !== c.id)
+                                                                : [...campaignFilter, c.id]
+                                                            applyCampaignFilter(next)
+                                                        }
+                                                        return (
+                                                            <div
+                                                                key={c.id}
+                                                                role="button"
+                                                                tabIndex={0}
+                                                                title={c.match_pattern}
+                                                                className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+                                                                onClick={toggle}
+                                                                onKeyDown={(event) => {
+                                                                    if (event.key === "Enter" || event.key === " ") {
+                                                                        event.preventDefault()
+                                                                        toggle()
+                                                                    }
+                                                                }}
+                                                            >
+                                                                <Checkbox checked={checked} tabIndex={-1} className="pointer-events-none" />
+                                                                <span className="truncate">{c.display_name}</span>
+                                                            </div>
+                                                        )
+                                                    })}
+                                                </div>
+                                            </PopoverContent>
+                                        </Popover>
+                                    </FilterField>
+                                )}
+                            </div>
+                            <FilterField label="Stips & Type">
+                                <div className="flex flex-wrap items-center gap-4 rounded-md border px-3 py-2">
+                                    <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                                        <Checkbox
+                                            checked={hasSsnStip}
+                                            onCheckedChange={(v) => {
+                                                setHasSsnStip(v === true)
+                                                setPage(1)
+                                            }}
+                                        />
+                                        SSN
+                                    </label>
+                                    <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                                        <Checkbox
+                                            checked={hasDlStip}
+                                            onCheckedChange={(v) => {
+                                                setHasDlStip(v === true)
+                                                setPage(1)
+                                            }}
+                                        />
+                                        DL
+                                    </label>
+                                    <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                                        <Checkbox
+                                            checked={isBusiness}
+                                            onCheckedChange={(v) => {
+                                                setIsBusiness(v === true)
+                                                setPage(1)
+                                            }}
+                                        />
+                                        Business
+                                    </label>
+                                </div>
+                            </FilterField>
+                            <FilterField label="Down Payment ($)">
+                                <div className="flex items-center gap-2">
+                                    <Input
+                                        className="h-9 text-xs"
+                                        placeholder="Min $"
+                                        value={downMin}
+                                        onChange={(e) => {
+                                            setDownMin(e.target.value.replace(/[^\d.]/g, ""))
+                                            setPage(1)
+                                        }}
+                                    />
+                                    <span className="text-xs text-muted-foreground">–</span>
+                                    <Input
+                                        className="h-9 text-xs"
+                                        placeholder="Max $"
+                                        value={downMax}
+                                        onChange={(e) => {
+                                            setDownMax(e.target.value.replace(/[^\d.]/g, ""))
+                                            setPage(1)
+                                        }}
+                                    />
+                                </div>
+                            </FilterField>
+                        </AdvancedFiltersMenu>
 
                         <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
                             {displayView === "list" ? (
@@ -2234,7 +2285,7 @@ export default function LeadsPage() {
                                                         handleAssignToDealershipClick(lead)
                                                     }}>
                                                         <Building2 className="mr-2 h-4 w-4" />
-                                                        Assign to Dealership
+                                                        Move to Carvaminos
                                                     </DropdownMenuItem>
                                                 )}
                                                 {(canAssignToSalesperson || isSuperAdmin || isDealershipLevel || isBdc) && lead.dealership_id && (

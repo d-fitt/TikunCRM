@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.core.permissions import UserRole
+from app.core.websocket_manager import ws_manager
 from app.db.database import get_db
 from app.models.time_entry import TimeEntry
 from app.models.user import User
@@ -53,6 +54,16 @@ def _http_for_value_error(exc: ValueError) -> HTTPException:
     return HTTPException(status_code=code, detail=detail)
 
 
+async def _emit_clock_change(user_id: UUID, *, is_clocked_in: bool) -> None:
+    """BDC agents can span stores, so the roster update goes to every connected user."""
+    await ws_manager.broadcast_all(
+        {
+            "type": "time_clock:updated",
+            "payload": {"user_id": str(user_id), "is_clocked_in": is_clocked_in},
+        }
+    )
+
+
 async def _load_bdc_user(db: AsyncSession, user_id: UUID) -> User:
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -82,6 +93,7 @@ async def clock_in(
         entry = await svc.clock_in(db, current_user, body.note)
     except ValueError as exc:
         raise _http_for_value_error(exc) from exc
+    await _emit_clock_change(current_user.id, is_clocked_in=True)
     return svc.to_entry_response(entry)
 
 
@@ -96,6 +108,7 @@ async def clock_out(
         entry = await svc.clock_out(db, current_user, body.note)
     except ValueError as exc:
         raise _http_for_value_error(exc) from exc
+    await _emit_clock_change(current_user.id, is_clocked_in=False)
     return svc.to_entry_response(entry)
 
 

@@ -19,6 +19,7 @@ import {
     PopoverContent,
     PopoverTrigger,
 } from "@/components/ui/popover"
+import { AdvancedFiltersMenu, FilterField } from "@/components/ui/filter-bar"
 import {
     Table,
     TableBody,
@@ -51,7 +52,6 @@ import {
     type SoldCarsFilters,
 } from "@/services/reports-service"
 import { TeamService, type UserBrief } from "@/services/team-service"
-import { DealershipService, type Dealership } from "@/services/dealership-service"
 import { PartnerStoreService, type PartnerStore, type LeadPartnerDestinations } from "@/services/partner-store-service"
 import { AssignPartnerStore } from "@/components/leads/assign-partner-store"
 import { cn } from "@/lib/utils"
@@ -148,10 +148,9 @@ export default function SoldCarsPage() {
     const [customDateTo, setCustomDateTo] = React.useState<Date | undefined>(undefined)
     const [selectedSalesperson, setSelectedSalesperson] = React.useState<string>("all")
     const [selectedBdcAgent, setSelectedBdcAgent] = React.useState<string>("all")
-    const [selectedDealershipId, setSelectedDealershipId] = React.useState<string>("")
+    const selectedDealershipId = orgDealershipId || user?.dealership_id || ""
     
     // Dropdown data
-    const [dealerships, setDealerships] = React.useState<Dealership[]>([])
     const [salespersons, setSalespersons] = React.useState<UserBrief[]>([])
     const [bdcAgents, setBdcAgents] = React.useState<UserBrief[]>([])
     const [partnerStores, setPartnerStores] = React.useState<PartnerStore[]>([])
@@ -209,29 +208,10 @@ export default function SoldCarsPage() {
         async function loadDropdowns() {
             setLoadingDropdowns(true)
             try {
-                if (isSuperAdmin) {
-                    const ds = await DealershipService.listDealerships({ is_active: true })
-                    setDealerships(ds)
-                    if (ds.length > 0 && !selectedDealershipId) {
-                        setSelectedDealershipId(ds[0].id)
-                    }
-                } else if (isBdc && user?.id) {
-                    const access = await TeamService.getUserDealershipAccess(user.id)
-                    const list = access.dealerships as Dealership[]
-                    setDealerships(list)
-                    const fallback = list[0]?.id || orgDealershipId || ""
-                    if (fallback) {
-                        setSelectedDealershipId((prev) => prev || fallback)
-                    }
-                }
-                
-                const dealershipId = (isSuperAdmin || isBdc)
-                    ? (selectedDealershipId || orgDealershipId)
-                    : user?.dealership_id
-                if (dealershipId) {
+                if (selectedDealershipId) {
                     const [sp, bdc] = await Promise.all([
-                        TeamService.getSalespersons(dealershipId),
-                        TeamService.listBdcAgents(dealershipId),
+                        TeamService.getSalespersons(selectedDealershipId),
+                        TeamService.listBdcAgents(),
                     ])
                     setSalespersons(sp)
                     setBdcAgents(bdc)
@@ -243,7 +223,7 @@ export default function SoldCarsPage() {
             }
         }
         loadDropdowns()
-    }, [isSuperAdmin, isBdc, user?.id, user?.dealership_id, selectedDealershipId, orgDealershipId])
+    }, [selectedDealershipId])
 
     React.useEffect(() => {
         if (!canConnectToPartner) return
@@ -254,11 +234,7 @@ export default function SoldCarsPage() {
     
     // Fetch data
     const fetchData = React.useCallback(async () => {
-        const dealershipId = isSuperAdmin
-            ? selectedDealershipId
-            : isBdc
-                ? (selectedDealershipId || orgDealershipId)
-                : (user?.dealership_id || orgDealershipId)
+        const dealershipId = selectedDealershipId
         if (isSuperAdmin && !dealershipId) {
             setIsLoading(false)
             return
@@ -295,7 +271,7 @@ export default function SoldCarsPage() {
         } finally {
             setIsLoading(false)
         }
-    }, [isSuperAdmin, isBdc, selectedDealershipId, orgDealershipId, user?.dealership_id, getDateRange, selectedSalesperson, selectedBdcAgent])
+    }, [isSuperAdmin, isBdc, selectedDealershipId, getDateRange, selectedSalesperson, selectedBdcAgent])
     
     React.useEffect(() => {
         if (!canView) {
@@ -536,62 +512,53 @@ export default function SoldCarsPage() {
                             </>
                         )}
                         
-                        {/* Dealership Filter (super admin / BDC) */}
-                        {(isSuperAdmin || isBdc) && dealerships.length > 0 && (
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">Dealership</label>
-                                <Select value={selectedDealershipId} onValueChange={setSelectedDealershipId}>
-                                    <SelectTrigger className="w-[200px]">
-                                        <SelectValue placeholder="Select dealership" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {dealerships.map((d) => (
-                                            <SelectItem key={d.id} value={d.id}>
-                                                {d.name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
+                        <AdvancedFiltersMenu
+                            align="start"
+                            activeCount={
+                                (selectedSalesperson !== "all" ? 1 : 0) +
+                                (selectedBdcAgent !== "all" ? 1 : 0)
+                            }
+                            onReset={() => {
+                                setSelectedSalesperson("all")
+                                setSelectedBdcAgent("all")
+                            }}
+                        >
+                            <div className="grid grid-cols-1 gap-3">
+                                <FilterField label="Assigned to">
+                                    <Select value={selectedSalesperson} onValueChange={setSelectedSalesperson}>
+                                        <SelectTrigger className="w-full h-9">
+                                            <SelectValue placeholder="Everyone" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">Everyone</SelectItem>
+                                            {salespersons.map((sp) => (
+                                                <SelectItem key={sp.id} value={sp.id}>
+                                                    {sp.first_name} {sp.last_name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </FilterField>
+
+                                {bdcAgents.length > 0 && (
+                                    <FilterField label="BDC Agent">
+                                        <Select value={selectedBdcAgent} onValueChange={setSelectedBdcAgent}>
+                                            <SelectTrigger className="w-full h-9">
+                                                <SelectValue placeholder="All BDC agents" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="all">All BDC Agents</SelectItem>
+                                                {bdcAgents.map((a) => (
+                                                    <SelectItem key={a.id} value={a.id}>
+                                                        {a.first_name} {a.last_name}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </FilterField>
+                                )}
                             </div>
-                        )}
-                        
-                        {/* Salesperson Filter */}
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">Salesperson</label>
-                            <Select value={selectedSalesperson} onValueChange={setSelectedSalesperson}>
-                                <SelectTrigger className="w-[200px]">
-                                    <SelectValue placeholder="All salespeople" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All Salespeople</SelectItem>
-                                    {salespersons.map((sp) => (
-                                        <SelectItem key={sp.id} value={sp.id}>
-                                            {sp.first_name} {sp.last_name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        
-                        {/* BDC Agent Filter */}
-                        {bdcAgents.length > 0 && (
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">BDC Agent</label>
-                                <Select value={selectedBdcAgent} onValueChange={setSelectedBdcAgent}>
-                                    <SelectTrigger className="w-[200px]">
-                                        <SelectValue placeholder="All BDC agents" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All BDC Agents</SelectItem>
-                                        {bdcAgents.map((a) => (
-                                            <SelectItem key={a.id} value={a.id}>
-                                                {a.first_name} {a.last_name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                        )}
+                        </AdvancedFiltersMenu>
                         
                         {/* Actions */}
                         <div className="flex items-center gap-2 ml-auto">

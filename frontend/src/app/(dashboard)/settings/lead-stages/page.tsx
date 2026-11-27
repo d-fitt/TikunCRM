@@ -158,7 +158,7 @@ function LeadStagesSettingsInner() {
                     <h1 className="text-2xl font-bold tracking-tight">Pipeline Stages</h1>
                     <p className="text-muted-foreground">Configure the stages leads move through in your pipeline.</p>
                     {!isSuperAdmin && contextDealershipId && (
-                        <p className="text-xs text-muted-foreground mt-1">Scoped to your dealership.</p>
+                        <p className="text-xs text-muted-foreground mt-1">Shared across Carvaminos.</p>
                     )}
                     {isSuperAdmin && !dealershipIdFromQuery && (
                         <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">

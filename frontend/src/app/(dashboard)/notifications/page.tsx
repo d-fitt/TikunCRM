@@ -21,6 +21,7 @@ import {
     X,
     Layers,
     MessageCircle,
+    MessageSquare,
     PhoneMissed,
     Voicemail,
 } from "lucide-react"
@@ -84,6 +85,7 @@ const typeIcons: Record<NotificationType, React.ComponentType<{ className?: stri
     lead_multi_campaign: Layers,
     whatsapp_new_lead: MessageCircle,
     whatsapp_received: MessageCircle,
+    sms_received: MessageSquare,
     missed_call: PhoneMissed,
     voicemail: Voicemail,
 }
@@ -106,6 +108,7 @@ const typeColors: Record<NotificationType, string> = {
     lead_multi_campaign: "text-yellow-600 bg-yellow-100 dark:bg-yellow-900/30",
     whatsapp_new_lead: "text-emerald-500 bg-emerald-100 dark:bg-emerald-900/30",
     whatsapp_received: "text-emerald-500 bg-emerald-100 dark:bg-emerald-900/30",
+    sms_received: "text-sky-500 bg-sky-100 dark:bg-sky-900/30",
     missed_call: "text-red-500 bg-red-100 dark:bg-red-900/30",
     voicemail: "text-orange-500 bg-orange-100 dark:bg-orange-900/30",
 }
@@ -128,6 +131,7 @@ const typeLabels: Record<NotificationType, string> = {
     lead_multi_campaign: "Duplicate lead",
     whatsapp_new_lead: "WhatsApp Lead",
     whatsapp_received: "WhatsApp Message",
+    sms_received: "Text Message",
     missed_call: "Missed Call",
     voicemail: "Voicemail",
 }

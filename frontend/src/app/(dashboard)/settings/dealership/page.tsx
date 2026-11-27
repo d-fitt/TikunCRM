@@ -8,23 +8,23 @@ import {
     Loader2,
     CheckCircle2,
     Globe,
+    Phone,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { TimezonePicker } from "@/components/ui/timezone-picker"
+import { TwilioConfigModal } from "@/components/settings/twilio-config-modal"
 import { DealershipService, Dealership } from "@/services/dealership-service"
 import { useRole } from "@/hooks/use-role"
-import { useAuthStore } from "@/stores/auth-store"
 import { useOrgDealershipId } from "@/hooks/use-org-dealership"
 import { clearDealershipTimezoneCache } from "@/hooks/use-dealership-timezone"
 
-export default function DealershipSettingsPage() {
+export default function CompanySettingsPage() {
     const router = useRouter()
-    const { user } = useAuthStore()
     const orgDealershipId = useOrgDealershipId()
-    const { isDealershipAdmin, isDealershipOwner, isSuperAdmin } = useRole()
+    const { isDealershipAdmin, isSuperAdmin } = useRole()
     
     const [isLoading, setIsLoading] = React.useState(true)
     const [isSaving, setIsSaving] = React.useState(false)
@@ -32,6 +32,7 @@ export default function DealershipSettingsPage() {
     const [timezone, setTimezone] = React.useState<string>("UTC")
     const [error, setError] = React.useState<string | null>(null)
     const [successMessage, setSuccessMessage] = React.useState<string | null>(null)
+    const [twilioOpen, setTwilioOpen] = React.useState(false)
     
     // Load dealership settings
     React.useEffect(() => {
@@ -48,8 +49,8 @@ export default function DealershipSettingsPage() {
                 setDealership(data)
                 setTimezone(data.timezone || "UTC")
             } catch (err: any) {
-                console.error("Failed to load dealership:", err)
-                setError(err?.response?.data?.detail || "Failed to load dealership settings")
+                console.error("Failed to load company settings:", err)
+                setError(err?.response?.data?.detail || "Failed to load company settings")
             } finally {
                 setIsLoading(false)
             }
@@ -72,7 +73,7 @@ export default function DealershipSettingsPage() {
             setDealership(updated)
             // Clear timezone cache so hook will refetch the new timezone
             clearDealershipTimezoneCache(dealership.id)
-            setSuccessMessage("Dealership settings saved successfully!")
+            setSuccessMessage("Company settings saved successfully!")
         } catch (err: any) {
             setError(err?.response?.data?.detail || "Failed to save settings")
         } finally {
@@ -80,7 +81,7 @@ export default function DealershipSettingsPage() {
         }
     }
     
-    if (!isDealershipAdmin && !isDealershipOwner && !isSuperAdmin) {
+    if (!isDealershipAdmin && !isSuperAdmin) {
         return (
             <div className="flex items-center justify-center min-h-[400px]">
                 <div className="text-center">
@@ -102,7 +103,7 @@ export default function DealershipSettingsPage() {
         return (
             <div className="flex items-center justify-center min-h-[400px]">
                 <div className="text-center">
-                    <p className="text-muted-foreground">Dealership not found.</p>
+                    <p className="text-muted-foreground">Company settings not found.</p>
                 </div>
             </div>
         )
@@ -120,9 +121,9 @@ export default function DealershipSettingsPage() {
                     <ArrowLeft className="h-5 w-5" />
                 </Button>
                 <div className="flex-1">
-                    <h1 className="text-2xl font-bold">Dealership Settings</h1>
+                    <h1 className="text-2xl font-bold">Company Settings</h1>
                     <p className="text-muted-foreground">
-                        Configure timezone and other dealership-wide settings
+                        Timezone and phone/messaging setup for Carvaminos
                     </p>
                 </div>
             </div>
@@ -154,29 +155,24 @@ export default function DealershipSettingsPage() {
                         Timezone Configuration
                     </CardTitle>
                     <CardDescription>
-                        Set the timezone for your dealership. Appointment and follow-up times use this setting
-                        for every authorized user (owners, sales, BDC, and super admins viewing this store).
+                        Appointment and follow-up times use this timezone for everyone on the team.
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                     <div className="space-y-2">
-                        <Label htmlFor="timezone">Dealership Timezone</Label>
+                        <Label htmlFor="timezone">Company Timezone</Label>
                         <TimezonePicker
                             value={timezone}
                             onChange={setTimezone}
                             placeholder="Search and select timezone..."
                         />
                         <p className="text-xs text-muted-foreground">
-                            This timezone is the single source of truth for this store&apos;s appointment times
+                            This timezone is the single source of truth for appointment times
                             across the CRM, guest QR, and share previews.
                         </p>
                     </div>
                     
-                    <div className="flex items-center justify-between pt-4 border-t">
-                        <div className="text-sm text-muted-foreground">
-                            <p className="font-medium">Current Dealership:</p>
-                            <p className="mt-1">{dealership.name}</p>
-                        </div>
+                    <div className="flex justify-end pt-4 border-t">
                         <Button onClick={handleSave} disabled={isSaving}>
                             {isSaving ? (
                                 <>
@@ -191,6 +187,23 @@ export default function DealershipSettingsPage() {
                 </CardContent>
             </Card>
             
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <Phone className="h-5 w-5" />
+                        Phone, SMS &amp; WhatsApp (Twilio)
+                    </CardTitle>
+                    <CardDescription>
+                        Twilio account, sending numbers, and softphone settings used for calls, texts and WhatsApp.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <Button variant="outline" onClick={() => setTwilioOpen(true)}>
+                        Configure Twilio
+                    </Button>
+                </CardContent>
+            </Card>
+
             {/* Info Card */}
             <Card className="border-blue-200 bg-blue-50/50">
                 <CardContent className="pt-6">
@@ -199,15 +212,22 @@ export default function DealershipSettingsPage() {
                         <div className="text-sm text-blue-900">
                             <p className="font-medium mb-2">How timezone affects your CRM:</p>
                             <ul className="list-disc list-inside space-y-1 text-blue-800">
-                                <li>All notification timestamps will show in your dealership timezone</li>
+                                <li>All notification timestamps will show in the company timezone</li>
                                 <li>Lead creation dates and activity logs use this timezone</li>
                                 <li>Follow-up reminders and schedules are based on this timezone</li>
-                                <li>All salespersons in your dealership will see times in this timezone</li>
+                                <li>Everyone on the team sees times in this timezone</li>
                             </ul>
                         </div>
                     </div>
                 </CardContent>
             </Card>
+
+            <TwilioConfigModal
+                open={twilioOpen}
+                onOpenChange={setTwilioOpen}
+                dealershipId={dealership.id}
+                dealershipName={dealership.name}
+            />
         </div>
     )
 }

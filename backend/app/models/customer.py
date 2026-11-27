@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, event
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -65,6 +65,16 @@ class Customer(Base):
         Numeric(12, 2), nullable=False, default=0, server_default="0"
     )
 
+    # SMS consent (A2P 10DLC). Inquiry and promotional consent are recorded separately;
+    # sms_opted_out wins over both until the customer texts START again.
+    sms_inquiry_consent: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    sms_promo_consent: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    sms_consent_source: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    sms_consent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    sms_promo_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    sms_opted_out: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    sms_opted_out_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Metadata
     meta_data: Mapped[dict] = mapped_column(JSONB, name="meta_data", default=dict, nullable=False)
 
@@ -92,3 +102,14 @@ class Customer(Base):
 
     def __repr__(self) -> str:
         return f"<Customer {self.full_name} ({self.phone or self.email})>"
+
+
+@event.listens_for(Customer, "before_insert")
+@event.listens_for(Customer, "before_update")
+def _default_sms_consent(mapper, connection, target: Customer) -> None:
+    """Every lead source collects text + offers consent, so customers with a phone start opted in."""
+    if target.phone and target.sms_inquiry_consent is None and target.sms_promo_consent is None:
+        target.sms_inquiry_consent = True
+        target.sms_promo_consent = True
+        target.sms_consent_source = target.sms_consent_source or "lead_intake"
+        target.sms_consent_at = utc_now()

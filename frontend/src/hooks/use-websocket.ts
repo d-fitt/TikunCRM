@@ -5,8 +5,23 @@ import { useEffect, useCallback, useState } from "react";
 import { wsService } from "@/lib/websocket";
 import { useAuthStore } from "@/stores/auth-store";
 
+function userIdFromToken(token: string | null): string | null {
+    if (!token) return null;
+    try {
+        const part = token.split(".")[1];
+        if (!part) return null;
+        const json = atob(part.replace(/-/g, "+").replace(/_/g, "/"));
+        const sub = JSON.parse(json)?.sub;
+        return typeof sub === "string" && sub ? sub : null;
+    } catch {
+        return null;
+    }
+}
+
 /**
- * Hook to connect to WebSocket when user is authenticated
+ * Hook to connect to WebSocket when user is authenticated.
+ * REST calls read localStorage `auth_token` directly, so the socket must too.
+ * Waiting only on the zustand copy skips the connection when that copy is empty.
  */
 export function useWebSocketConnection() {
     const user = useAuthStore((state) => state.user);
@@ -14,15 +29,17 @@ export function useWebSocketConnection() {
     const [isConnected, setIsConnected] = useState(false);
 
     useEffect(() => {
-        if (!user?.id || !token) {
+        const authToken = token || localStorage.getItem("auth_token");
+        const userId = user?.id || userIdFromToken(authToken);
+        if (!userId || !authToken) {
+            console.warn("[WS] not started", { hasUserId: Boolean(userId), hasToken: Boolean(authToken) });
             wsService.disconnect();
             setIsConnected(false);
             return;
         }
 
-        // Reconnect on login/token refresh so BDC multi-dealership claims apply
-        wsService.disconnect();
-        wsService.connect(user.id, token);
+        // Same token keeps the open socket. A new token replaces it.
+        wsService.connect(userId, authToken);
 
         // Listen for connection events
         const unsubOpen = wsService.on("connection:open", () => {
@@ -37,7 +54,7 @@ export function useWebSocketConnection() {
             unsubOpen();
             unsubClose();
         };
-    }, [user?.id, user?.role, token]);
+    }, [user?.id, token]);
 
     return { isConnected };
 }
@@ -57,6 +74,13 @@ export function useWebSocketEvent<T = any>(
         const unsubscribe = wsService.on(event, memoizedCallback);
         return unsubscribe;
     }, [event, memoizedCallback]);
+}
+
+/**
+ * Run a refetch after the socket reconnects, to pick up events missed while offline.
+ */
+export function useWebSocketResync(onResync: () => void, deps: unknown[] = []) {
+    useWebSocketEvent("connection:resync", onResync, deps);
 }
 
 /**
@@ -155,6 +179,7 @@ export function useWebSocket() {
             "sms:received",
             "sms:sent",
             "sms:status",
+            "sms:read",
             "whatsapp:received",
             "whatsapp:sent",
             "whatsapp:status",

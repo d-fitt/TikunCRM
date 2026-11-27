@@ -224,16 +224,16 @@ export default function ProfileSettingsPage() {
                             <ul className="list-disc list-inside space-y-1 text-blue-600">
                                 <li>This email will be used when you send emails to leads</li>
                                 <li>Replies from leads will come to this address</li>
-                                <li>Must be on your dealership&apos;s email domain</li>
+                                <li>Must be on the company email domain</li>
                             </ul>
                         </div>
                         
                         <div className="space-y-2">
-                            <Label htmlFor="dealership_email">Your Dealership Email</Label>
+                            <Label htmlFor="dealership_email">Your Company Email</Label>
                             <Input
                                 id="dealership_email"
                                 type="email"
-                                placeholder="yourname@dealership.com"
+                                placeholder="yourname@carvaminos.com"
                                 value={formData.dealership_email}
                                 onChange={(e) => handleInputChange("dealership_email", e.target.value)}
                             />

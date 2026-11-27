@@ -272,6 +272,22 @@ async def _write_progress(db: AsyncSession, done: int, label: str) -> None:
     row.progress_total = 100
     row.progress_label = label[:160]
     await db.commit()
+    await _emit_queue_progress(row.status, row.progress_done, row.progress_label)
+
+
+async def _emit_queue_progress(status: str, done: int, label: Optional[str]) -> None:
+    """The Call next list is shared across stores, so every connected agent gets the update."""
+    try:
+        from app.core.websocket_manager import ws_manager
+
+        await ws_manager.broadcast_all(
+            {
+                "type": "call_queue:progress",
+                "payload": {"status": status, "progress_done": done, "progress_label": label},
+            }
+        )
+    except Exception:
+        logger.exception("Could not emit Call next progress")
 
 
 def _running_fresh(snap: BdcAttentionSnapshot, now: datetime) -> bool:
@@ -337,8 +353,8 @@ async def drop_lead_from_snapshot(db: AsyncSession, lead_id: UUID) -> None:
 
 async def claim_lead_for_call(db: AsyncSession, user: User, lead_id: UUID) -> bool:
     """
-    Take this lead off the shared list when a call starts.
-    The same agent can start it twice. A second agent cannot.
+    Take this lead off the shared Call next list when a call starts.
+    Another person can still dial the same customer.
     """
     snap = (
         await db.execute(
@@ -356,7 +372,7 @@ async def claim_lead_for_call(db: AsyncSession, user: User, lead_id: UUID) -> bo
     key = str(lead_id)
     existing = claimed.get(key)
     if existing and existing.get("user_id") != str(user.id):
-        return False
+        return True
     name = f"{user.first_name or ''} {user.last_name or ''}".strip() or user.email
     claimed[key] = {"user_id": str(user.id), "name": name, "at": utc_now().isoformat()}
     snap.claimed = claimed
@@ -411,12 +427,14 @@ async def run_attention_for_user(
     snap.progress_label = "Counting leads"
     snap.model = settings.bdc_attention_model
     await db.commit()
+    await _emit_queue_progress("running", 0, "Counting leads")
     snap = await _load_snapshot(db)
 
     if not settings.ai_assistant_enabled or not settings.openai_api_key:
         snap.status = "failed"
         snap.error = "Tikun AI is not configured."
         await db.commit()
+        await _emit_queue_progress("failed", 0, None)
         return snap
 
     try:
@@ -571,4 +589,5 @@ async def run_attention_for_user(
         snap.status = "failed"
         snap.error = str(exc)[:500]
         await db.commit()
+        await _emit_queue_progress("failed", 0, None)
         return snap

@@ -93,7 +93,7 @@ class SMSLog(Base):
     
     # Message details
     direction: Mapped[MessageDirection] = mapped_column(
-        SQLEnum(MessageDirection),
+        SQLEnum(MessageDirection, values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
         index=True
     )
@@ -102,6 +102,9 @@ class SMSLog(Base):
     
     # Message content
     body: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # conversation | auto_first | promotional | compliance (see sms_consent_service)
+    category: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     
     # MMS attachments (list of URLs)
     media_urls: Mapped[dict] = mapped_column(
@@ -112,7 +115,7 @@ class SMSLog(Base):
     
     # Delivery status
     status: Mapped[SMSStatus] = mapped_column(
-        SQLEnum(SMSStatus),
+        SQLEnum(SMSStatus, values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
         default=SMSStatus.QUEUED,
         index=True

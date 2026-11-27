@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
+import { useRouter, useSearchParams } from "next/navigation"
 import {
     startOfDay,
     endOfDay,
@@ -12,6 +13,8 @@ import {
     format,
 } from "date-fns"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { LeadsAnalysisTab } from "@/components/analytics/leads-analysis-tab"
 import {
     Table,
     TableBody,
@@ -29,6 +32,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
+import { AdvancedFiltersMenu, FilterField } from "@/components/ui/filter-bar"
 import {
     BarChart3,
     Users,
@@ -59,7 +63,6 @@ import {
     type ActivitiesOverTimeResponse,
 } from "@/services/reports-service"
 import { BarChart, DonutChart, AreaChart } from "@tremor/react"
-import { DealershipService } from "@/services/dealership-service"
 import { PartnerStoreService, type PartnerStore } from "@/services/partner-store-service"
 import { TeamService } from "@/services/team-service"
 import { LeadStageService, type LeadStage } from "@/services/lead-stage-service"
@@ -272,7 +275,7 @@ function downloadAnalysisCsv(analysis: DealershipAnalysisResponse) {
 
 function downloadAnalysisPdf(
     analysis: DealershipAnalysisResponse,
-    options: { dateRangeLabel: string; dealershipName: string; salespersonName: string }
+    options: { dateRangeLabel: string; salespersonName: string }
 ) {
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" })
     const pageW = doc.internal.pageSize.getWidth()
@@ -281,16 +284,14 @@ function downloadAnalysisPdf(
 
     doc.setFontSize(18)
     doc.setFont("helvetica", "bold")
-    doc.text("Dealership Analytics Report", margin, y)
+    doc.text("Carvaminos Analytics Report", margin, y)
     y += 10
 
     doc.setFontSize(10)
     doc.setFont("helvetica", "normal")
     doc.text(`Date range: ${options.dateRangeLabel}`, margin, y)
     y += 6
-    doc.text(`Dealership: ${options.dealershipName}`, margin, y)
-    y += 6
-    doc.text(`Salesperson: ${options.salespersonName}`, margin, y)
+    doc.text(`Assigned to: ${options.salespersonName}`, margin, y)
     y += 12
 
     autoTable(doc, {
@@ -395,12 +396,25 @@ function downloadAnalysisPdf(
     doc.save(`analytics-report-${new Date().toISOString().slice(0, 10)}.pdf`)
 }
 
-export default function AnalyticsPage() {
+function AnalyticsPageContent() {
+    const router = useRouter()
+    const searchParams = useSearchParams()
     const { isDealershipAdmin, isDealershipOwner, isSuperAdmin, isBdc } = useRole()
     const { user } = useAuthStore()
     const orgDealershipId = useOrgDealershipId()
     const canView = isDealershipAdmin || isDealershipOwner || isSuperAdmin || isBdc
 
+    const urlTab = searchParams.get("tab") === "leads" ? "leads" : "overview"
+    const [activeTab, setActiveTab] = React.useState<"overview" | "leads">(urlTab)
+
+    React.useEffect(() => {
+        setActiveTab(urlTab)
+    }, [urlTab])
+
+    const handleTabChange = (next: "overview" | "leads") => {
+        setActiveTab(next)
+        router.replace(next === "leads" ? "/analytics?tab=leads" : "/analytics", { scroll: false })
+    }
     const [analysis, setAnalysis] = React.useState<DealershipAnalysisResponse | null>(null)
     const [leadsOverTime, setLeadsOverTime] = React.useState<LeadsOverTimeResponse | null>(null)
     const [leadsByStage, setLeadsByStage] = React.useState<LeadsByStageResponse | null>(null)
@@ -423,7 +437,7 @@ export default function AnalyticsPage() {
             setSingleDate(preset.singleDate)
         }
     }
-    const [dealershipId, setDealershipId] = React.useState<string | null>(null)
+    const dealershipId = orgDealershipId || user?.dealership_id || null
     const [assignedTo, setAssignedTo] = React.useState<string | null>(null)
     const [bdcAgentId, setBdcAgentId] = React.useState<string | null>(null)
     const [source, setSource] = React.useState<string | null>(null)
@@ -431,37 +445,10 @@ export default function AnalyticsPage() {
     const [partnerStoreId, setPartnerStoreId] = React.useState<string | null>(null)
     const [partnerStores, setPartnerStores] = React.useState<PartnerStore[]>([])
 
-    const [dealerships, setDealerships] = React.useState<Array<{ id: string; name: string }>>([])
     const [salespersons, setSalespersons] = React.useState<Array<{ id: string; first_name: string; last_name: string }>>([])
     const [bdcAgents, setBdcAgents] = React.useState<Array<{ id: string; first_name: string; last_name: string }>>([])
     const [stages, setStages] = React.useState<LeadStage[]>([])
 
-    React.useEffect(() => {
-        if (!canView) return
-        if (isSuperAdmin) {
-            DealershipService.getDealershipsForSelect().then(setDealerships).catch(() => setDealerships([]))
-        } else if (isBdc && user?.id) {
-            TeamService.getUserDealershipAccess(user.id)
-                .then((res) => {
-                    const list = res.dealerships
-                    setDealerships(list)
-                    const fallback = list[0]?.id || orgDealershipId
-                    if (fallback) setDealershipId((prev) => prev ?? fallback)
-                })
-                .catch(() => {
-                    setDealerships(orgDealershipId ? [{ id: orgDealershipId, name: "Organization" }] : [])
-                    if (orgDealershipId) setDealershipId((prev) => prev ?? orgDealershipId)
-                })
-        }
-    }, [canView, isSuperAdmin, isBdc, user?.id, orgDealershipId])
-    
-    // Auto-select first dealership for BDC users
-    React.useEffect(() => {
-        if (isBdc && dealerships.length > 0 && !dealershipId) {
-            setDealershipId(dealerships[0].id)
-        }
-    }, [isBdc, dealerships, dealershipId])
-    
     React.useEffect(() => {
         if (!canView) return
         const did = dealershipId || orgDealershipId || (user?.dealership_id ?? undefined)
@@ -470,9 +457,8 @@ export default function AnalyticsPage() {
     
     React.useEffect(() => {
         if (!canView) return
-        const did = dealershipId || orgDealershipId || (user?.dealership_id ?? undefined)
-        TeamService.listBdcAgents(did).then(setBdcAgents).catch(() => setBdcAgents([]))
-    }, [canView, dealershipId, orgDealershipId, user?.dealership_id])
+        TeamService.listBdcAgents().then(setBdcAgents).catch(() => setBdcAgents([]))
+    }, [canView])
     
     React.useEffect(() => {
         LeadStageService.list().then(setStages).catch(() => setStages([]))
@@ -487,7 +473,7 @@ export default function AnalyticsPage() {
 
     const fetchAll = React.useCallback(async () => {
         if (!canView) return
-        const effectiveDealershipId = dealershipId || (isBdc ? orgDealershipId : null)
+        const effectiveDealershipId = dealershipId || orgDealershipId || null
         setLoading(true)
         setError(null)
         const filters = buildFilters(dateFrom, dateTo, singleDate, dateMode, effectiveDealershipId, assignedTo, bdcAgentId, source, stageId, partnerStoreId)
@@ -527,7 +513,7 @@ export default function AnalyticsPage() {
                     <CardContent className="flex flex-col items-center justify-center py-12">
                         <BarChart3 className="h-16 w-16 text-muted-foreground/30 mb-4" />
                         <p className="text-muted-foreground text-center max-w-md">
-                            You don&apos;t have permission to view dealership analytics. This page is for administrators and owners.
+                            You don&apos;t have permission to view analytics. This page is for managers and BDC agents.
                         </p>
                     </CardContent>
                 </Card>
@@ -537,13 +523,32 @@ export default function AnalyticsPage() {
 
     return (
         <div className="space-y-6">
-            <div>
-                <h1 className="text-3xl font-bold tracking-tight">Analytics</h1>
-                <p className="text-muted-foreground">
-                    Dealership-wide summary, charts, and per-salesperson analysis. Date range filters leads received, appointments set, check-ins, notes, and other activity in the selected period.
-                </p>
+            <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                    <h1 className="text-3xl font-bold tracking-tight">Analytics</h1>
+                    <p className="text-muted-foreground">
+                        Company-wide summary, lead cohort analysis, and team productivity.
+                    </p>
+                </div>
             </div>
 
+            <Tabs value={activeTab} onValueChange={(v) => handleTabChange(v as "overview" | "leads")} className="space-y-6">
+                <TabsList>
+                    <TabsTrigger value="overview">Overview</TabsTrigger>
+                    <TabsTrigger value="leads">Leads Analysis</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="leads" className="mt-0">
+                    <LeadsAnalysisTab
+                        orgDealershipId={dealershipId || orgDealershipId}
+                        salespersons={salespersons}
+                        bdcAgents={bdcAgents}
+                        partnerStores={partnerStores}
+                        stages={stages}
+                    />
+                </TabsContent>
+
+                <TabsContent value="overview" className="mt-0 space-y-6">
             {/* Filters */}
             <Card>
                 <CardHeader className="pb-2">
@@ -606,109 +611,104 @@ export default function AnalyticsPage() {
                             </div>
                         </>
                     )}
-                    {(isSuperAdmin || isBdc) && dealerships.length > 0 && (
-                        <div className="flex flex-col gap-1">
-                            <label className="text-xs text-muted-foreground">Dealership</label>
-                            <Select 
-                                value={dealershipId ?? (isBdc && dealerships.length === 1 ? dealerships[0].id : "all")} 
-                                onValueChange={(v) => setDealershipId(v === "all" ? null : v)}
-                            >
-                                <SelectTrigger className="w-[180px]">
-                                    <SelectValue placeholder={isBdc ? "Select dealership" : "All"} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {isSuperAdmin && <SelectItem value="all">All</SelectItem>}
-                                    {dealerships.map((d) => (
-                                        <SelectItem key={d.id} value={d.id}>
-                                            {d.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                    <AdvancedFiltersMenu
+                        align="start"
+                        contentClassName="w-[min(92vw,460px)]"
+                        activeCount={
+                            (assignedTo ? 1 : 0) +
+                            (bdcAgentId ? 1 : 0) +
+                            (source ? 1 : 0) +
+                            (partnerStoreId ? 1 : 0) +
+                            (stageId ? 1 : 0)
+                        }
+                        onReset={() => {
+                            setAssignedTo(null)
+                            setBdcAgentId(null)
+                            setSource(null)
+                            setPartnerStoreId(null)
+                            setStageId(null)
+                        }}
+                    >
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <FilterField label="Assigned to">
+                                <Select value={assignedTo ?? "all"} onValueChange={(v) => setAssignedTo(v === "all" ? null : v)}>
+                                    <SelectTrigger className="w-full h-9">
+                                        <SelectValue placeholder="All" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All</SelectItem>
+                                        {salespersons.map((s) => (
+                                            <SelectItem key={s.id} value={s.id}>
+                                                {s.first_name} {s.last_name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </FilterField>
+                            {bdcAgents.length > 0 && (
+                                <FilterField label="BDC Agent">
+                                    <Select value={bdcAgentId ?? "all"} onValueChange={(v) => setBdcAgentId(v === "all" ? null : v)}>
+                                        <SelectTrigger className="w-full h-9">
+                                            <SelectValue placeholder="All" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">All</SelectItem>
+                                            {bdcAgents.map((a) => (
+                                                <SelectItem key={a.id} value={a.id}>
+                                                    {a.first_name} {a.last_name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </FilterField>
+                            )}
+                            <FilterField label="Source">
+                                <Select value={source ?? "all"} onValueChange={(v) => setSource(v === "all" ? null : v)}>
+                                    <SelectTrigger className="w-full h-9">
+                                        <SelectValue placeholder="All" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All</SelectItem>
+                                        {LEAD_SOURCES.map((s) => (
+                                            <SelectItem key={s.value} value={s.value}>
+                                                {s.label}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </FilterField>
+                            <FilterField label="Partner store">
+                                <Select value={partnerStoreId ?? "all"} onValueChange={(v) => setPartnerStoreId(v === "all" ? null : v)}>
+                                    <SelectTrigger className="w-full h-9">
+                                        <SelectValue placeholder="All" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All stores</SelectItem>
+                                        {partnerStores.map((store) => (
+                                            <SelectItem key={store.id} value={store.id}>
+                                                {store.brand ? `${store.name} (${store.brand})` : store.name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </FilterField>
+                            <FilterField label="Stage">
+                                <Select value={stageId ?? "all"} onValueChange={(v) => setStageId(v === "all" ? null : v)}>
+                                    <SelectTrigger className="w-full h-9">
+                                        <SelectValue placeholder="All" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All</SelectItem>
+                                        {stages.map((s) => (
+                                            <SelectItem key={s.id} value={s.id}>
+                                                {s.display_name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </FilterField>
                         </div>
-                    )}
-                    <div className="flex flex-col gap-1">
-                        <label className="text-xs text-muted-foreground">Salesperson</label>
-                        <Select value={assignedTo ?? "all"} onValueChange={(v) => setAssignedTo(v === "all" ? null : v)}>
-                            <SelectTrigger className="w-[160px]">
-                                <SelectValue placeholder="All" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All</SelectItem>
-                                {salespersons.map((s) => (
-                                    <SelectItem key={s.id} value={s.id}>
-                                        {s.first_name} {s.last_name}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    {bdcAgents.length > 0 && (
-                        <div className="flex flex-col gap-1">
-                            <label className="text-xs text-muted-foreground">BDC Agent</label>
-                            <Select value={bdcAgentId ?? "all"} onValueChange={(v) => setBdcAgentId(v === "all" ? null : v)}>
-                                <SelectTrigger className="w-[160px]">
-                                    <SelectValue placeholder="All" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All</SelectItem>
-                                    {bdcAgents.map((a) => (
-                                        <SelectItem key={a.id} value={a.id}>
-                                            {a.first_name} {a.last_name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                    )}
-                    <div className="flex flex-col gap-1">
-                        <label className="text-xs text-muted-foreground">Source</label>
-                        <Select value={source ?? "all"} onValueChange={(v) => setSource(v === "all" ? null : v)}>
-                            <SelectTrigger className="w-[130px]">
-                                <SelectValue placeholder="All" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All</SelectItem>
-                                {LEAD_SOURCES.map((s) => (
-                                    <SelectItem key={s.value} value={s.value}>
-                                        {s.label}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                        <label className="text-xs text-muted-foreground">Partner store</label>
-                        <Select value={partnerStoreId ?? "all"} onValueChange={(v) => setPartnerStoreId(v === "all" ? null : v)}>
-                            <SelectTrigger className="w-[200px]">
-                                <SelectValue placeholder="All" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All stores</SelectItem>
-                                {partnerStores.map((store) => (
-                                    <SelectItem key={store.id} value={store.id}>
-                                        {store.brand ? `${store.name} (${store.brand})` : store.name}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                        <label className="text-xs text-muted-foreground">Stage</label>
-                        <Select value={stageId ?? "all"} onValueChange={(v) => setStageId(v === "all" ? null : v)}>
-                            <SelectTrigger className="w-[160px]">
-                                <SelectValue placeholder="All" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All</SelectItem>
-                                {stages.map((s) => (
-                                    <SelectItem key={s.id} value={s.id}>
-                                        {s.display_name}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
+                    </AdvancedFiltersMenu>
                     <Button onClick={fetchAll} disabled={loading}>
                         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                         <span className="ml-2">{loading ? "Loading..." : "Apply"}</span>
@@ -723,12 +723,6 @@ export default function AnalyticsPage() {
                                 variant="outline"
                                 onClick={() => {
                                     const sp = assignedTo ? salespersons.find((s) => s.id === assignedTo) : null
-                                    const dealershipName =
-                                        isSuperAdmin && dealershipId
-                                            ? dealerships.find((d) => d.id === dealershipId)?.name ?? "All"
-                                            : user?.dealership_id
-                                                ? dealerships.find((d) => d.id === user.dealership_id)?.name ?? "Current"
-                                                : "All"
                                     downloadAnalysisPdf(analysis, {
                                         dateRangeLabel:
                                             dateMode === "single"
@@ -738,8 +732,7 @@ export default function AnalyticsPage() {
                                                     : dateMode === "last_month"
                                                         ? `Last month: ${dateFrom} to ${dateTo}`
                                                         : `${dateFrom} to ${dateTo}`,
-                                        dealershipName,
-                                        salespersonName: sp ? `${sp.first_name} ${sp.last_name}` : "All salespeople",
+                                        salespersonName: sp ? `${sp.first_name} ${sp.last_name}` : "Everyone",
                                     })
                                 }}
                             >
@@ -972,7 +965,7 @@ export default function AnalyticsPage() {
                                         <TableEmpty
                                             icon={<Users className="h-10 w-10" />}
                                             title="No salespeople"
-                                            description="No active salespersons in this dealership."
+                                            description="No active team members."
                                         />
                                     ) : (
                                         analysis.salespeople.map((row: SalespersonAnalysisRow) => (
@@ -1103,6 +1096,22 @@ export default function AnalyticsPage() {
                     </div>
                 </>
             )}
+                </TabsContent>
+            </Tabs>
         </div>
+    )
+}
+
+export default function AnalyticsPage() {
+    return (
+        <React.Suspense
+            fallback={
+                <div className="flex items-center justify-center py-20">
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+            }
+        >
+            <AnalyticsPageContent />
+        </React.Suspense>
     )
 }

@@ -2,6 +2,7 @@
  * Voice Service - API client for Twilio Voice calling
  */
 import apiClient from "@/lib/api-client";
+import { wsService } from "@/lib/websocket";
 
 export interface VoiceConfig {
   voice_enabled: boolean;
@@ -125,6 +126,8 @@ class VoiceService {
   async reportPresence(
     status: "registered" | "heartbeat" | "busy" | "idle" | "unregistered"
   ): Promise<void> {
+    // Inbound Dial only rings live softphones, so fall back to HTTP whenever the socket is down
+    if (wsService.sendEvent("softphone:presence", { status })) return
     try {
       await apiClient.post("/voice/presence", { status })
     } catch {

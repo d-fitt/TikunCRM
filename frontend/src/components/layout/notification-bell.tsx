@@ -18,12 +18,14 @@ import {
     Loader2,
     Layers,
     MessageCircle,
+    MessageSquare,
     PhoneMissed,
     Voicemail,
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { useNotificationEvents, useWebSocketEvent } from "@/hooks/use-websocket"
+import { subscribeShellBadges } from "@/lib/shell-badges"
 import { formatRelativeTimeInTimezone } from "@/utils/timezone"
 
 import { Button } from "@/components/ui/button"
@@ -59,6 +61,7 @@ const typeIcons: Record<NotificationType, React.ComponentType<{ className?: stri
     lead_multi_campaign: Layers,
     whatsapp_new_lead: MessageCircle,
     whatsapp_received: MessageCircle,
+    sms_received: MessageSquare,
     missed_call: PhoneMissed,
     voicemail: Voicemail,
 }
@@ -81,6 +84,7 @@ const typeColors: Record<NotificationType, string> = {
     lead_multi_campaign: "text-yellow-600 bg-yellow-100",
     whatsapp_new_lead: "text-emerald-500 bg-emerald-100",
     whatsapp_received: "text-emerald-500 bg-emerald-100",
+    sms_received: "text-sky-500 bg-sky-100",
     missed_call: "text-red-500 bg-red-100",
     voicemail: "text-orange-500 bg-orange-100",
 }
@@ -110,18 +114,10 @@ export function NotificationBell() {
         }
     }, [])
     
-    // Fetch unread count once on mount. Updates via WebSocket (notification:new) only.
-    React.useEffect(() => {
-        const fetchUnreadCount = async () => {
-            try {
-                const stats = await NotificationService.getStats()
-                setUnreadCount(stats.unread)
-            } catch (error) {
-                console.error("Failed to fetch notification stats:", error)
-            }
-        }
-        fetchUnreadCount()
-    }, [])
+    React.useEffect(
+        () => subscribeShellBadges((badges) => setUnreadCount(badges.notifications)),
+        []
+    )
     
     // Listen for real-time notification events via WebSocket
     const handleNewNotification = React.useCallback((notification: any) => {

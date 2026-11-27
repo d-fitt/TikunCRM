@@ -206,7 +206,7 @@ export default function WhatsAppTemplatesPage() {
                     <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                     <h2 className="text-lg font-semibold">Access Denied</h2>
                     <p className="text-muted-foreground">
-                        Only Dealership Admins, Owners, or Super Admins can manage WhatsApp templates.
+                        Only Managers or Super Admins can manage WhatsApp templates.
                     </p>
                 </div>
             </div>

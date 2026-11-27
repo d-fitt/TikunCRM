@@ -40,6 +40,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
+import { AdvancedFiltersMenu, FilterField } from "@/components/ui/filter-bar"
 import { cn } from "@/lib/utils"
 import {
     Task,
@@ -339,44 +340,60 @@ export default function TasksPage() {
                     ))}
                 </div>
                 <div className="flex items-center gap-2">
-                    <Select
-                        value={typeFilter}
-                        onValueChange={(v) => {
-                            setTypeFilter(v as TaskType | "all")
+                    <AdvancedFiltersMenu
+                        align="end"
+                        activeCount={(typeFilter !== "all" ? 1 : 0) + (priorityFilter !== "all" ? 1 : 0)}
+                        onReset={() => {
+                            setTypeFilter("all")
+                            setPriorityFilter("all")
                             setPage(1)
                         }}
                     >
-                        <SelectTrigger className="h-9 w-[150px]">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All types</SelectItem>
-                            {Object.entries(TASK_TYPE_INFO).map(([value, info]) => (
-                                <SelectItem key={value} value={value}>
-                                    {info.label}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                    <Select
-                        value={priorityFilter}
-                        onValueChange={(v) => {
-                            setPriorityFilter(v as TaskPriority | "all")
-                            setPage(1)
-                        }}
-                    >
-                        <SelectTrigger className="h-9 w-[140px]">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All priorities</SelectItem>
-                            {(["urgent", "high", "medium", "low"] as const).map((p) => (
-                                <SelectItem key={p} value={p}>
-                                    {TASK_PRIORITY_INFO[p].label}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <FilterField label="Task Type">
+                                <Select
+                                    value={typeFilter}
+                                    onValueChange={(v) => {
+                                        setTypeFilter(v as TaskType | "all")
+                                        setPage(1)
+                                    }}
+                                >
+                                    <SelectTrigger className="h-9 w-full">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All types</SelectItem>
+                                        {Object.entries(TASK_TYPE_INFO).map(([value, info]) => (
+                                            <SelectItem key={value} value={value}>
+                                                {info.label}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </FilterField>
+                            <FilterField label="Priority">
+                                <Select
+                                    value={priorityFilter}
+                                    onValueChange={(v) => {
+                                        setPriorityFilter(v as TaskPriority | "all")
+                                        setPage(1)
+                                    }}
+                                >
+                                    <SelectTrigger className="h-9 w-full">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All priorities</SelectItem>
+                                        {(["urgent", "high", "medium", "low"] as const).map((p) => (
+                                            <SelectItem key={p} value={p}>
+                                                {TASK_PRIORITY_INFO[p].label}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </FilterField>
+                        </div>
+                    </AdvancedFiltersMenu>
                 </div>
             </div>
 

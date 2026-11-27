@@ -19,12 +19,7 @@ export default function ForgotPasswordPage() {
         setError(null)
         setIsLoading(true)
         try {
-            const options = await AuthService.lookupDealerships(email)
-            if (options.length === 0) {
-                setSuccess(true)
-                return
-            }
-            await AuthService.forgotPassword(email, options[0])
+            await AuthService.forgotPassword(email)
             setSuccess(true)
         } catch (err: any) {
             const detail = err?.response?.data?.detail

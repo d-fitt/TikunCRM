@@ -7,16 +7,19 @@ import { initializeApp, getApps, FirebaseApp } from "firebase/app"
 import { getMessaging, getToken, onMessage, Messaging, MessagePayload } from "firebase/messaging"
 import { withTimeout } from "@/lib/with-timeout"
 
-// Firebase configuration from environment variables
+// Firebase public web config (env vars take precedence; fallback matches public/firebase-messaging-sw.js)
 const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSyCubNWyMpGr9PwjjrMXHF0NKzmtcLpZ_oA",
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "tikuncrm.firebaseapp.com",
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "tikuncrm",
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || "tikuncrm.firebasestorage.app",
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "241604704783",
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "1:241604704783:web:cc054d12805a9bcbfe417a",
+  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID || "G-1FDL2ZXSXC",
 }
+
+const DEFAULT_FIREBASE_VAPID_KEY =
+  "BGD_FPovlvqQF9YnEtuBlrInOtXyUI1BqzzJGs7IV2tjJnTCwmm4bHBjdstPqD76KjiHa8pgN-0dIYtHABluibw"
 
 const FCM_SW_PATH = "/firebase-messaging-sw.js"
 const SW_READY_TIMEOUT_MS = 12_000
@@ -119,56 +122,60 @@ async function getServiceWorkerRegistration(): Promise<ServiceWorkerRegistration
 }
 
 /**
+ * Request permission and get FCM token.
+ * Throws a descriptive Error on failure so callers can surface the real cause.
+ */
+export async function getFCMTokenOrThrow(): Promise<string> {
+  const messagingInstance = getFirebaseMessaging()
+  if (!messagingInstance) {
+    throw new Error("Firebase Messaging is not supported in this browser")
+  }
+
+  const permission = Notification.permission
+  if (permission === "denied") {
+    throw new Error("Notification permission is blocked in browser settings")
+  }
+
+  if (permission === "default") {
+    const result = await Notification.requestPermission()
+    if (result !== "granted") {
+      throw new Error("Notification permission was not granted")
+    }
+  }
+
+  const swRegistration = await getServiceWorkerRegistration()
+  if (!swRegistration) {
+    throw new Error("Service worker registration failed (/firebase-messaging-sw.js)")
+  }
+
+  const fcmVapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY || DEFAULT_FIREBASE_VAPID_KEY
+  if (!fcmVapidKey) {
+    throw new Error("Firebase VAPID key is not configured")
+  }
+
+  const token = await withTimeout(
+    getToken(messagingInstance, {
+      serviceWorkerRegistration: swRegistration,
+      vapidKey: fcmVapidKey,
+    }),
+    GET_TOKEN_TIMEOUT_MS,
+    "FCM getToken timed out"
+  )
+
+  if (!token) {
+    throw new Error("Firebase returned an empty FCM token")
+  }
+
+  console.log("[Firebase] FCM token obtained")
+  return token
+}
+
+/**
  * Request permission and get FCM token
  */
 export async function getFCMToken(): Promise<string | null> {
   try {
-    const messagingInstance = getFirebaseMessaging()
-    if (!messagingInstance) {
-      return null
-    }
-
-    const permission = Notification.permission
-    if (permission === "denied") {
-      console.log("[Firebase] Notification permission denied")
-      return null
-    }
-
-    if (permission === "default") {
-      const result = await Notification.requestPermission()
-      if (result !== "granted") {
-        console.log("[Firebase] Notification permission denied")
-        return null
-      }
-    }
-
-    const swRegistration = await getServiceWorkerRegistration()
-    if (!swRegistration) {
-      return null
-    }
-
-    const fcmVapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY
-    if (!fcmVapidKey) {
-      console.error("[Firebase] VAPID key not configured")
-      return null
-    }
-    
-    const token = await withTimeout(
-      getToken(messagingInstance, {
-        serviceWorkerRegistration: swRegistration,
-        vapidKey: fcmVapidKey,
-      }),
-      GET_TOKEN_TIMEOUT_MS,
-      "FCM getToken timed out"
-    )
-
-    if (token) {
-      console.log("[Firebase] FCM token obtained")
-      return token
-    }
-
-    console.warn("[Firebase] No token returned from Firebase")
-    return null
+    return await getFCMTokenOrThrow()
   } catch (error) {
     console.error("[Firebase] Failed to get FCM token:", error)
     return null

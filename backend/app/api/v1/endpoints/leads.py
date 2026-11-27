@@ -1293,6 +1293,8 @@ async def create_lead(
             )
         if not await user_can_access_dealership(db, current_user, dealership_id):
             raise HTTPException(status_code=403, detail="Not authorized for this dealership")
+    elif not dealership_id:
+        dealership_id = await resolve_user_dealership_id(db, current_user)
 
     # Step 1: find or create customer
     customer_extra = {}

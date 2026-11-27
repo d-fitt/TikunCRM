@@ -34,6 +34,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
+import { AdvancedFiltersMenu, FilterField } from "@/components/ui/filter-bar"
 import {
     Tabs,
     TabsList,
@@ -478,20 +479,6 @@ export default function FollowUpsPage() {
                             
                             <div className="h-6 w-px bg-border" />
                             
-                            {/* Status Filter */}
-                            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as FollowUpStatus | "all")}>
-                                <SelectTrigger className="w-[150px] h-9">
-                                    <SelectValue placeholder="All Statuses" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All Statuses</SelectItem>
-                                    <SelectItem value="pending">Pending</SelectItem>
-                                    <SelectItem value="completed">Completed</SelectItem>
-                                    <SelectItem value="missed">Missed</SelectItem>
-                                    <SelectItem value="cancelled">Cancelled</SelectItem>
-                                </SelectContent>
-                            </Select>
-
                             {/* Date Range Filter */}
                             <Select value={dateRangePreset} onValueChange={(v) => handleDatePresetChange(v as DateRangePreset)}>
                                 <SelectTrigger className="w-[140px] h-9">
@@ -506,6 +493,27 @@ export default function FollowUpsPage() {
                                     ))}
                                 </SelectContent>
                             </Select>
+
+                            <AdvancedFiltersMenu
+                                align="start"
+                                activeCount={statusFilter !== "all" ? 1 : 0}
+                                onReset={() => setStatusFilter("all")}
+                            >
+                                <FilterField label="Status">
+                                    <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as FollowUpStatus | "all")}>
+                                        <SelectTrigger className="w-full h-9">
+                                            <SelectValue placeholder="All Statuses" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">All Statuses</SelectItem>
+                                            <SelectItem value="pending">Pending</SelectItem>
+                                            <SelectItem value="completed">Completed</SelectItem>
+                                            <SelectItem value="missed">Missed</SelectItem>
+                                            <SelectItem value="cancelled">Cancelled</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </FilterField>
+                            </AdvancedFiltersMenu>
                             
                             {/* Clear Filters */}
                             {hasActiveFilters && (

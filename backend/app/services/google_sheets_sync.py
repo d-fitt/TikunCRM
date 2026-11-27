@@ -346,6 +346,11 @@ def parse_sheet_row(
         postal_code = _sheet_postal_code(row)
         if postal_code:
             meta_data["postal_code"] = postal_code
+
+        from app.services.sms_consent_service import extract_consent_columns
+        consent_columns = extract_consent_columns(row)
+        if consent_columns:
+            meta_data["sms_consent_columns"] = consent_columns
         
         # Parse created_time for all leads (not just FB/IG) to preserve actual lead date
         created_at = None
@@ -877,6 +882,12 @@ async def sync_leads_from_source(source: Union[LeadSyncSource, UUID]) -> Dict[st
                         except Exception as e:
                             logger.error(f"Failed to enqueue AI outbound for sheet lead {lead.id}: {e}")
                         
+                        try:
+                            from app.services.sms_new_lead_service import send_new_lead_texts
+                            await send_new_lead_texts(session, lead.id)
+                        except Exception as e:
+                            logger.error(f"Failed to send new-lead text for sheet lead {lead.id}: {e}")
+                        
                         # WhatsApp auto-send for campaigns with auto_send enabled
                         try:
                             matched_mapping = next(
@@ -1283,6 +1294,12 @@ async def _legacy_sync_google_sheet_leads() -> Dict[str, Any]:
                             await maybe_enqueue_ai_outbound(session, lead.id)
                         except Exception as e:
                             logger.error(f"Failed to enqueue AI outbound for sheet lead {lead.id}: {e}")
+                        
+                        try:
+                            from app.services.sms_new_lead_service import send_new_lead_texts
+                            await send_new_lead_texts(session, lead.id)
+                        except Exception as e:
+                            logger.error(f"Failed to send new-lead text for sheet lead {lead.id}: {e}")
                     
                     if new_leads_count > 0:
                         try:

@@ -273,7 +273,7 @@ export default function DealershipEmailConfigPage() {
                         <AlertTriangle className="mx-auto h-12 w-12 text-yellow-500 mb-4" />
                         <h2 className="text-lg font-semibold mb-2">Access Denied</h2>
                         <p className="text-muted-foreground">
-                            Only Dealership Admins can configure email settings.
+                            Only Managers can configure email settings.
                         </p>
                     </CardContent>
                 </Card>
@@ -342,8 +342,8 @@ export default function DealershipEmailConfigPage() {
                         <div className="text-sm text-blue-700">
                             <p className="font-medium mb-1">How it works:</p>
                             <ul className="list-disc list-inside space-y-1 text-blue-600">
-                                <li>Configure your Hostinger email settings once for your dealership</li>
-                                <li>Each user sets their own email in their profile (e.g., john@yourdealership.com)</li>
+                                <li>Configure your Hostinger email settings once for Carvaminos</li>
+                                <li>Each user sets their own email in their profile (e.g., john@carvaminos.com)</li>
                                 <li>Emails are sent via your SMTP server with the user&apos;s email in Reply-To</li>
                                 <li>Replies are automatically fetched via IMAP and routed to the correct salesperson</li>
                             </ul>
@@ -485,7 +485,7 @@ export default function DealershipEmailConfigPage() {
                         <Label htmlFor="from_name">Display Name (Optional)</Label>
                         <Input
                             id="from_name"
-                            placeholder="Your Dealership Name"
+                            placeholder="Carvaminos"
                             value={formData.from_name || ""}
                             onChange={(e) => handleInputChange("from_name", e.target.value)}
                         />

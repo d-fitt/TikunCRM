@@ -1537,6 +1537,7 @@ async def upload_recording_to_azure_background(
                         "payload": {
                             "call_log_id": str(call_log.id),
                             "call_sid": call_sid,
+                            "lead_id": str(call_log.lead_id) if call_log.lead_id else None,
                             "recording_url": call_log.recording_url,
                         }
                     }

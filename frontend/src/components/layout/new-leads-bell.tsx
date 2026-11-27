@@ -3,33 +3,15 @@
 import * as React from "react"
 import Link from "next/link"
 import { UserPlus } from "lucide-react"
-import { useWebSocketEvent } from "@/hooks/use-websocket"
-import { LeadService } from "@/services/lead-service"
+import { subscribeShellBadges } from "@/lib/shell-badges"
 
 export function NewLeadsBell() {
     const [count, setCount] = React.useState(0)
-    const timer = React.useRef<number | null>(null)
 
-    const refresh = React.useCallback(() => {
-        if (timer.current) window.clearTimeout(timer.current)
-        timer.current = window.setTimeout(() => {
-            void LeadService.getFreshCount()
-                .then((res) => setCount(res.count || 0))
-                .catch(() => {})
-        }, 300)
-    }, [])
-
-    React.useEffect(() => {
-        refresh()
-        return () => {
-            if (timer.current) window.clearTimeout(timer.current)
-        }
-    }, [refresh])
-
-    useWebSocketEvent("lead:created", refresh, [refresh])
-    useWebSocketEvent("lead:updated", refresh, [refresh])
-    useWebSocketEvent("badges:refresh", refresh, [refresh])
-    useWebSocketEvent("stats:refresh", refresh, [refresh])
+    React.useEffect(
+        () => subscribeShellBadges((badges) => setCount(badges.freshLeads)),
+        []
+    )
 
     return (
         <Link
