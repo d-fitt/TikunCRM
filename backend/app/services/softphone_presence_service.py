@@ -65,6 +65,21 @@ async def clear_presence(db: AsyncSession, user_id: uuid.UUID) -> None:
         await db.flush()
 
 
+async def apply_presence_status(db: AsyncSession, user_id: uuid.UUID, status: str) -> bool:
+    """Apply a softphone presence report. Returns False for an unknown status."""
+    status = (status or "").strip().lower()
+    if status in {"registered", "heartbeat", "idle"}:
+        await upsert_presence(db, user_id, busy=False)
+    elif status == "busy":
+        await upsert_presence(db, user_id, busy=True)
+    elif status == "unregistered":
+        await clear_presence(db, user_id)
+    else:
+        return False
+    await db.commit()
+    return True
+
+
 async def live_user_ids(
     db: AsyncSession,
     user_ids: Iterable[uuid.UUID],

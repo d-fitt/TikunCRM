@@ -72,6 +72,7 @@ import {
   smsService,
 } from "@/services/sms-service";
 import { useToast } from "@/hooks/use-toast";
+import { useWebSocketEvent, useWebSocketResync } from "@/hooks/use-websocket";
 import { cn } from "@/lib/utils";
 
 const STATUS_LABELS: Record<SMSCampaign["status"], string> = {
@@ -191,6 +192,8 @@ export function CampaignsPanel() {
   const [overview, setOverview] = useState<SMSCampaignOverview | null>(null);
   const [filterOptions, setFilterOptions] = useState<SMSCampaignFilterOptions | null>(null);
   const [campaigns, setCampaigns] = useState<SMSCampaign[]>([]);
+  const campaignsRef = useRef<SMSCampaign[]>([]);
+  campaignsRef.current = campaigns;
   const [loading, setLoading] = useState(true);
 
   // Builder state
@@ -247,12 +250,32 @@ export function CampaignsPanel() {
     void load();
   }, [load]);
 
-  const active = campaigns.some((c) => c.status === "queued" || c.status === "sending");
-  useEffect(() => {
-    if (!active) return;
-    const t = setInterval(() => void load(), 15000);
-    return () => clearInterval(t);
-  }, [active, load]);
+  // Sent/failed counts stream in per batch from the campaign sender
+  useWebSocketEvent<{ campaign_id?: string; status?: string; sent_count?: number; failed_count?: number }>(
+    "sms:campaign_progress",
+    useCallback((data) => {
+      if (!data?.campaign_id) return;
+      const known = campaignsRef.current.some((c) => String(c.id) === String(data.campaign_id));
+      if (!known || data.status === "completed") {
+        void load();
+        return;
+      }
+      setCampaigns((prev) =>
+        prev.map((c) =>
+          String(c.id) !== String(data.campaign_id)
+            ? c
+            : {
+                ...c,
+                status: (data.status as typeof c.status) ?? c.status,
+                sent_count: data.sent_count ?? c.sent_count,
+                failed_count: data.failed_count ?? c.failed_count,
+              }
+        )
+      );
+    }, [load]),
+    [load]
+  );
+  useWebSocketResync(useCallback(() => void load(), [load]), [load]);
 
   // Live filtered audience preview
   useEffect(() => {

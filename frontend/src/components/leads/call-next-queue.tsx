@@ -10,7 +10,7 @@ import { Progress } from "@/components/ui/progress"
 import { useCallLeadOptional } from "@/contexts/call-lead-context"
 import { useToast } from "@/hooks/use-toast"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
-import { useWebSocketEvent } from "@/hooks/use-websocket"
+import { useWebSocketEvent, useWebSocketResync } from "@/hooks/use-websocket"
 import {
     DashboardService,
     type BdcWorkOutcome,
@@ -82,14 +82,6 @@ export function CallNextQueue() {
         void load()
     }, [load])
 
-    React.useEffect(() => {
-        if (status !== "running" && !rechecking) return
-        const id = window.setInterval(() => {
-            void load()
-        }, 3000)
-        return () => window.clearInterval(id)
-    }, [status, rechecking, load])
-
     const timer = React.useRef<number | null>(null)
     const refresh = React.useCallback(() => {
         if (timer.current) window.clearTimeout(timer.current)
@@ -106,6 +98,23 @@ export function CallNextQueue() {
     useWebSocketEvent("lead:updated", refresh, [refresh])
     useWebSocketEvent("badges:refresh", refresh, [refresh])
     useWebSocketEvent("stats:refresh", refresh, [refresh])
+    useWebSocketResync(refresh, [refresh])
+
+    // Progress while the AI pass runs; the finished list arrives with stats:refresh
+    useWebSocketEvent<{ status?: string; progress_done?: number; progress_label?: string | null }>(
+        "call_queue:progress",
+        React.useCallback((data) => {
+            if (data?.status === "running") {
+                setStatus("running")
+                setProgressDone(data.progress_done ?? 0)
+                setProgressTotal(100)
+                setProgressLabel(data.progress_label ?? null)
+            } else {
+                refresh()
+            }
+        }, [refresh]),
+        [refresh]
+    )
 
     async function callLead(item: BdcWorkQueueItem) {
         if (!item.phone) {

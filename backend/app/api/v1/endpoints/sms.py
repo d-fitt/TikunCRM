@@ -163,6 +163,15 @@ def _consent_status(customer: Optional[Customer]) -> Optional[SMSConsentStatus]:
     )
 
 
+async def _broadcast_sms_read(lead: Lead) -> None:
+    if not lead.dealership_id:
+        return
+    await ws_manager.broadcast_to_dealership(
+        str(lead.dealership_id),
+        {"type": "sms:read", "payload": {"lead_id": str(lead.id)}},
+    )
+
+
 # ============ Endpoints ============
 
 @router.get("/config", response_model=SMSConfigResponse)
@@ -373,7 +382,7 @@ async def get_conversation(
     call_rows = list(reversed((await db.execute(call_query)).scalars().all()))
     
     # Mark messages & any unread SMS notifications for this lead as read
-    await service.mark_conversation_as_read(lead_id)
+    newly_read = await service.mark_conversation_as_read(lead_id)
     from sqlalchemy import update as sql_update
     from app.models.notification import Notification, NotificationType
     from app.core.timezone import utc_now
@@ -388,6 +397,9 @@ async def get_conversation(
         .values(is_read=True, read_at=utc_now())
     )
     await db.commit()
+
+    if newly_read:
+        await _broadcast_sms_read(lead)
     
     return ConversationResponse(
         lead_id=lead.id,
@@ -532,6 +544,12 @@ async def mark_message_read(
         )
     
     await db.commit()
+
+    if sms_log.lead_id and sms_log.dealership_id:
+        await ws_manager.broadcast_to_dealership(
+            str(sms_log.dealership_id),
+            {"type": "sms:read", "payload": {"lead_id": str(sms_log.lead_id)}},
+        )
     
     return {"status": "ok"}
 

@@ -4,7 +4,7 @@ import * as React from "react"
 import { useRouter } from "next/navigation"
 import { Phone, PhoneMissed, Loader2, ExternalLink, CheckCheck } from "lucide-react"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
-import { useWebSocketEvent, useNotificationEvents } from "@/hooks/use-websocket"
+import { useWebSocketEvent, useWebSocketResync, useNotificationEvents } from "@/hooks/use-websocket"
 import { formatRelativeTimeInTimezone } from "@/utils/timezone"
 import { Button } from "@/components/ui/button"
 import {
@@ -50,40 +50,35 @@ export function MissedCallsBell() {
         }
     }, [])
 
-    // Badge count on mount + light poll (missed calls may lack a dedicated WS event)
+    const countTimer = React.useRef<number | null>(null)
+    const refreshCount = React.useCallback(() => {
+        if (countTimer.current) window.clearTimeout(countTimer.current)
+        countTimer.current = window.setTimeout(() => {
+            void voiceService
+                .listMissedCalls({ page_size: 1 })
+                .then((res) => setPendingCount(res.pending_count))
+                .catch(() => {})
+        }, 400)
+    }, [])
+
     React.useEffect(() => {
         void fetchMissed()
-        const id = window.setInterval(() => {
-            void voiceService
-                .listMissedCalls({ page_size: 1 })
-                .then((res) => setPendingCount(res.pending_count))
-                .catch(() => {})
-        }, 60_000)
-        return () => window.clearInterval(id)
+        return () => {
+            if (countTimer.current) window.clearTimeout(countTimer.current)
+        }
     }, [fetchMissed])
 
-    // Softphone / voice status events often mean a new call finished
-    useWebSocketEvent(
-        "call:status",
-        () => {
-            void voiceService
-                .listMissedCalls({ page_size: 1 })
-                .then((res) => setPendingCount(res.pending_count))
-                .catch(() => {})
-        },
-        []
-    )
+    // A call ending (or ringing out) may add a missed call; clears by other agents arrive as missed_calls:changed
+    useWebSocketEvent("call:completed", refreshCount, [refreshCount])
+    useWebSocketEvent("call:ring_ended", refreshCount, [refreshCount])
+    useWebSocketEvent("missed_calls:changed", refreshCount, [refreshCount])
+    useWebSocketResync(refreshCount, [refreshCount])
 
     useNotificationEvents(
         React.useCallback((notification: { notification_type?: string; type?: string }) => {
             const t = String(notification.notification_type || notification.type || "").toLowerCase()
-            if (t === "missed_call" || t === "voicemail") {
-                void voiceService
-                    .listMissedCalls({ page_size: 1 })
-                    .then((res) => setPendingCount(res.pending_count))
-                    .catch(() => {})
-            }
-        }, [])
+            if (t === "missed_call" || t === "voicemail") refreshCount()
+        }, [refreshCount])
     )
 
     React.useEffect(() => {

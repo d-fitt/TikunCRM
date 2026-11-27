@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConversationList, ConversationThread } from "@/components/sms";
 import { CampaignsPanel } from "@/components/sms/campaigns-panel";
 import { ConversationListItem, SMSConfig, SMSLeadSearchItem, smsService } from "@/services/sms-service";
-import { useWebSocketEvent } from "@/hooks/use-websocket";
+import { useWebSocketEvent, useWebSocketResync } from "@/hooks/use-websocket";
 import { useAuthStore } from "@/stores/auth-store";
 
 const CAMPAIGN_ROLES = new Set(["super_admin", "dealership_admin", "dealership_owner"]);
@@ -69,22 +69,23 @@ export default function SMSPage() {
     void loadConversations();
   }, [loadConversations]);
 
-  // Fallback poll so new incoming threads appear even if a WebSocket event is missed
-  useEffect(() => {
-    if (!config?.sms_enabled) return;
-    const id = setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState === "visible") {
-        void loadConversations({ silent: true });
-      }
-    }, 10000);
-    return () => clearInterval(id);
-  }, [config?.sms_enabled, loadConversations]);
-
-  useWebSocketEvent(
-    "sms:received",
-    useCallback(() => void loadConversations({ silent: true }), [loadConversations]),
-    [loadConversations]
+  const reloadListTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reloadList = useCallback(() => {
+    if (reloadListTimer.current) clearTimeout(reloadListTimer.current);
+    reloadListTimer.current = setTimeout(() => void loadConversations({ silent: true }), 300);
+  }, [loadConversations]);
+  useEffect(
+    () => () => {
+      if (reloadListTimer.current) clearTimeout(reloadListTimer.current);
+    },
+    []
   );
+
+  // New replies, texts from other agents, and threads read elsewhere all reorder or re-badge the list
+  useWebSocketEvent("sms:received", reloadList, [reloadList]);
+  useWebSocketEvent("sms:sent", reloadList, [reloadList]);
+  useWebSocketEvent("sms:read", reloadList, [reloadList]);
+  useWebSocketResync(reloadList, [reloadList]);
 
   useWebSocketEvent<{ lead_id?: string; user_id?: string; user_name?: string; is_typing?: boolean }>(
     "sms:typing",

@@ -617,6 +617,22 @@ async def process_broadcast(db: AsyncSession, broadcast: SMSBroadcast) -> None:
         broadcast.completed_at = utc_now()
     await db.commit()
 
+    if broadcast.dealership_id:
+        from app.core.websocket_manager import ws_manager
+
+        await ws_manager.broadcast_to_dealership(
+            str(broadcast.dealership_id),
+            {
+                "type": "sms:campaign_progress",
+                "payload": {
+                    "campaign_id": str(broadcast.id),
+                    "status": broadcast.status,
+                    "sent_count": broadcast.sent_count,
+                    "failed_count": broadcast.failed_count,
+                },
+            },
+        )
+
 
 async def run_sms_broadcasts() -> None:
     """Scheduler entry point: send the next batch of every active campaign."""

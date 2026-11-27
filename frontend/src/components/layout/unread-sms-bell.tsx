@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { MessageSquare } from "lucide-react"
-import { useWebSocketEvent } from "@/hooks/use-websocket"
+import { useWebSocketEvent, useWebSocketResync } from "@/hooks/use-websocket"
 import { smsService } from "@/services/sms-service"
 
 export function UnreadSmsBell() {
@@ -24,18 +24,16 @@ export function UnreadSmsBell() {
         refresh()
         const onChanged = () => refresh()
         window.addEventListener("sms:unread-changed", onChanged)
-        const interval = window.setInterval(() => {
-            if (document.visibilityState === "visible") refresh()
-        }, 20000)
         return () => {
             if (timer.current) window.clearTimeout(timer.current)
             window.removeEventListener("sms:unread-changed", onChanged)
-            window.clearInterval(interval)
         }
     }, [refresh])
 
     useWebSocketEvent("sms:received", refresh, [refresh])
+    useWebSocketEvent("sms:read", refresh, [refresh])
     useWebSocketEvent("badges:refresh", refresh, [refresh])
+    useWebSocketResync(refresh, [refresh])
 
     return (
         <Link

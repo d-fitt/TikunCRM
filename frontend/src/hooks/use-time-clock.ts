@@ -4,6 +4,8 @@ import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { useRole } from "@/hooks/use-role"
+import { useWebSocketEvent, useWebSocketResync } from "@/hooks/use-websocket"
+import { useAuthStore } from "@/stores/auth-store"
 import { ClockStatus, TimeTrackingService } from "@/services/time-tracking-service"
 import { getApiErrorMessage } from "@/lib/api-errors"
 import { emptyBreakdown, emptyCallWork } from "@/lib/time-tracking"
@@ -28,9 +30,24 @@ export function useTimeClock() {
         queryKey: [...STATUS_KEY, timezone],
         queryFn: () => TimeTrackingService.getStatus(timezone),
         enabled: isBdc,
-        refetchInterval: 30_000,
         staleTime: 10_000,
     })
+
+    // Clock changes from another tab, and call start/end (on_call, call totals), refresh the status
+    const refreshStatus = React.useCallback(() => {
+        if (isBdc) void queryClient.invalidateQueries({ queryKey: STATUS_KEY })
+    }, [isBdc, queryClient])
+    const currentUserId = useAuthStore((s) => s.user?.id)
+    useWebSocketEvent<{ user_id?: string }>(
+        "time_clock:updated",
+        React.useCallback((data) => {
+            if (data?.user_id && String(data.user_id) === String(currentUserId)) refreshStatus()
+        }, [currentUserId, refreshStatus]),
+        [currentUserId, refreshStatus]
+    )
+    useWebSocketEvent("call:answered", refreshStatus, [refreshStatus])
+    useWebSocketEvent("call:completed", refreshStatus, [refreshStatus])
+    useWebSocketResync(refreshStatus, [refreshStatus])
 
     React.useEffect(() => {
         if (!query.data?.is_clocked_in && !query.data?.on_call) return

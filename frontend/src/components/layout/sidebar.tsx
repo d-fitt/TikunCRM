@@ -39,7 +39,7 @@ import {
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
 import { useRole, getRoleDisplayName } from "@/hooks/use-role"
-import { useNotificationEvents, useLeadUpdateEvents, useBadgesRefresh, useStatsRefresh, useWebSocketEvent } from "@/hooks/use-websocket"
+import { useNotificationEvents, useLeadUpdateEvents, useBadgesRefresh, useStatsRefresh, useWebSocketEvent, useWebSocketResync } from "@/hooks/use-websocket"
 import { useSidebarOptional } from "@/contexts/sidebar-context"
 import { UserAvatar } from "@/components/ui/avatar"
 import { Badge, getRoleVariant } from "@/components/ui/badge"
@@ -410,7 +410,7 @@ export function Sidebar() {
     }, [refetchBadgeCounts])
 
     // Listen for real-time notification events via WebSocket – update badge directly
-    const handleNewNotification = React.useCallback((data: { unread_count?: number }) => {
+    const handleNewNotification = React.useCallback((data: { unread_count?: number; notification_type?: string }) => {
         if (typeof data?.unread_count === "number") {
             // Use the unread count directly from WebSocket event
             setBadgeCounts(prev => ({ ...prev, notifications: data.unread_count! }))
@@ -418,6 +418,10 @@ export function Sidebar() {
             // Fallback to API if unread_count not in event
             refetchBadgeCounts({ notifications: true })
         }
+        // Scheduler-driven reminders mean a follow-up just went overdue or an appointment is near
+        const t = String(data?.notification_type || "").toUpperCase()
+        if (t.startsWith("FOLLOW_UP")) refetchBadgeCounts({ followUps: true })
+        if (t.startsWith("APPOINTMENT")) refetchBadgeCounts({ appointments: true })
     }, [refetchBadgeCounts])
     
     useNotificationEvents(handleNewNotification)
@@ -488,6 +492,20 @@ export function Sidebar() {
         refetchBadgeCounts({ sms: true })
     }, [refetchBadgeCounts])
     useWebSocketEvent("sms:received", handleSmsUnreadRefresh, [handleSmsUnreadRefresh])
+    useWebSocketEvent("sms:read", handleSmsUnreadRefresh, [handleSmsUnreadRefresh])
+
+    const handleResync = React.useCallback(() => {
+        refetchBadgeCounts({
+            unassigned: true,
+            managerReview: true,
+            notifications: true,
+            appointments: true,
+            followUps: true,
+            whatsapp: true,
+            sms: true,
+        })
+    }, [refetchBadgeCounts])
+    useWebSocketResync(handleResync, [handleResync])
 
     React.useEffect(() => {
         const onSmsChanged = () => refetchBadgeCounts({ sms: true })

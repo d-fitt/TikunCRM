@@ -60,6 +60,13 @@ export function useWebSocketEvent<T = any>(
 }
 
 /**
+ * Run a refetch after the socket reconnects, to pick up events missed while offline.
+ */
+export function useWebSocketResync(onResync: () => void, deps: unknown[] = []) {
+    useWebSocketEvent("connection:resync", onResync, deps);
+}
+
+/**
  * Hook for notification events
  */
 export function useNotificationEvents(onNewNotification: (notification: any) => void) {
@@ -155,6 +162,7 @@ export function useWebSocket() {
             "sms:received",
             "sms:sent",
             "sms:status",
+            "sms:read",
             "whatsapp:received",
             "whatsapp:sent",
             "whatsapp:status",

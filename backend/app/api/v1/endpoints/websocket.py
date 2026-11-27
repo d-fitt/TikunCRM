@@ -129,7 +129,16 @@ async def websocket_endpoint(
             if not isinstance(msg, dict):
                 continue
             msg_type = msg.get("type")
-            if msg_type == "sms:active_thread":
+            if msg_type == "softphone:presence":
+                presence_status = str((msg.get("payload") or {}).get("status") or "")
+                try:
+                    from app.services.softphone_presence_service import apply_presence_status
+
+                    async with async_session_maker() as db:
+                        await apply_presence_status(db, UUID(str(user_id)), presence_status)
+                except Exception as e:
+                    logger.warning("WebSocket presence update failed for user %s: %s", user_id, e)
+            elif msg_type == "sms:active_thread":
                 msg_payload = msg.get("payload") or {}
                 active_lead_id = msg_payload.get("lead_id")
                 ws_manager.set_active_sms_thread(

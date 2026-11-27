@@ -24,7 +24,7 @@ import { AppointmentService, Appointment, getAppointmentStatusLabel } from "@/se
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { formatDateInTimezone } from "@/utils/timezone"
 import { DonutChart } from "@tremor/react"
-import { useStatsRefresh } from "@/hooks/use-websocket"
+import { useStatsRefresh, useWebSocketEvent, useWebSocketResync } from "@/hooks/use-websocket"
 import { TimeTrackingService } from "@/services/time-tracking-service"
 import { formatMoney } from "@/lib/time-tracking"
 
@@ -50,6 +50,18 @@ export function SuperAdminDashboard() {
         }
     }, [])
 
+    const loadRoster = React.useCallback(() => {
+        TimeTrackingService.getRoster()
+            .then((roster) => {
+                setBdcClockedIn(roster.clocked_in_count)
+                setBdcWeekPay(Number(roster.team_week.estimated_pay) || 0)
+            })
+            .catch(() => {
+                setBdcClockedIn(null)
+                setBdcWeekPay(null)
+            })
+    }, [])
+
     // Listen for real-time stats refresh via WebSocket
     useStatsRefresh(React.useCallback(() => {
         fetchStats()
@@ -73,16 +85,14 @@ export function SuperAdminDashboard() {
             }
         }
         fetchData()
-        TimeTrackingService.getRoster()
-            .then((roster) => {
-                setBdcClockedIn(roster.clocked_in_count)
-                setBdcWeekPay(Number(roster.team_week.estimated_pay) || 0)
-            })
-            .catch(() => {
-                setBdcClockedIn(null)
-                setBdcWeekPay(null)
-            })
-    }, [])
+        loadRoster()
+    }, [loadRoster])
+
+    useWebSocketEvent("time_clock:updated", loadRoster, [loadRoster])
+    useWebSocketResync(React.useCallback(() => {
+        fetchStats()
+        loadRoster()
+    }, [fetchStats, loadRoster]))
 
     const statCards = stats ? [
         {

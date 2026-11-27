@@ -465,18 +465,11 @@ async def report_softphone_presence(
     from app.services import softphone_presence_service as presence
 
     presence_status = (body.status or "").strip().lower()
-    if presence_status in {"registered", "heartbeat", "idle"}:
-        await presence.upsert_presence(db, current_user.id, busy=False)
-    elif presence_status == "busy":
-        await presence.upsert_presence(db, current_user.id, busy=True)
-    elif presence_status == "unregistered":
-        await presence.clear_presence(db, current_user.id)
-    else:
+    if not await presence.apply_presence_status(db, current_user.id, presence_status):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="status must be registered|heartbeat|busy|idle|unregistered",
         )
-    await db.commit()
     return {"ok": True, "status": presence_status}
 
 
@@ -710,6 +703,7 @@ async def mark_all_missed_calls_seen(
 
     if marked:
         await db.commit()
+        await ws_manager.broadcast_all({"type": "missed_calls:changed", "payload": {}})
     return {"ok": True, "marked": marked}
 
 
@@ -733,6 +727,7 @@ async def mark_missed_call_seen(
     call.meta_data = meta
     flag_modified(call, "meta_data")
     await db.commit()
+    await ws_manager.broadcast_all({"type": "missed_calls:changed", "payload": {}})
     return {"ok": True, "id": str(call.id)}
 
 

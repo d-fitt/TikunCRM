@@ -25,6 +25,8 @@ class WebSocketService {
     private isConnecting = false;
     private lifecycleBound = false;
     private intentionalClose = false;
+    /** Set after the first successful open so later opens are reported as resyncs. */
+    private hasOpenedOnce = false;
 
     /**
      * Connect to the WebSocket server
@@ -73,6 +75,11 @@ class WebSocketService {
                 this.reconnectAttempts = 0;
                 this.startPingInterval();
                 this.emit("connection:open", {});
+                // Events sent while we were offline are lost; listeners refetch once instead of polling.
+                if (this.hasOpenedOnce) {
+                    this.emit("connection:resync", {});
+                }
+                this.hasOpenedOnce = true;
             };
 
             this.ws.onmessage = (event) => {
@@ -219,6 +226,19 @@ class WebSocketService {
     send(message: string): void {
         if (this.ws?.readyState === WebSocket.OPEN) {
             this.ws.send(message);
+        }
+    }
+
+    /**
+     * Send a typed JSON message. Returns false when the socket is not open so callers can fall back to HTTP.
+     */
+    sendEvent(type: string, payload: unknown): boolean {
+        if (this.ws?.readyState !== WebSocket.OPEN) return false;
+        try {
+            this.ws.send(JSON.stringify({ type, payload }));
+            return true;
+        } catch {
+            return false;
         }
     }
 

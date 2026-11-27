@@ -20,7 +20,7 @@ import { MessageComposer } from "./message-composer";
 import { SMSCallLogCard } from "./call-log-card";
 import { SMSCallLog, SMSConsentStatus, SMSMessage, smsService } from "@/services/sms-service";
 import { useToast } from "@/hooks/use-toast";
-import { useWebSocketEvent } from "@/hooks/use-websocket";
+import { useWebSocketEvent, useWebSocketResync } from "@/hooks/use-websocket";
 import { wsService } from "@/lib/websocket";
 import { useCallLeadOptional } from "@/contexts/call-lead-context";
 import { useAuthStore } from "@/stores/auth-store";
@@ -148,25 +148,22 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
     };
   }, [leadId]);
 
-  // Fallback poll so incoming replies/calls appear even if a WebSocket event is missed
-  useEffect(() => {
-    const id = setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+  const reloadIfThisLead = useCallback(
+    (data: { lead_id?: string | null } | undefined) => {
+      if (data?.lead_id && String(data.lead_id) === String(leadId)) {
         void loadConversation({ silent: true });
       }
-    }, 5000);
-    return () => clearInterval(id);
-  }, [loadConversation]);
-
-  useWebSocketEvent<{ lead_id?: string }>(
-    "sms:received",
-    useCallback(
-      (data) => {
-        if (data?.lead_id === leadId) void loadConversation({ silent: true });
-      },
-      [leadId, loadConversation]
-    ),
+    },
     [leadId, loadConversation]
+  );
+
+  useWebSocketEvent<{ lead_id?: string }>("sms:received", reloadIfThisLead, [reloadIfThisLead]);
+  // Another agent texting this customer
+  useWebSocketEvent<{ lead_id?: string }>("sms:sent", reloadIfThisLead, [reloadIfThisLead]);
+  useWebSocketEvent<{ lead_id?: string }>("call:ring_ended", reloadIfThisLead, [reloadIfThisLead]);
+  useWebSocketResync(
+    useCallback(() => void loadConversation({ silent: true }), [loadConversation]),
+    [loadConversation]
   );
 
   useWebSocketEvent<{ lead_id?: string; message_id?: string; status?: string }>(
@@ -261,7 +258,12 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
     "call:completed",
     useCallback(
       (data) => {
-        if (!data?.lead_id || String(data.lead_id) !== String(leadId) || !data.call) return;
+        if (!data?.lead_id || String(data.lead_id) !== String(leadId)) return;
+        if (!data.call) {
+          // Some completion paths only send ids; fetch the finished call
+          void loadConversation({ silent: true });
+          return;
+        }
         const c = data.call;
         const newCall: SMSCallLog = {
           id: c.id,
@@ -288,9 +290,9 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
           return [...prev, newCall];
         });
       },
-      [leadId]
+      [leadId, loadConversation]
     ),
-    [leadId]
+    [leadId, loadConversation]
   );
 
   // Real-time call recording ready - attach recording player to existing call card
