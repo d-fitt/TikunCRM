@@ -6,6 +6,7 @@ import apiClient from "@/lib/api-client"
 import {
   isFirebaseConfigured,
   getFCMToken,
+  getFCMTokenOrThrow,
   onForegroundMessage,
 } from "@/lib/firebase"
 import { canUseWebPush, getIOSPushRequirementMessage } from "@/lib/pwa-utils"
@@ -29,7 +30,8 @@ const TOKEN_REGISTER_TIMEOUT_MS = 20_000
 const API_REGISTER_TIMEOUT_MS = 15_000
 
 // Shared across hook instances (FcmRegistrar + PushNotificationToggle on same page)
-let autoRegisterPromise: Promise<boolean> | null = null
+type RegisterResult = { ok: boolean; error?: string }
+let autoRegisterPromise: Promise<RegisterResult> | null = null
 let sharedForegroundHandler: (() => void) | null = null
 
 /**
@@ -118,8 +120,8 @@ export function useFCMNotifications(): UseFCMNotificationsReturn {
       })
 
       if (permission === "granted") {
-        const subscribed = await autoRegisterTokenOnce()
-        if (subscribed) {
+        const res = await autoRegisterTokenOnce()
+        if (res.ok) {
           setState((prev) => ({ ...prev, isSubscribed: true }))
         }
       }
@@ -173,12 +175,12 @@ export function useFCMNotifications(): UseFCMNotificationsReturn {
         return false
       }
 
-      const subscribed = await autoRegisterTokenOnce()
-      if (!subscribed) {
+      const res = await autoRegisterTokenOnce()
+      if (!res.ok) {
         setState((prev) => ({
           ...prev,
           isLoading: false,
-          error: "Failed to get FCM token. Try closing and reopening the app.",
+          error: res.error || "Failed to enable push notifications. Try closing and reopening the app.",
         }))
         return false
       }
@@ -255,22 +257,18 @@ export function useFCMNotifications(): UseFCMNotificationsReturn {
   }
 }
 
-async function autoRegisterTokenOnce(): Promise<boolean> {
+async function autoRegisterTokenOnce(): Promise<RegisterResult> {
   if (autoRegisterPromise) {
     return autoRegisterPromise
   }
 
-  autoRegisterPromise = (async () => {
+  autoRegisterPromise = (async (): Promise<RegisterResult> => {
     try {
       const token = await withTimeout(
-        getFCMToken(),
+        getFCMTokenOrThrow(),
         TOKEN_REGISTER_TIMEOUT_MS,
         "FCM token request timed out"
       )
-      if (!token) {
-        autoRegisterPromise = null
-        return false
-      }
 
       await withTimeout(
         apiClient.post("/push/fcm/register", {
@@ -282,11 +280,16 @@ async function autoRegisterTokenOnce(): Promise<boolean> {
       )
       console.log("[FCM] Token auto-registered on app load")
       setupSharedForegroundHandler()
-      return true
-    } catch (error) {
-      console.warn("[FCM] Auto-registration failed:", error)
+      return { ok: true }
+    } catch (error: any) {
+      const apiDetail = error?.response?.data?.detail
+      const status = error?.response?.status
+      const message = apiDetail
+        ? `${apiDetail}${status ? ` (HTTP ${status})` : ""}`
+        : error?.message || "Failed to register for push notifications"
+      console.warn("[FCM] Auto-registration failed:", message, error)
       autoRegisterPromise = null
-      return false
+      return { ok: false, error: message }
     }
   })()
 
@@ -398,7 +401,8 @@ export async function registerFCMToken(): Promise<boolean> {
     return false
   }
 
-  return autoRegisterTokenOnce()
+  const res = await autoRegisterTokenOnce()
+  return res.ok
 }
 
 export default useFCMNotifications
