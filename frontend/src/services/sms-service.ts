@@ -23,6 +23,12 @@ export interface SMSConsentStatus {
   block_reason: string | null;
 }
 
+export interface SMSLeadSearchItem {
+  lead_id: string;
+  lead_name: string;
+  lead_phone: string | null;
+}
+
 export interface SMSCampaign {
   id: string;
   body: string;
@@ -165,6 +171,17 @@ class SMSService {
    */
   async markAsRead(messageId: string): Promise<void> {
     await apiClient.patch(`/sms/messages/${messageId}/read`);
+  }
+
+  /**
+   * Find leads by name or phone to start a new text
+   */
+  async searchLeads(q: string, limit = 20): Promise<SMSLeadSearchItem[]> {
+    if (q.trim().length < 2) return [];
+    const response = await apiClient.get<SMSLeadSearchItem[]>("/sms/leads/search", {
+      params: { q: q.trim(), limit },
+    });
+    return response.data;
   }
 
   /**

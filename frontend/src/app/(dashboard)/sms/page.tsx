@@ -2,14 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Loader2, MessageSquare, RefreshCw, Search } from "lucide-react";
+import { Loader2, MessageSquare, RefreshCw, Search, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConversationList, ConversationThread } from "@/components/sms";
 import { CampaignsPanel } from "@/components/sms/campaigns-panel";
-import { ConversationListItem, SMSConfig, smsService } from "@/services/sms-service";
+import { ConversationListItem, SMSConfig, SMSLeadSearchItem, smsService } from "@/services/sms-service";
 import { useWebSocketEvent } from "@/hooks/use-websocket";
 import { useAuthStore } from "@/stores/auth-store";
 
@@ -27,6 +27,9 @@ export default function SMSPage() {
   const [loading, setLoading] = useState(false);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [leadHits, setLeadHits] = useState<SMSLeadSearchItem[]>([]);
+  const [leadSearchLoading, setLeadSearchLoading] = useState(false);
+  const [pickedLead, setPickedLead] = useState<SMSLeadSearchItem | null>(null);
   const [tab, setTab] = useState(searchParams.get("tab") === "campaigns" ? "campaigns" : "conversations");
 
   useEffect(() => {
@@ -69,6 +72,26 @@ export default function SMSPage() {
     [loadConversations]
   );
 
+  useEffect(() => {
+    const q = search.trim();
+    if (!config?.sms_enabled || q.length < 2) {
+      setLeadHits([]);
+      setLeadSearchLoading(false);
+      return;
+    }
+    setLeadSearchLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        setLeadHits(await smsService.searchLeads(q, 20));
+      } catch {
+        setLeadHits([]);
+      } finally {
+        setLeadSearchLoading(false);
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [search, config?.sms_enabled]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return conversations;
@@ -81,9 +104,12 @@ export default function SMSPage() {
   }, [conversations, search]);
 
   const selected = conversations.find((c) => c.lead_id === selectedLeadId);
+  const newTextHits = leadHits.filter((l) => !conversations.some((c) => c.lead_id === l.lead_id));
+  const searching = search.trim().length >= 2;
 
   const handleSelect = (leadId: string) => {
     setSelectedLeadId(leadId);
+    setPickedLead(null);
     const conv = conversations.find((c) => c.lead_id === leadId);
     if (conv && conv.unread_count > 0) {
       setConversations((prev) => prev.map((c) => (c.lead_id === leadId ? { ...c, unread_count: 0 } : c)));
@@ -135,7 +161,7 @@ export default function SMSPage() {
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search name or phone"
+              placeholder="Search any lead by name or phone"
               className="pl-8"
             />
           </div>
@@ -146,11 +172,58 @@ export default function SMSPage() {
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : (
-            <ConversationList
-              conversations={filtered}
-              selectedLeadId={selectedLeadId || undefined}
-              onSelect={handleSelect}
-            />
+            <>
+              {searching && (leadSearchLoading || newTextHits.length > 0) && (
+                <div className="border-b">
+                  <p className="px-4 pt-3 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Start a new text
+                  </p>
+                  {leadSearchLoading ? (
+                    <div className="flex justify-center py-4">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : (
+                    newTextHits.map((lead) => (
+                      <button
+                        key={lead.lead_id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedLeadId(lead.lead_id);
+                          setPickedLead(lead);
+                        }}
+                        className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-muted/50 transition-colors ${
+                          selectedLeadId === lead.lead_id ? "bg-muted" : ""
+                        }`}
+                      >
+                        <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                          <User className="h-4 w-4 text-primary" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-sm truncate">{lead.lead_name}</p>
+                          {lead.lead_phone && (
+                            <p className="text-xs text-muted-foreground truncate">{lead.lead_phone}</p>
+                          )}
+                        </div>
+                        <span className="text-xs font-medium text-primary shrink-0">New text</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+              {searching && !leadSearchLoading && newTextHits.length === 0 && filtered.length === 0 ? (
+                <p className="px-4 py-8 text-center text-sm text-muted-foreground">
+                  No lead matches &quot;{search.trim()}&quot;.
+                </p>
+              ) : (
+                (filtered.length > 0 || !searching) && (
+                  <ConversationList
+                    conversations={filtered}
+                    selectedLeadId={selectedLeadId || undefined}
+                    onSelect={handleSelect}
+                  />
+                )
+              )}
+            </>
           )}
         </div>
       </div>
@@ -160,9 +233,12 @@ export default function SMSPage() {
           <ConversationThread
             key={selectedLeadId}
             leadId={selectedLeadId}
-            leadName={selected?.lead_name ?? ""}
-            leadPhone={selected?.lead_phone ?? null}
-            onBack={() => setSelectedLeadId(null)}
+            leadName={selected?.lead_name ?? pickedLead?.lead_name ?? ""}
+            leadPhone={selected?.lead_phone ?? pickedLead?.lead_phone ?? null}
+            onBack={() => {
+              setSelectedLeadId(null);
+              setPickedLead(null);
+            }}
             onMessageSent={() => loadConversations({ silent: true })}
           />
         ) : (

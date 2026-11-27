@@ -8,7 +8,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -202,6 +202,53 @@ async def send_sms(
         success=False,
         error=error
     )
+
+
+class LeadSearchItem(BaseModel):
+    lead_id: UUID
+    lead_name: str
+    lead_phone: Optional[str]
+
+
+@router.get("/leads/search", response_model=List[LeadSearchItem])
+async def search_leads_for_sms(
+    q: str = Query(..., min_length=2, max_length=100),
+    limit: int = Query(20, ge=1, le=50),
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Find leads by name or phone (any format) to start a text. One row per customer, newest lead."""
+    if not current_user.dealership_id:
+        return []
+    term = q.strip()
+    full_name = func.concat_ws(" ", Customer.first_name, Customer.last_name)
+    conditions = [full_name.ilike(f"%{term}%")]
+    digits = "".join(ch for ch in term if ch.isdigit())
+    if len(digits) >= 3:
+        conditions.append(func.regexp_replace(Customer.phone, r"\D", "", "g").like(f"%{digits}%"))
+    rows = (
+        await db.execute(
+            select(Lead.id, Customer.first_name, Customer.last_name, Customer.phone)
+            .join(Customer, Lead.customer_id == Customer.id)
+            .where(
+                Lead.dealership_id == current_user.dealership_id,
+                Customer.phone.isnot(None),
+                Customer.phone != "",
+                or_(*conditions),
+            )
+            .distinct(Customer.id)
+            .order_by(Customer.id, Lead.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    return [
+        LeadSearchItem(
+            lead_id=lead_id,
+            lead_name=f"{first or ''} {last or ''}".strip() or "Unknown",
+            lead_phone=phone,
+        )
+        for lead_id, first, last, phone in rows
+    ]
 
 
 @router.get("/conversations", response_model=ConversationsListResponse)
