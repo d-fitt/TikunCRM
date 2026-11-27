@@ -517,7 +517,7 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
   useEffect(() => {
     if (!isEnabled) return;
 
-    const onVisible = () => {
+    const onWake = () => {
       if (document.visibilityState !== "visible") return;
       if (!twilioVoiceManager.getIsInitialized()) {
         void initialize();
@@ -525,18 +525,20 @@ export function useTwilioDevice(): UseTwilioDeviceReturn {
       }
       if (!canForceTwilioReconnect()) {
         console.log("Twilio force reconnect skipped — inbound call window active");
+        void twilioVoiceManager.ensureRegistered(false);
         return;
       }
       void twilioVoiceManager.ensureRegistered(true);
     };
 
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", onVisible);
-    window.addEventListener("online", onVisible);
+    // visibilitychange and online mean the tab was actually suspended or offline.
+    // window "focus" also fires when clicking the page or opening DevTools, and a
+    // forced unregister+register on every focus opens a burst of Twilio requests.
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("online", onWake);
     return () => {
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", onVisible);
-      window.removeEventListener("online", onVisible);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("online", onWake);
     };
   }, [isEnabled, initialize, canForceTwilioReconnect]);
 

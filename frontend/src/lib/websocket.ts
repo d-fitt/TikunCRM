@@ -32,17 +32,18 @@ class WebSocketService {
      * Connect to the WebSocket server
      */
     connect(userId: string, token: string): void {
+        const sameSession = this.userId === userId && this.token === token;
         this.userId = userId;
         this.token = token;
         this.intentionalClose = false;
         this.bindLifecycleListeners();
 
-        if (this.ws?.readyState === WebSocket.OPEN) {
+        if (sameSession && this.ws?.readyState === WebSocket.OPEN) {
             console.log("[WS] Already connected");
             return;
         }
 
-        if (this.ws?.readyState === WebSocket.CONNECTING || this.isConnecting) {
+        if (sameSession && (this.ws?.readyState === WebSocket.CONNECTING || this.isConnecting)) {
             console.log("[WS] Connection already in progress");
             return;
         }

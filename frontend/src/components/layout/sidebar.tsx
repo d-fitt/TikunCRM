@@ -347,10 +347,10 @@ export function Sidebar() {
         }
         
         // Fetch once on mount when user is logged in. Pool/unassigned count updates via WebSocket (lead:updated, badges:refresh, stats:refresh).
-        if (user && role) {
+        if (user?.id && role) {
             fetchBadgeCounts()
         }
-    }, [user, role])
+    }, [user?.id, role])
     
     // Refetch specific badge counts (used by WebSocket handlers)
     const refetchBadgeCounts = React.useCallback((which: { unassigned?: boolean; managerReview?: boolean; notifications?: boolean; appointments?: boolean; followUps?: boolean; whatsapp?: boolean; sms?: boolean }) => {
