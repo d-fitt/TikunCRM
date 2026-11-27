@@ -6,11 +6,12 @@ import {
   AlertTriangle,
   Bookmark,
   Calendar,
-  CheckCircle2,
+  Check,
   ChevronDown,
   ChevronUp,
   Clock,
   Copy,
+  Eye,
   FileText,
   Film,
   Filter,
@@ -21,7 +22,6 @@ import {
   Play,
   RotateCcw,
   Send,
-  ShieldCheck,
   SlidersHorizontal,
   Smartphone,
   Smile,
@@ -39,6 +39,20 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -62,8 +76,8 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
 const STATUS_LABELS: Record<SMSCampaign["status"], string> = {
-  draft: "Saved Draft",
-  queued: "Scheduled / Waiting",
+  draft: "Draft",
+  queued: "Scheduled",
   sending: "Sending",
   completed: "Completed",
   cancelled: "Cancelled",
@@ -82,6 +96,32 @@ const PROMO_EMOJIS = [
   "⭐", "✅", "📍", "📅", "⏰", "👋", "😊", "🙏",
 ];
 
+const CAMPAIGN_VARIABLE_GROUPS: {
+  label: string;
+  items: { token: string; label: string; example: string }[];
+}[] = [
+  {
+    label: "Customer & Lead",
+    items: [
+      { token: "{nombre}", label: "First name", example: "María" },
+      { token: "{apellido}", label: "Last name", example: "García" },
+      { token: "{nombre_completo}", label: "Full name", example: "María García" },
+      { token: "{vehiculo}", label: "Interested vehicle", example: "2022 Toyota RAV4" },
+      { token: "{enganche}", label: "Down payment", example: "$2,000" },
+      { token: "{agente}", label: "Assigned agent", example: "Carlos" },
+    ],
+  },
+  {
+    label: "Dealership & Links",
+    items: [
+      { token: "{tienda}", label: "Dealership name", example: "Carvamonos" },
+      { token: "{telefono_tienda}", label: "Store phone", example: "(404) 555-0199" },
+      { token: "{direccion}", label: "Store address", example: "123 Main St" },
+      { token: "{inventario}", label: "Inventory link", example: "carvamonos.com/inventario" },
+    ],
+  },
+];
+
 const EMPTY_FILTERS: SMSCampaignFilters = {
   stage_ids: [],
   campaigns: [],
@@ -95,6 +135,8 @@ const EMPTY_FILTERS: SMSCampaignFilters = {
   exclude_contacted_in_days: null,
   search: null,
 };
+
+type DatePreset = "all" | "7" | "30" | "90" | "custom";
 
 function errorDetail(err: unknown): string | undefined {
   const e = err as { response?: { data?: { detail?: string } } };
@@ -115,16 +157,16 @@ function summarizeFilters(f: SMSCampaignFilters | undefined, options: SMSCampaig
   const tags: string[] = [];
   if (f.stage_ids && f.stage_ids.length > 0) {
     const names = f.stage_ids.map((id) => options?.stages.find((s) => s.id === id)?.name || "Stage");
-    tags.push(`Stages: ${names.slice(0, 2).join(", ")}${names.length > 2 ? ` +${names.length - 2}` : ""}`);
+    tags.push(`Stage: ${names.slice(0, 2).join(", ")}${names.length > 2 ? ` +${names.length - 2}` : ""}`);
   }
   if (f.campaigns && f.campaigns.length > 0) {
-    tags.push(`Campaigns: ${f.campaigns.length}`);
+    tags.push(`Campaign: ${f.campaigns.length === 1 ? f.campaigns[0] : `${f.campaigns.length} selected`}`);
   }
   if (f.sources && f.sources.length > 0) {
-    tags.push(`Sources: ${f.sources.map((s) => SOURCE_LABELS[s] || s).join(", ")}`);
+    tags.push(`Source: ${f.sources.map((s) => SOURCE_LABELS[s] || s).join(", ")}`);
   }
   if (f.date_from || f.date_to) {
-    tags.push(`Dates: ${f.date_from || "Any"} → ${f.date_to || "Now"}`);
+    tags.push(`Dates: ${f.date_from || "Any"} to ${f.date_to || "Now"}`);
   }
   if (f.has_stips === true) tags.push("Has stips");
   if (f.has_stips === false) tags.push("No stips");
@@ -135,9 +177,9 @@ function summarizeFilters(f: SMSCampaignFilters | undefined, options: SMSCampaig
     const ag = options?.agents.find((a) => a.id === f.assigned_to);
     tags.push(`Agent: ${ag?.name || "Selected"}`);
   }
-  if (f.min_down_payment) tags.push(`Down ≥ $${f.min_down_payment}`);
+  if (f.min_down_payment) tags.push(`Down ≥ $${f.min_down_payment.toLocaleString()}`);
   if (f.exclude_contacted_in_days) tags.push(`Not texted in ${f.exclude_contacted_in_days}d`);
-  if (f.search) tags.push(`"${f.search}"`);
+  if (f.search) tags.push(`Search: "${f.search}"`);
   return tags;
 }
 
@@ -158,9 +200,13 @@ export function CampaignsPanel() {
   const [mediaUrls, setMediaUrls] = useState<string[]>([]);
   const [uploadingMedia, setUploadingMedia] = useState(false);
   const [filters, setFilters] = useState<SMSCampaignFilters>(EMPTY_FILTERS);
+  const [datePreset, setDatePreset] = useState<DatePreset>("all");
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduledAt, setScheduledAt] = useState("");
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [showLeadPreviewTable, setShowLeadPreviewTable] = useState(false);
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
+  const [leadsModalOpen, setLeadsModalOpen] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
+  const [varsOpen, setVarsOpen] = useState(false);
   const [campaignSearch, setCampaignSearch] = useState("");
 
   // Live previews
@@ -214,7 +260,7 @@ export function CampaignsPanel() {
     setAudienceLoading(true);
     const t = setTimeout(async () => {
       try {
-        const res = await smsService.previewCampaignAudience(filters, 30);
+        const res = await smsService.previewCampaignAudience(filters, 50);
         setAudiencePreview(res);
       } catch {
         setAudiencePreview(null);
@@ -251,6 +297,17 @@ export function CampaignsPanel() {
 
   const activeFilterTags = useMemo(() => summarizeFilters(filters, filterOptions), [filters, filterOptions]);
 
+  const moreFiltersCount = useMemo(() => {
+    let n = 0;
+    if ((filters.sources?.length || 0) > 0) n++;
+    if (filters.assigned_to) n++;
+    if (filters.min_down_payment) n++;
+    if (filters.exclude_contacted_in_days) n++;
+    if (filters.search) n++;
+    if (filters.only_active) n++;
+    return n;
+  }, [filters]);
+
   const toggleArrayFilter = (key: "stage_ids" | "campaigns" | "sources", value: string) => {
     setFilters((prev) => {
       const current = prev[key] || [];
@@ -259,16 +316,23 @@ export function CampaignsPanel() {
     });
   };
 
-  const applyDatePreset = (days: number | null) => {
-    if (days === null) {
+  const handleDatePresetChange = (preset: DatePreset) => {
+    setDatePreset(preset);
+    if (preset === "all") {
       setFilters((prev) => ({ ...prev, date_from: null, date_to: null }));
-    } else {
+    } else if (preset !== "custom") {
+      const days = Number(preset);
       setFilters((prev) => ({
         ...prev,
         date_from: format(subDays(new Date(), days), "yyyy-MM-dd"),
         date_to: format(new Date(), "yyyy-MM-dd"),
       }));
     }
+  };
+
+  const clearAllFilters = () => {
+    setFilters(EMPTY_FILTERS);
+    setDatePreset("all");
   };
 
   const insertAtCursor = (snippet: string) => {
@@ -315,6 +379,8 @@ export function CampaignsPanel() {
     setBody("");
     setMediaUrls([]);
     setFilters(EMPTY_FILTERS);
+    setDatePreset("all");
+    setScheduleEnabled(false);
     setScheduledAt("");
     setMsgPreview(null);
   };
@@ -324,11 +390,19 @@ export function CampaignsPanel() {
     setName(c.name ? (asDraftEdit ? c.name : `${c.name} (Copy)`) : "");
     setBody(c.body);
     setMediaUrls(c.media_urls || []);
-    setFilters({ ...EMPTY_FILTERS, ...(c.filters || {}) });
-    setScheduledAt(c.scheduled_at ? c.scheduled_at.slice(0, 16) : "");
+    const nextFilters = { ...EMPTY_FILTERS, ...(c.filters || {}) };
+    setFilters(nextFilters);
+    setDatePreset(nextFilters.date_from || nextFilters.date_to ? "custom" : "all");
+    if (c.scheduled_at) {
+      setScheduleEnabled(true);
+      setScheduledAt(c.scheduled_at.slice(0, 16));
+    } else {
+      setScheduleEnabled(false);
+      setScheduledAt("");
+    }
     toast({
-      title: asDraftEdit ? "Draft loaded" : "Campaign cloned into builder",
-      description: "Review the filters and message, then save or launch.",
+      title: asDraftEdit ? "Draft loaded" : "Campaign copied to builder",
+      description: "Review and adjust before sending.",
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -339,7 +413,7 @@ export function CampaignsPanel() {
     media_urls: mediaUrls,
     filters,
     save_as_draft: saveAsDraft,
-    scheduled_at: scheduledAt ? new Date(scheduledAt).toISOString() : null,
+    scheduled_at: scheduleEnabled && scheduledAt ? new Date(scheduledAt).toISOString() : null,
   });
 
   const handleSaveDraft = async () => {
@@ -349,12 +423,12 @@ export function CampaignsPanel() {
       if (editingDraftId) {
         const updated = await smsService.updateDraftCampaign(editingDraftId, buildPayload(true));
         setCampaigns((prev) => prev.map((c) => (c.id === editingDraftId ? updated : c)));
-        toast({ title: "Draft updated", description: "You can launch or reuse this campaign anytime." });
+        toast({ title: "Draft updated" });
       } else {
         const created = await smsService.createCampaign(buildPayload(true));
         setCampaigns((prev) => [created, ...prev]);
         setEditingDraftId(created.id);
-        toast({ title: "Campaign saved as draft", description: "Reuse or launch it anytime from Saved Drafts." });
+        toast({ title: "Draft saved" });
       }
     } catch (err) {
       toast({ title: "Could not save draft", description: errorDetail(err), variant: "destructive" });
@@ -375,11 +449,12 @@ export function CampaignsPanel() {
         created = await smsService.createCampaign(buildPayload(false));
         setCampaigns((prev) => [created, ...prev]);
       }
+      const wasScheduled = scheduleEnabled && !!scheduledAt;
       resetBuilder();
       toast({
-        title: scheduledAt ? "Campaign scheduled" : "Campaign launched",
-        description: scheduledAt
-          ? "Texts will start automatically at your scheduled time (within 8 AM–8 PM)."
+        title: wasScheduled ? "Campaign scheduled" : "Campaign launched",
+        description: wasScheduled
+          ? "Texts will start automatically at your scheduled time."
           : overview?.in_send_window
             ? "Texts start going out within a minute."
             : `Texts will start at ${overview?.send_window.split(" - ")[0]} (${overview?.timezone}).`,
@@ -415,7 +490,9 @@ export function CampaignsPanel() {
     setLaunchingId(id);
     try {
       const updated = await smsService.launchCampaign(id);
-      setCampaigns((prev) => prev.map((c) => (c.id === id ? { ...c, ...updated, created_by_name: c.created_by_name } : c)));
+      setCampaigns((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, ...updated, created_by_name: c.created_by_name } : c))
+      );
       toast({ title: "Draft launched", description: `Queued for ${updated.total_recipients} matching customers.` });
     } catch (err) {
       toast({ title: "Could not launch", description: errorDetail(err), variant: "destructive" });
@@ -428,7 +505,9 @@ export function CampaignsPanel() {
     setCancellingId(id);
     try {
       const updated = await smsService.cancelCampaign(id);
-      setCampaigns((prev) => prev.map((c) => (c.id === id ? { ...c, ...updated, created_by_name: c.created_by_name } : c)));
+      setCampaigns((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, ...updated, created_by_name: c.created_by_name } : c))
+      );
     } catch (err) {
       toast({ title: "Could not cancel", description: errorDetail(err), variant: "destructive" });
     } finally {
@@ -476,115 +555,115 @@ export function CampaignsPanel() {
   });
 
   const draftCount = campaigns.filter((c) => c.status === "draft").length;
+  const selectedStageNames = (filters.stage_ids || []).map(
+    (id) => filterOptions?.stages.find((s) => s.id === id)?.name || "Stage"
+  );
 
   return (
     <div className="space-y-6 pb-8">
       {!overview?.promo_enabled && (
         <div className="flex items-start gap-2.5 rounded-lg border border-amber-300 bg-amber-50 p-3.5 text-sm text-amber-900 dark:bg-amber-950/30 dark:text-amber-200 dark:border-amber-800">
           <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-          <div>
-            <span className="font-medium">Promotional sending is currently turned off.</span> You can still build,
-            filter audiences, preview, and save campaign drafts here. A Super Admin can turn on{" "}
-            <span className="font-medium">Promotional texts</span> in Settings → Twilio when ready to launch.
-          </div>
+          <span>
+            <span className="font-medium">Promotional texts are off.</span> You can still build and save drafts here.
+            Turn them on in <span className="font-medium">Settings → Twilio</span> when ready to send.
+          </span>
         </div>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(340px,0.95fr)] items-start">
-        {/* LEFT COLUMN: Audience Filters + Composer */}
-        <div className="space-y-6">
-          {/* 1. AUDIENCE FILTERS */}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px] items-start">
+        {/* LEFT: Step 1 (Audience) + Step 2 (Message) */}
+        <div className="space-y-6 min-w-0">
+          {/* STEP 1: AUDIENCE */}
           <Card>
-            <CardHeader className="pb-3">
+            <CardHeader className="pb-4">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div>
                   <CardTitle className="flex items-center gap-2 text-base">
                     <Filter className="h-4 w-4 text-primary" />
-                    1. Target Audience Filters
-                    {activeFilterTags.length > 0 && (
-                      <Badge variant="secondary" className="ml-1">{activeFilterTags.length} active</Badge>
-                    )}
+                    1. Choose Audience
                   </CardTitle>
                   <CardDescription className="mt-0.5">
-                    Only customers who opted in to offers and haven&apos;t replied STOP are included.
+                    Pick who should receive this offer. Only opted-in customers are included.
                   </CardDescription>
                 </div>
-                <div className="flex items-center gap-2">
-                  {activeFilterTags.length > 0 && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setFilters(EMPTY_FILTERS)}
-                      className="text-xs text-muted-foreground"
-                    >
-                      <RotateCcw className="h-3.5 w-3.5 mr-1" /> Clear filters
-                    </Button>
-                  )}
+                {activeFilterTags.length > 0 && (
                   <Button
                     type="button"
-                    variant="outline"
+                    variant="ghost"
                     size="sm"
-                    onClick={() => setShowAdvanced((v) => !v)}
+                    onClick={clearAllFilters}
+                    className="h-8 text-xs text-muted-foreground"
                   >
-                    <SlidersHorizontal className="h-3.5 w-3.5 mr-1.5" />
-                    Advanced
-                    {showAdvanced ? <ChevronUp className="h-3.5 w-3.5 ml-1" /> : <ChevronDown className="h-3.5 w-3.5 ml-1" />}
+                    <RotateCcw className="h-3.5 w-3.5 mr-1" /> Reset
                   </Button>
-                </div>
+                )}
               </div>
             </CardHeader>
 
-            <CardContent className="space-y-4">
-              {/* Row 1: Pipeline Stages */}
-              <div className="space-y-1.5">
-                <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  Lead Stages
-                </Label>
-                <div className="flex flex-wrap gap-1.5">
-                  {(filterOptions?.stages || []).map((stage) => {
-                    const selected = (filters.stage_ids || []).includes(stage.id);
-                    return (
-                      <button
-                        key={stage.id}
-                        type="button"
-                        onClick={() => toggleArrayFilter("stage_ids", stage.id)}
-                        className={cn(
-                          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
-                          selected
-                            ? "border-primary bg-primary text-primary-foreground"
-                            : "bg-background text-foreground hover:bg-muted"
-                        )}
-                      >
-                        {stage.color && (
-                          <span
-                            className="h-2 w-2 rounded-full shrink-0"
-                            style={{ backgroundColor: selected ? "#ffffff" : stage.color }}
-                          />
-                        )}
-                        {stage.name}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Row 2: Campaigns, Date Range, Stips */}
-              <div className="grid gap-4 md:grid-cols-3">
-                {/* Ad / Source Campaigns multi-select */}
+            <CardContent className="space-y-5">
+              {/* Primary Filters: clean 2x2 grid */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                {/* Lead Stages Dropdown */}
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                    Ad / Source Campaign
-                  </Label>
+                  <Label className="text-xs font-medium text-muted-foreground">Lead Stage</Label>
                   <Popover>
                     <PopoverTrigger asChild>
-                      <Button variant="outline" className="w-full justify-between font-normal text-sm">
+                      <Button variant="outline" className="w-full justify-between font-normal text-sm h-9">
+                        <span className="truncate">
+                          {selectedStageNames.length === 0
+                            ? "All stages"
+                            : selectedStageNames.length <= 2
+                              ? selectedStageNames.join(", ")
+                              : `${selectedStageNames.length} stages selected`}
+                        </span>
+                        <ChevronDown className="h-4 w-4 opacity-50 shrink-0 ml-2" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-64 p-2" align="start">
+                      <div className="max-h-60 overflow-y-auto space-y-0.5">
+                        {(filterOptions?.stages || []).map((stage) => {
+                          const checked = (filters.stage_ids || []).includes(stage.id);
+                          return (
+                            <button
+                              key={stage.id}
+                              type="button"
+                              onClick={() => toggleArrayFilter("stage_ids", stage.id)}
+                              className={cn(
+                                "w-full flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-muted",
+                                checked && "bg-primary/10 font-medium text-primary"
+                              )}
+                            >
+                              {stage.color && (
+                                <span
+                                  className="h-2 w-2 rounded-full shrink-0"
+                                  style={{ backgroundColor: stage.color }}
+                                />
+                              )}
+                              <span className="truncate flex-1">{stage.name}</span>
+                              {checked && <Check className="h-3.5 w-3.5 shrink-0" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+
+                {/* Ad / Source Campaign Dropdown */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium text-muted-foreground">Ad Campaign</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" className="w-full justify-between font-normal text-sm h-9">
                         <span className="truncate">
                           {(filters.campaigns?.length || 0) === 0
                             ? "All campaigns"
-                            : `${filters.campaigns?.length} selected`}
+                            : filters.campaigns?.length === 1
+                              ? filters.campaigns[0]
+                              : `${filters.campaigns?.length} campaigns selected`}
                         </span>
-                        <ChevronDown className="h-4 w-4 opacity-50 shrink-0" />
+                        <ChevronDown className="h-4 w-4 opacity-50 shrink-0 ml-2" />
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-72 p-2" align="start">
@@ -606,7 +685,7 @@ export function CampaignsPanel() {
                                 type="button"
                                 onClick={() => toggleArrayFilter("campaigns", c.name)}
                                 className={cn(
-                                  "w-full flex items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted",
+                                  "w-full flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-muted",
                                   checked && "bg-primary/10 font-medium text-primary"
                                 )}
                               >
@@ -623,10 +702,8 @@ export function CampaignsPanel() {
 
                 {/* Stips Added */}
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                    Stips Added
-                  </Label>
-                  <div className="grid grid-cols-3 rounded-md border p-0.5 bg-muted/40">
+                  <Label className="text-xs font-medium text-muted-foreground">Stips</Label>
+                  <div className="grid grid-cols-3 rounded-md border p-0.5 bg-muted/40 h-9">
                     {(
                       [
                         { label: "Any", val: null },
@@ -639,7 +716,7 @@ export function CampaignsPanel() {
                         type="button"
                         onClick={() => setFilters((prev) => ({ ...prev, has_stips: opt.val }))}
                         className={cn(
-                          "rounded py-1.5 text-xs font-medium transition-colors",
+                          "rounded text-xs font-medium transition-colors",
                           filters.has_stips === opt.val
                             ? "bg-background text-foreground shadow-xs"
                             : "text-muted-foreground hover:text-foreground"
@@ -651,99 +728,135 @@ export function CampaignsPanel() {
                   </div>
                 </div>
 
-                {/* Lead Created Date Range */}
+                {/* Date Range Preset */}
                 <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                      Lead Date Range
-                    </Label>
-                    <div className="flex gap-1">
-                      {[
-                        { label: "7d", d: 7 },
-                        { label: "30d", d: 30 },
-                        { label: "90d", d: 90 },
-                        { label: "All", d: null },
-                      ].map((p) => (
-                        <button
-                          key={p.label}
-                          type="button"
-                          onClick={() => applyDatePreset(p.d)}
-                          className="text-[11px] text-primary hover:underline px-1"
-                        >
-                          {p.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-1.5">
+                  <Label className="text-xs font-medium text-muted-foreground">Lead Created</Label>
+                  <Select value={datePreset} onValueChange={(v) => handleDatePresetChange(v as DatePreset)}>
+                    <SelectTrigger className="h-9 text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Any time</SelectItem>
+                      <SelectItem value="7">Last 7 days</SelectItem>
+                      <SelectItem value="30">Last 30 days</SelectItem>
+                      <SelectItem value="90">Last 90 days</SelectItem>
+                      <SelectItem value="custom">Custom dates...</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Custom Date Pickers (only shown when Custom is selected) */}
+              {datePreset === "custom" && (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">From date</Label>
                     <Input
                       type="date"
                       value={filters.date_from || ""}
                       onChange={(e) => setFilters((prev) => ({ ...prev, date_from: e.target.value || null }))}
-                      className="h-9 text-xs"
+                      className="h-9 text-sm"
                     />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">To date</Label>
                     <Input
                       type="date"
                       value={filters.date_to || ""}
                       onChange={(e) => setFilters((prev) => ({ ...prev, date_to: e.target.value || null }))}
-                      className="h-9 text-xs"
+                      className="h-9 text-sm"
                     />
                   </div>
                 </div>
-              </div>
+              )}
 
-              {/* Collapsible Advanced Filters */}
-              {showAdvanced && (
-                <div className="rounded-lg border bg-muted/20 p-4 space-y-4">
-                  <div className="grid gap-4 md:grid-cols-3">
+              {/* More Filters Toggle */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowMoreFilters((v) => !v)}
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
+                  {showMoreFilters ? "Hide extra filters" : "More filters"}
+                  {moreFiltersCount > 0 && (
+                    <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
+                      {moreFiltersCount}
+                    </Badge>
+                  )}
+                  {showMoreFilters ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                </button>
+
+                {showMoreFilters && (
+                  <div className="mt-3 rounded-lg border bg-muted/20 p-4 grid gap-4 sm:grid-cols-2">
                     {/* Lead Source */}
                     <div className="space-y-1.5">
-                      <Label className="text-xs">Lead Source</Label>
-                      <div className="flex flex-wrap gap-1.5">
-                        {(filterOptions?.sources || []).map((s) => {
-                          const selected = (filters.sources || []).includes(s.value);
-                          return (
-                            <button
-                              key={s.value}
-                              type="button"
-                              onClick={() => toggleArrayFilter("sources", s.value)}
-                              className={cn(
-                                "rounded-md border px-2 py-1 text-xs transition-colors",
-                                selected
-                                  ? "border-primary bg-primary text-primary-foreground"
-                                  : "bg-background hover:bg-muted"
-                              )}
-                            >
-                              {SOURCE_LABELS[s.value] || s.value} ({s.count})
-                            </button>
-                          );
-                        })}
-                      </div>
+                      <Label className="text-xs text-muted-foreground">Lead Source</Label>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className="w-full justify-between font-normal text-sm h-9 bg-background">
+                            <span className="truncate">
+                              {(filters.sources?.length || 0) === 0
+                                ? "All sources"
+                                : (filters.sources || []).map((s) => SOURCE_LABELS[s] || s).join(", ")}
+                            </span>
+                            <ChevronDown className="h-4 w-4 opacity-50 shrink-0 ml-2" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-56 p-2" align="start">
+                          <div className="space-y-0.5">
+                            {(filterOptions?.sources || []).map((s) => {
+                              const checked = (filters.sources || []).includes(s.value);
+                              return (
+                                <button
+                                  key={s.value}
+                                  type="button"
+                                  onClick={() => toggleArrayFilter("sources", s.value)}
+                                  className={cn(
+                                    "w-full flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-muted",
+                                    checked && "bg-primary/10 font-medium text-primary"
+                                  )}
+                                >
+                                  <span>{SOURCE_LABELS[s.value] || s.value}</span>
+                                  <span className="text-[11px] text-muted-foreground">{s.count}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </PopoverContent>
+                      </Popover>
                     </div>
 
-                    {/* Assignment */}
+                    {/* Assigned Agent */}
                     <div className="space-y-1.5">
-                      <Label className="text-xs" htmlFor="filter-assigned">Assigned Agent</Label>
-                      <select
-                        id="filter-assigned"
-                        value={filters.assigned_to || ""}
-                        onChange={(e) => setFilters((prev) => ({ ...prev, assigned_to: e.target.value || null }))}
-                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-xs shadow-xs"
+                      <Label className="text-xs text-muted-foreground">Assigned Agent</Label>
+                      <Select
+                        value={filters.assigned_to || "__any__"}
+                        onValueChange={(v) =>
+                          setFilters((prev) => ({ ...prev, assigned_to: v === "__any__" ? null : v }))
+                        }
                       >
-                        <option value="">Any assignment</option>
-                        <option value="unassigned">Unassigned leads only</option>
-                        <option value="assigned">Assigned leads only</option>
-                        {(filterOptions?.agents || []).map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.name}
-                          </option>
-                        ))}
-                      </select>
+                        <SelectTrigger className="h-9 text-sm bg-background">
+                          <SelectValue placeholder="Any agent" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__any__">Any agent</SelectItem>
+                          <SelectItem value="unassigned">Unassigned only</SelectItem>
+                          <SelectItem value="assigned">Assigned only</SelectItem>
+                          {(filterOptions?.agents || []).map((a) => (
+                            <SelectItem key={a.id} value={a.id}>
+                              {a.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
 
                     {/* Min Down Payment */}
                     <div className="space-y-1.5">
-                      <Label className="text-xs" htmlFor="filter-dp">Min Down Payment ($)</Label>
+                      <Label className="text-xs text-muted-foreground" htmlFor="filter-dp">
+                        Min Down Payment ($)
+                      </Label>
                       <Input
                         id="filter-dp"
                         type="number"
@@ -757,23 +870,21 @@ export function CampaignsPanel() {
                             min_down_payment: e.target.value ? Number(e.target.value) : null,
                           }))
                         }
-                        className="h-9 text-xs"
+                        className="h-9 text-sm bg-background"
                       />
                     </div>
-                  </div>
 
-                  <div className="grid gap-4 md:grid-cols-3 items-end">
-                    {/* Anti-fatigue */}
+                    {/* Skip recently texted */}
                     <div className="space-y-1.5">
-                      <Label className="text-xs" htmlFor="filter-fatigue">
-                        Exclude texted a promo in last (days)
+                      <Label className="text-xs text-muted-foreground" htmlFor="filter-fatigue">
+                        Skip if texted in last (days)
                       </Label>
                       <Input
                         id="filter-fatigue"
                         type="number"
                         min={0}
                         max={365}
-                        placeholder="e.g. 7 (avoid over-texting)"
+                        placeholder="e.g. 7"
                         value={filters.exclude_contacted_in_days ?? ""}
                         onChange={(e) =>
                           setFilters((prev) => ({
@@ -781,30 +892,29 @@ export function CampaignsPanel() {
                             exclude_contacted_in_days: e.target.value ? Number(e.target.value) : null,
                           }))
                         }
-                        className="h-9 text-xs"
+                        className="h-9 text-sm bg-background"
                       />
                     </div>
 
-                    {/* Keyword / Vehicle search */}
+                    {/* Keyword search */}
                     <div className="space-y-1.5">
-                      <Label className="text-xs" htmlFor="filter-search">Vehicle / Name / Phone contains</Label>
+                      <Label className="text-xs text-muted-foreground" htmlFor="filter-search">
+                        Search (vehicle, name, phone)
+                      </Label>
                       <Input
                         id="filter-search"
-                        placeholder="e.g. Silverado, SUV, Ford..."
+                        placeholder="e.g. SUV, Ford..."
                         value={filters.search || ""}
                         onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value || null }))}
-                        className="h-9 text-xs"
+                        className="h-9 text-sm bg-background"
                       />
                     </div>
 
                     {/* Active leads only */}
-                    <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
-                      <div>
-                        <Label htmlFor="filter-active" className="text-xs font-medium">
-                          Active leads only
-                        </Label>
-                        <p className="text-[11px] text-muted-foreground">Exclude closed/lost leads</p>
-                      </div>
+                    <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2 self-end h-9">
+                      <Label htmlFor="filter-active" className="text-xs font-medium cursor-pointer">
+                        Active leads only
+                      </Label>
                       <Switch
                         id="filter-active"
                         checked={!!filters.only_active}
@@ -812,191 +922,135 @@ export function CampaignsPanel() {
                       />
                     </div>
                   </div>
+                )}
+              </div>
+
+              {/* Active Filter Summary Chips */}
+              {activeFilterTags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {activeFilterTags.map((tag) => (
+                    <Badge key={tag} variant="secondary" className="text-xs font-normal">
+                      {tag}
+                    </Badge>
+                  ))}
                 </div>
               )}
 
-              {/* LIVE FILTERED AUDIENCE PREVIEW LINE + EXPANDABLE LEAD LIST */}
-              <div className="rounded-lg border bg-primary/5 p-3 space-y-2.5">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <div className="flex items-center gap-2 text-sm">
-                    {audienceLoading ? (
-                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                    ) : (
-                      <Users className="h-4 w-4 text-primary" />
-                    )}
-                    <span>
-                      <span className="font-semibold text-foreground">{matchedCount.toLocaleString()}</span>{" "}
-                      opted-in {matchedCount === 1 ? "customer matches" : "customers match"} your filters
-                    </span>
-                  </div>
-                  {sampleLeads.length > 0 && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 text-xs"
-                      onClick={() => setShowLeadPreviewTable((v) => !v)}
-                    >
-                      {showLeadPreviewTable ? "Hide lead list" : `Preview matching leads (${Math.min(sampleLeads.length, matchedCount)})`}
-                      {showLeadPreviewTable ? <ChevronUp className="h-3.5 w-3.5 ml-1" /> : <ChevronDown className="h-3.5 w-3.5 ml-1" />}
-                    </Button>
+              {/* Clean Audience Count Bar */}
+              <div className="flex items-center justify-between gap-3 rounded-lg border bg-primary/5 px-4 py-3 flex-wrap">
+                <div className="flex items-center gap-2.5 text-sm">
+                  {audienceLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
+                  ) : (
+                    <Users className="h-4 w-4 text-primary shrink-0" />
                   )}
+                  <span>
+                    <span className="font-semibold text-foreground">{matchedCount.toLocaleString()}</span>{" "}
+                    opted-in {matchedCount === 1 ? "customer" : "customers"} will receive this offer
+                  </span>
                 </div>
-
-                {/* Compact preview line of matched leads */}
-                {sampleLeads.length > 0 && !showLeadPreviewTable && (
-                  <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 text-xs">
-                    {sampleLeads.slice(0, 6).map((l) => (
-                      <span
-                        key={l.lead_id}
-                        className="inline-flex items-center gap-1.5 rounded-full border bg-background px-2.5 py-0.5 whitespace-nowrap shrink-0"
-                      >
-                        <span className="font-medium">{l.name}</span>
-                        {l.stage_name && <span className="text-muted-foreground">· {l.stage_name}</span>}
-                        {l.has_stips && (
-                          <span className="rounded bg-emerald-100 px-1 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
-                            Stips
-                          </span>
-                        )}
-                      </span>
-                    ))}
-                    {matchedCount > 6 && (
-                      <span className="text-muted-foreground whitespace-nowrap shrink-0 px-1">
-                        +{(matchedCount - 6).toLocaleString()} more
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                {/* Expandable matching leads table */}
-                {showLeadPreviewTable && sampleLeads.length > 0 && (
-                  <div className="max-h-64 overflow-auto rounded-md border bg-background">
-                    <table className="w-full text-xs">
-                      <thead className="bg-muted/50 sticky top-0 text-left text-muted-foreground">
-                        <tr>
-                          <th className="px-3 py-2 font-medium">Lead</th>
-                          <th className="px-3 py-2 font-medium">Phone</th>
-                          <th className="px-3 py-2 font-medium">Stage</th>
-                          <th className="px-3 py-2 font-medium">Campaign</th>
-                          <th className="px-3 py-2 font-medium">Stips</th>
-                          <th className="px-3 py-2 font-medium">Created</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {sampleLeads.map((l) => (
-                          <tr key={l.lead_id} className="hover:bg-muted/30">
-                            <td className="px-3 py-1.5 font-medium">{l.name}</td>
-                            <td className="px-3 py-1.5 text-muted-foreground font-mono">{l.phone}</td>
-                            <td className="px-3 py-1.5">
-                              {l.stage_name ? (
-                                <Badge variant="outline" className="text-[10px] font-normal">
-                                  {l.stage_name}
-                                </Badge>
-                              ) : (
-                                "—"
-                              )}
-                            </td>
-                            <td className="px-3 py-1.5 text-muted-foreground max-w-[160px] truncate">
-                              {l.campaign || SOURCE_LABELS[l.source] || l.source}
-                            </td>
-                            <td className="px-3 py-1.5">
-                              {l.has_stips ? (
-                                <Badge variant="secondary" className="text-[10px] bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
-                                  Yes
-                                </Badge>
-                              ) : (
-                                <span className="text-muted-foreground">No</span>
-                              )}
-                            </td>
-                            <td className="px-3 py-1.5 text-muted-foreground whitespace-nowrap">
-                              {l.created_at ? format(new Date(l.created_at), "MMM d, yyyy") : "—"}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {matchedCount > sampleLeads.length && (
-                      <p className="border-t bg-muted/20 px-3 py-1.5 text-[11px] text-muted-foreground text-center">
-                        Showing first {sampleLeads.length} of {matchedCount.toLocaleString()} matching customers
-                      </p>
-                    )}
-                  </div>
+                {sampleLeads.length > 0 && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs bg-background"
+                    onClick={() => setLeadsModalOpen(true)}
+                  >
+                    <Eye className="h-3.5 w-3.5 mr-1.5" />
+                    View list
+                  </Button>
                 )}
               </div>
             </CardContent>
           </Card>
 
-          {/* 2. MESSAGE, MEDIA & SCHEDULE COMPOSER */}
+          {/* STEP 2: MESSAGE & MEDIA */}
           <Card>
-            <CardHeader className="pb-3">
+            <CardHeader className="pb-4">
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <CardTitle className="flex items-center gap-2 text-base">
                     <Megaphone className="h-4 w-4 text-primary" />
-                    2. Compose Offer & Media
+                    2. Write Message
                     {editingDraftId && <Badge variant="secondary">Editing Draft</Badge>}
                   </CardTitle>
                   <CardDescription className="mt-0.5">
-                    Write in Spanish, attach an optional flyer or car photo (MMS), and save or launch.
+                    Write your Spanish offer and optionally attach a photo, video, or PDF.
                   </CardDescription>
                 </div>
                 {editingDraftId && (
-                  <Button type="button" variant="ghost" size="sm" onClick={resetBuilder}>
-                    New blank campaign
+                  <Button type="button" variant="ghost" size="sm" onClick={resetBuilder} className="text-xs">
+                    Start fresh
                   </Button>
                 )}
               </div>
             </CardHeader>
 
             <CardContent className="space-y-4">
-              {/* Campaign Name + Optional Schedule */}
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="camp-name" className="text-xs">Campaign Name (for saving & reuse)</Label>
-                  <Input
-                    id="camp-name"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g. Weekend SUV 0% Down Offer"
-                    maxLength={160}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="camp-sched" className="text-xs flex items-center gap-1">
-                    <Calendar className="h-3.5 w-3.5" /> Schedule Launch (optional)
-                  </Label>
-                  <Input
-                    id="camp-sched"
-                    type="datetime-local"
-                    value={scheduledAt}
-                    onChange={(e) => setScheduledAt(e.target.value)}
-                  />
-                </div>
+              {/* Campaign Name */}
+              <div className="space-y-1.5">
+                <Label htmlFor="camp-name" className="text-xs font-medium text-muted-foreground">
+                  Campaign Name (optional)
+                </Label>
+                <Input
+                  id="camp-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Weekend SUV Special"
+                  maxLength={160}
+                  className="h-9"
+                />
               </div>
 
-              {/* Message Body + Quick Insert Toolbar */}
+              {/* Message Body */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <Label htmlFor="camp-body" className="text-xs">Message Text (Spanish)</Label>
+                  <Label htmlFor="camp-body" className="text-xs font-medium text-muted-foreground">
+                    Message (Spanish)
+                  </Label>
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs px-2"
-                      onClick={() => insertAtCursor("{nombre}")}
-                    >
-                      <Sparkles className="h-3 w-3 mr-1" /> + First name
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs px-2"
-                      onClick={() => insertAtCursor(" carvamonos.com/inventario")}
-                    >
-                      + Inventory link
-                    </Button>
+                    <Popover open={varsOpen} onOpenChange={setVarsOpen}>
+                      <PopoverTrigger asChild>
+                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs px-2">
+                          <Sparkles className="h-3 w-3 mr-1" />
+                          Insert variable
+                          <ChevronDown className="h-3 w-3 ml-1 opacity-60" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-72 p-2" align="end">
+                        <div className="space-y-2.5 max-h-72 overflow-y-auto">
+                          {CAMPAIGN_VARIABLE_GROUPS.map((group) => (
+                            <div key={group.label}>
+                              <p className="px-2 py-1 text-[11px] font-medium text-muted-foreground">
+                                {group.label}
+                              </p>
+                              <div className="space-y-0.5">
+                                {group.items.map((v) => (
+                                  <button
+                                    key={v.token}
+                                    type="button"
+                                    onClick={() => {
+                                      insertAtCursor(v.token);
+                                      setVarsOpen(false);
+                                    }}
+                                    className="w-full flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted transition-colors"
+                                  >
+                                    <div className="min-w-0">
+                                      <p className="text-xs font-medium text-foreground">{v.label}</p>
+                                      <p className="text-[11px] text-muted-foreground truncate">e.g. {v.example}</p>
+                                    </div>
+                                    <code className="text-[11px] rounded bg-muted px-1.5 py-0.5 text-primary shrink-0">
+                                      {v.token}
+                                    </code>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </PopoverContent>
+                    </Popover>
                     <Popover>
                       <PopoverTrigger asChild>
                         <Button type="button" variant="outline" size="sm" className="h-7 text-xs px-2">
@@ -1018,6 +1072,31 @@ export function CampaignsPanel() {
                         </div>
                       </PopoverContent>
                     </Popover>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,application/pdf"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => {
+                        if (e.target.files) void handleUploadMedia(e.target.files);
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs px-2"
+                      disabled={uploadingMedia || mediaUrls.length >= 4}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      {uploadingMedia ? (
+                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                      ) : (
+                        <Paperclip className="h-3.5 w-3.5 mr-1" />
+                      )}
+                      Media{mediaUrls.length > 0 ? ` (${mediaUrls.length}/4)` : ""}
+                    </Button>
                   </div>
                 </div>
 
@@ -1026,94 +1105,90 @@ export function CampaignsPanel() {
                   id="camp-body"
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
-                  rows={5}
+                  rows={4}
                   maxLength={1000}
                   placeholder="Hola {nombre}, este fin de semana tenemos 0 de enganche en SUVs seleccionadas. Vea el inventario en carvamonos.com/inventario"
                 />
                 <p className="text-xs text-muted-foreground">
-                  &quot;Carvamonos:&quot; and &quot;Responda STOP para cancelar.&quot; are added automatically if missing.
-                  Only <span className="font-medium">carvamonos.com</span> links are allowed (no bit.ly or shorteners).
+                  &quot;Carvamonos:&quot; and &quot;Responda STOP para cancelar.&quot; are added automatically. Only{" "}
+                  <span className="font-medium">carvamonos.com</span> links are allowed.
                 </p>
               </div>
 
-              {/* MMS Media Attachments */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs">Media Attachment (MMS Flyer, Car Photo, Video, or PDF)</Label>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,application/pdf"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => {
-                      if (e.target.files) void handleUploadMedia(e.target.files);
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={uploadingMedia || mediaUrls.length >= 4}
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    {uploadingMedia ? (
-                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                    ) : (
-                      <Paperclip className="h-3.5 w-3.5 mr-1.5" />
-                    )}
-                    Attach Media ({mediaUrls.length}/4)
-                  </Button>
+              {/* Attached media chips */}
+              {mediaUrls.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {mediaUrls.map((url, idx) => {
+                    const kind = mediaKind(url);
+                    return (
+                      <div key={`${url}-${idx}`} className="relative rounded-lg border bg-muted/40 p-1.5 pr-7 flex items-center gap-2">
+                        {kind === "image" ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={url} alt="Attachment" className="h-11 w-11 rounded object-cover" />
+                        ) : kind === "video" ? (
+                          <div className="flex h-11 w-11 items-center justify-center rounded bg-muted">
+                            <Film className="h-4 w-4 text-muted-foreground" />
+                          </div>
+                        ) : (
+                          <div className="flex h-11 w-11 items-center justify-center rounded bg-muted">
+                            <FileText className="h-4 w-4 text-muted-foreground" />
+                          </div>
+                        )}
+                        <span className="text-xs text-muted-foreground capitalize">
+                          {kind} #{idx + 1}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label="Remove media"
+                          onClick={() => setMediaUrls((prev) => prev.filter((_, i) => i !== idx))}
+                          className="absolute right-1 top-1 rounded-full bg-background p-0.5 text-muted-foreground hover:text-foreground shadow-xs"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
-
-                {mediaUrls.length > 0 && (
-                  <div className="flex flex-wrap gap-2.5 pt-1">
-                    {mediaUrls.map((url, idx) => {
-                      const kind = mediaKind(url);
-                      return (
-                        <div key={`${url}-${idx}`} className="relative rounded-lg border bg-muted/40 p-1.5 pr-7 flex items-center gap-2">
-                          {kind === "image" ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={url} alt="Flyer" className="h-14 w-14 rounded object-cover" />
-                          ) : kind === "video" ? (
-                            <div className="flex h-14 w-14 items-center justify-center rounded bg-muted">
-                              <Film className="h-5 w-5 text-muted-foreground" />
-                            </div>
-                          ) : (
-                            <div className="flex h-14 w-14 items-center justify-center rounded bg-muted">
-                              <FileText className="h-5 w-5 text-muted-foreground" />
-                            </div>
-                          )}
-                          <span className="text-xs text-muted-foreground max-w-[110px] truncate">
-                            {kind.toUpperCase()} #{idx + 1}
-                          </span>
-                          <button
-                            type="button"
-                            aria-label="Remove media"
-                            onClick={() => setMediaUrls((prev) => prev.filter((_, i) => i !== idx))}
-                            className="absolute right-1 top-1 rounded-full bg-background p-0.5 text-muted-foreground hover:text-foreground shadow-xs"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+              )}
 
               {blockedLinks.length > 0 && (
                 <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                   Remove disallowed links: <span className="font-medium">{blockedLinks.join(", ")}</span>. Only
-                  carvamonos.com links are permitted by your A2P campaign.
+                  carvamonos.com links are allowed.
                 </div>
               )}
+
+              {/* Optional Schedule Row */}
+              <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/20 px-3.5 py-2.5 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="schedule-toggle"
+                    checked={scheduleEnabled}
+                    onCheckedChange={(v) => {
+                      setScheduleEnabled(v);
+                      if (!v) setScheduledAt("");
+                    }}
+                  />
+                  <Label htmlFor="schedule-toggle" className="text-xs font-medium cursor-pointer flex items-center gap-1.5">
+                    <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+                    Schedule for later
+                  </Label>
+                </div>
+                {scheduleEnabled && (
+                  <Input
+                    type="datetime-local"
+                    value={scheduledAt}
+                    onChange={(e) => setScheduledAt(e.target.value)}
+                    className="h-8 text-xs w-auto bg-background"
+                  />
+                )}
+              </div>
 
               {/* Action Bar */}
               <div className="flex flex-wrap items-center gap-2 pt-2 border-t">
                 <Button onClick={() => setConfirmOpen(true)} disabled={!canLaunch || sending}>
                   <Send className="h-4 w-4 mr-2" />
-                  {scheduledAt ? "Schedule" : "Launch"} to {matchedCount.toLocaleString()} customers
+                  {scheduleEnabled && scheduledAt ? "Schedule" : "Send"} to {matchedCount.toLocaleString()}
                 </Button>
 
                 <Button
@@ -1123,7 +1198,7 @@ export function CampaignsPanel() {
                   disabled={!canSaveDraft || savingDraft}
                 >
                   {savingDraft ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Bookmark className="h-4 w-4 mr-2" />}
-                  {editingDraftId ? "Update Draft" : "Save Draft / Reuse Later"}
+                  {editingDraftId ? "Update Draft" : "Save Draft"}
                 </Button>
 
                 <Popover open={testPopoverOpen} onOpenChange={setTestPopoverOpen}>
@@ -1147,7 +1222,7 @@ export function CampaignsPanel() {
                       onClick={() => void handleTestSend()}
                     >
                       {testSending && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
-                      Send Test {mediaUrls.length > 0 ? "MMS" : "SMS"}
+                      Send Test
                     </Button>
                   </PopoverContent>
                 </Popover>
@@ -1156,47 +1231,45 @@ export function CampaignsPanel() {
           </Card>
         </div>
 
-        {/* RIGHT COLUMN: Live Phone Preview + How It Works */}
-        <div className="space-y-6 xl:sticky xl:top-6">
+        {/* RIGHT: Clean Live Phone Preview */}
+        <div className="space-y-4 lg:sticky lg:top-6">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="flex items-center justify-between text-base">
+              <CardTitle className="flex items-center justify-between text-sm">
                 <span className="flex items-center gap-2">
-                  <Smartphone className="h-4 w-4 text-primary" /> Live Customer Preview
+                  <Smartphone className="h-4 w-4 text-primary" /> Phone Preview
                 </span>
                 {msgPreviewLoading ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
                 ) : (
                   msgPreview && (
                     <Badge variant="outline" className="font-normal text-[11px]">
-                      {msgPreview.is_mms ? "MMS" : `${msgPreview.segments} SMS seg`} · {msgPreview.characters} chars
+                      {msgPreview.is_mms ? "MMS" : `${msgPreview.segments} seg`} · {msgPreview.characters} chars
                     </Badge>
                   )
                 )}
               </CardTitle>
-              <CardDescription>Exactly how the message appears on a customer&apos;s phone</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Phone Frame */}
-              <div className="mx-auto max-w-[320px] rounded-[28px] border-4 border-muted-foreground/20 bg-muted/30 p-3 shadow-inner">
-                <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-muted-foreground/30" />
-                <div className="mb-3 text-center">
+              <div className="mx-auto max-w-[290px] rounded-[24px] border-4 border-muted-foreground/20 bg-muted/30 p-3">
+                <div className="mx-auto mb-2.5 h-1 w-10 rounded-full bg-muted-foreground/30" />
+                <div className="mb-2.5 text-center">
                   <p className="text-xs font-semibold">Carvamonos</p>
-                  <p className="text-[10px] text-muted-foreground">Text Message · Today</p>
+                  <p className="text-[10px] text-muted-foreground">Text Message</p>
                 </div>
 
-                <div className="min-h-[150px] space-y-2">
+                <div className="min-h-[120px] space-y-2">
                   {mediaUrls.map((url, idx) => {
                     const kind = mediaKind(url);
                     return (
-                      <div key={`prev-${idx}`} className="overflow-hidden rounded-2xl bg-background border max-w-[88%]">
+                      <div key={`prev-${idx}`} className="overflow-hidden rounded-xl bg-background border max-w-[90%]">
                         {kind === "image" ? (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img src={url} alt="Preview" className="max-h-48 w-full object-cover" />
+                          <img src={url} alt="Preview" className="max-h-40 w-full object-cover" />
                         ) : kind === "video" ? (
-                          <video src={url} controls className="max-h-44 w-full" />
+                          <video src={url} controls className="max-h-36 w-full" />
                         ) : (
-                          <div className="flex items-center gap-2 p-3 text-xs">
+                          <div className="flex items-center gap-2 p-2.5 text-xs">
                             <FileText className="h-4 w-4 text-primary" /> PDF Attachment
                           </div>
                         )}
@@ -1204,91 +1277,59 @@ export function CampaignsPanel() {
                     );
                   })}
 
-                  <div className="rounded-2xl rounded-bl-sm bg-background border px-3.5 py-2.5 text-xs leading-relaxed shadow-xs max-w-[92%] whitespace-pre-wrap break-words">
+                  <div className="rounded-2xl rounded-bl-sm bg-background border px-3 py-2 text-xs leading-relaxed shadow-xs max-w-[95%] whitespace-pre-wrap break-words">
                     {msgPreview?.sample || (
                       <span className="text-muted-foreground italic">
-                        Carvamonos: Start typing your Spanish offer on the left to see the live customer preview...
+                        Type your offer on the left to preview how it looks...
                       </span>
                     )}
                   </div>
                 </div>
               </div>
 
-              {/* Estimated usage */}
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="rounded-md border bg-muted/30 p-2.5">
-                  <p className="text-muted-foreground">Target audience</p>
-                  <p className="text-sm font-semibold">{matchedCount.toLocaleString()} leads</p>
-                </div>
-                <div className="rounded-md border bg-muted/30 p-2.5">
-                  <p className="text-muted-foreground">Est. {mediaUrls.length > 0 ? "MMS" : "SMS segments"}</p>
-                  <p className="text-sm font-semibold">
-                    {((msgPreview?.segments ?? 1) * matchedCount).toLocaleString()}
-                  </p>
-                </div>
+              <div className="flex items-center justify-between text-xs text-muted-foreground border-t pt-3">
+                <span>Recipients: <strong className="text-foreground">{matchedCount.toLocaleString()}</strong></span>
+                <span>Est. {mediaUrls.length > 0 ? "MMS" : "segments"}: <strong className="text-foreground">{((msgPreview?.segments ?? 1) * matchedCount).toLocaleString()}</strong></span>
               </div>
-            </CardContent>
-          </Card>
 
-          {/* HOW THIS CAMPAIGN WORKS */}
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <Info className="h-4 w-4 text-primary" /> How this campaign works
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2.5 text-xs text-muted-foreground">
-              <div className="flex items-start gap-2">
-                <ShieldCheck className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
-                <p>
-                  <span className="font-medium text-foreground">Automatic compliance:</span> Only customers with
-                  promotional consent are targeted. Every recipient is re-checked right before sending so anyone who
-                  replies STOP is skipped immediately.
-                </p>
-              </div>
-              <div className="flex items-start gap-2">
-                <Clock className="h-4 w-4 text-sky-600 shrink-0 mt-0.5" />
-                <p>
-                  <span className="font-medium text-foreground">Quiet hours & pacing:</span> Sends between{" "}
-                  <span className="font-medium text-foreground">{overview?.send_window}</span> ({overview?.timezone})
-                  at ~60 messages/minute to protect deliverability.
-                </p>
-              </div>
-              <div className="flex items-start gap-2">
-                <CheckCircle2 className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                <p>
-                  <span className="font-medium text-foreground">Two-way replies:</span> Customer replies land directly
-                  in the <span className="font-medium text-foreground">Conversations</span> tab and trigger unread
-                  badges & notifications.
-                </p>
-              </div>
-              <div className="flex items-start gap-2">
-                <Bookmark className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
-                <p>
-                  <span className="font-medium text-foreground">Save & reuse:</span> Save any campaign as a draft
-                  template, or click <span className="font-medium text-foreground">Reuse</span> on any past campaign to
-                  clone its filters, message, and flyer.
-                </p>
+              <div className="border-t pt-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShowInfo((v) => !v)}
+                  className="flex items-center justify-between w-full text-xs text-muted-foreground hover:text-foreground"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Info className="h-3.5 w-3.5" /> Sending rules & quiet hours
+                  </span>
+                  {showInfo ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                </button>
+                {showInfo && (
+                  <ul className="mt-2 space-y-1.5 text-[11px] text-muted-foreground list-disc pl-4">
+                    <li>Only opted-in customers are texted; STOP replies are skipped automatically.</li>
+                    <li>Sends during {overview?.send_window} ({overview?.timezone}) at ~60 msgs/min.</li>
+                    <li>Customer replies appear directly in the Conversations tab.</li>
+                  </ul>
+                )}
               </div>
             </CardContent>
           </Card>
         </div>
       </div>
 
-      {/* 3. SAVED DRAFTS & CAMPAIGN HISTORY */}
+      {/* STEP 3: SAVED DRAFTS & HISTORY */}
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
-              <CardTitle className="text-base">Saved Drafts & Campaign History</CardTitle>
-              <CardDescription>Reuse any saved draft or past campaign with one click.</CardDescription>
+              <CardTitle className="text-base">Campaigns & Saved Drafts</CardTitle>
+              <CardDescription>Reuse any draft or past campaign with one click.</CardDescription>
             </div>
             <div className="inline-flex rounded-md border p-0.5 bg-muted/40">
               {(
                 [
                   { id: "all", label: `All (${campaigns.length})` },
-                  { id: "drafts", label: `Saved Drafts (${draftCount})` },
-                  { id: "sent", label: `Sent & Active (${campaigns.length - draftCount})` },
+                  { id: "drafts", label: `Drafts (${draftCount})` },
+                  { id: "sent", label: `Sent (${campaigns.length - draftCount})` },
                 ] as const
               ).map((t) => (
                 <button
@@ -1313,7 +1354,7 @@ export function CampaignsPanel() {
           {visibleHistory.length === 0 ? (
             <p className="text-sm text-muted-foreground py-8 text-center">
               {historyFilter === "drafts"
-                ? "No saved drafts yet. Click 'Save Draft / Reuse Later' above to save a reusable campaign."
+                ? "No saved drafts yet."
                 : "No campaigns yet."}
             </p>
           ) : (
@@ -1328,7 +1369,7 @@ export function CampaignsPanel() {
                       <div className="space-y-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-semibold text-sm">
-                            {c.name || "Untitled Offer Campaign"}
+                            {c.name || "Untitled Campaign"}
                           </span>
                           <Badge
                             variant={
@@ -1348,7 +1389,6 @@ export function CampaignsPanel() {
                           )}
                           <span className="text-xs text-muted-foreground">
                             {format(new Date(c.created_at), "MMM d, yyyy · h:mm a")}
-                            {c.created_by_name ? ` · ${c.created_by_name}` : ""}
                           </span>
                         </div>
                         {tags.length > 0 && (
@@ -1379,7 +1419,7 @@ export function CampaignsPanel() {
                               ) : (
                                 <Play className="h-3.5 w-3.5 mr-1" />
                               )}
-                              Launch
+                              Send
                             </Button>
                             <Button
                               variant="outline"
@@ -1394,7 +1434,6 @@ export function CampaignsPanel() {
                           variant="ghost"
                           size="sm"
                           onClick={() => loadIntoBuilder(c, false)}
-                          title="Load message, media, and filters into the builder"
                         >
                           <Copy className="h-3.5 w-3.5 mr-1" /> Reuse
                         </Button>
@@ -1435,7 +1474,7 @@ export function CampaignsPanel() {
                         </div>
                         <div className="flex flex-wrap gap-x-4 text-xs text-muted-foreground">
                           <span>
-                            {done.toLocaleString()}/{c.total_recipients.toLocaleString()} processed ({pct}%)
+                            {done.toLocaleString()}/{c.total_recipients.toLocaleString()} ({pct}%)
                           </span>
                           <span className="text-emerald-700 dark:text-emerald-400">
                             {c.sent_count.toLocaleString()} sent
@@ -1446,15 +1485,14 @@ export function CampaignsPanel() {
                           {c.skipped_count > 0 && <span>{c.skipped_count.toLocaleString()} skipped</span>}
                           {c.scheduled_at && c.status === "queued" && (
                             <span className="flex items-center gap-1">
-                              <Clock className="h-3 w-3" /> scheduled for{" "}
-                              {format(new Date(c.scheduled_at), "MMM d, h:mm a")}
+                              <Clock className="h-3 w-3" /> {format(new Date(c.scheduled_at), "MMM d, h:mm a")}
                             </span>
                           )}
                         </div>
                       </div>
                     ) : (
                       <p className="text-xs text-muted-foreground">
-                        Est. audience when saved: ~{c.total_recipients.toLocaleString()} customers (recalculated fresh on launch)
+                        ~{c.total_recipients.toLocaleString()} matching customers when saved
                       </p>
                     )}
                   </div>
@@ -1465,12 +1503,73 @@ export function CampaignsPanel() {
         </CardContent>
       </Card>
 
+      {/* Matching Leads Preview Modal (clean, opaque sticky header, no cramping) */}
+      <Dialog open={leadsModalOpen} onOpenChange={setLeadsModalOpen}>
+        <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Matching Customers ({matchedCount.toLocaleString()})</DialogTitle>
+            <DialogDescription>
+              Showing {sampleLeads.length} of {matchedCount.toLocaleString()} opted-in customers matching your filters.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-auto rounded-md border">
+            <table className="w-full text-xs">
+              <thead className="bg-muted sticky top-0 z-10 border-b text-left text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2.5 font-medium">Customer</th>
+                  <th className="px-3 py-2.5 font-medium">Phone</th>
+                  <th className="px-3 py-2.5 font-medium">Stage</th>
+                  <th className="px-3 py-2.5 font-medium">Campaign</th>
+                  <th className="px-3 py-2.5 font-medium">Stips</th>
+                  <th className="px-3 py-2.5 font-medium">Created</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y bg-background">
+                {sampleLeads.map((l) => (
+                  <tr key={l.lead_id} className="hover:bg-muted/30">
+                    <td className="px-3 py-2 font-medium whitespace-nowrap">{l.name}</td>
+                    <td className="px-3 py-2 text-muted-foreground font-mono whitespace-nowrap">{l.phone}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {l.stage_name ? (
+                        <Badge variant="outline" className="text-[10px] font-normal">
+                          {l.stage_name}
+                        </Badge>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-muted-foreground max-w-[180px] truncate">
+                      {l.campaign || SOURCE_LABELS[l.source] || l.source}
+                    </td>
+                    <td className="px-3 py-2">
+                      {l.has_stips ? (
+                        <Badge
+                          variant="secondary"
+                          className="text-[10px] bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+                        >
+                          Yes
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-foreground">No</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
+                      {l.created_at ? format(new Date(l.created_at), "MMM d, yyyy") : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Final Launch Confirmation Dialog */}
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {scheduledAt ? "Schedule" : "Launch"} campaign to {matchedCount.toLocaleString()} customers?
+              {scheduleEnabled && scheduledAt ? "Schedule" : "Send"} campaign to {matchedCount.toLocaleString()} customers?
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2.5 text-sm">
@@ -1484,7 +1583,7 @@ export function CampaignsPanel() {
                     ))}
                   </div>
                 )}
-                <p>Each customer gets this {mediaUrls.length > 0 ? "MMS" : "SMS"} (with their own first name):</p>
+                <p>Each customer will receive this {mediaUrls.length > 0 ? "MMS" : "SMS"}:</p>
                 <p className="rounded-md bg-muted p-2.5 text-foreground whitespace-pre-wrap text-xs">
                   {msgPreview?.sample}
                 </p>
@@ -1493,10 +1592,6 @@ export function CampaignsPanel() {
                     Includes {mediaUrls.length} media attachment{mediaUrls.length === 1 ? "" : "s"}.
                   </p>
                 )}
-                <p className="text-xs text-muted-foreground">
-                  Uses about {((msgPreview?.segments ?? 1) * matchedCount).toLocaleString()}{" "}
-                  {mediaUrls.length > 0 ? "MMS messages" : "SMS segments"}. You can cancel anytime while it&apos;s sending.
-                </p>
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1504,7 +1599,7 @@ export function CampaignsPanel() {
             <AlertDialogCancel disabled={sending}>Back</AlertDialogCancel>
             <AlertDialogAction onClick={() => void handleSend()} disabled={sending}>
               {sending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              {scheduledAt ? "Schedule Campaign" : "Launch Campaign"}
+              {scheduleEnabled && scheduledAt ? "Schedule Campaign" : "Send Campaign"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

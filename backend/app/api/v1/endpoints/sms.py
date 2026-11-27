@@ -971,7 +971,24 @@ async def test_send_campaign(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Only links to {settings.sms_allowed_link_domains} are allowed. Remove: {', '.join(bad)}",
         )
-    rendered = sms_consent.personalize(broadcasts.build_body(request.body), request.sample_first_name)
+    from app.models.dealership import Dealership
+    dealership = await db.get(Dealership, dealership_id)
+    store_address = None
+    if dealership:
+        parts = [p for p in (dealership.address, dealership.city, dealership.state) if p]
+        store_address = ", ".join(parts) if parts else None
+
+    rendered = sms_consent.personalize(
+        broadcasts.build_body(request.body),
+        request.sample_first_name,
+        last_name="García",
+        vehicle="2022 Toyota RAV4",
+        down_payment=2000,
+        agent_name=current_user.full_name,
+        dealership_name=dealership.name if dealership else None,
+        dealership_phone=dealership.phone if dealership else None,
+        dealership_address=store_address,
+    )
     from app.services.sms_service import sms_service
     res = await sms_service.send_sms(
         request.to_number, rendered, effective, media_urls=request.media_urls or None

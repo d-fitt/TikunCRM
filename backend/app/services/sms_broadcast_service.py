@@ -373,7 +373,17 @@ def preview(
     media_urls: Optional[List[str]] = None,
 ) -> dict:
     body = build_body(raw_body)
-    sample = sms_consent.personalize(body, sample_first_name)
+    sample = sms_consent.personalize(
+        body,
+        sample_first_name,
+        last_name="García",
+        vehicle="2022 Toyota RAV4",
+        down_payment=2000,
+        agent_name="Carlos",
+        dealership_name=sms_consent.brand(),
+        dealership_phone="(404) 555-0199",
+        dealership_address="123 Main St, Atlanta, GA",
+    )
     has_media = bool(media_urls)
     return {
         "final_body": body,
@@ -531,10 +541,31 @@ async def _send_one(
     if customer is None or not customer.phone:
         recipient.status, recipient.error = "skipped", "No phone number"
         return
+
+    lead = await db.get(Lead, recipient.lead_id) if recipient.lead_id else None
+    agent = await db.get(User, lead.assigned_to) if (lead and lead.assigned_to) else None
+    dealership = await db.get(Dealership, broadcast.dealership_id) if broadcast.dealership_id else None
+    store_address = None
+    if dealership:
+        parts = [p for p in (dealership.address, dealership.city, dealership.state) if p]
+        store_address = ", ".join(parts) if parts else None
+
+    personalized_body = sms_consent.personalize(
+        broadcast.body,
+        customer.first_name,
+        last_name=customer.last_name,
+        vehicle=lead.interested_in if lead else None,
+        down_payment=lead.down_payment if lead else None,
+        agent_name=agent.full_name if agent else None,
+        dealership_name=dealership.name if dealership else None,
+        dealership_phone=dealership.phone if dealership else None,
+        dealership_address=store_address,
+    )
+
     service = SMSConversationService(db)
     ok, sms_log, error = await service.send_sms(
         to_number=customer.phone,
-        body=sms_consent.personalize(broadcast.body, customer.first_name),
+        body=personalized_body,
         user_id=broadcast.created_by,
         lead_id=recipient.lead_id,
         dealership_id=broadcast.dealership_id,

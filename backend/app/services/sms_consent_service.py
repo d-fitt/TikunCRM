@@ -254,10 +254,69 @@ def prepare_promotional_body(body: str) -> str:
     return text
 
 
-def personalize(body: str, first_name: Optional[str]) -> str:
-    name = (first_name or "").strip()
-    for token in ("{nombre}", "{Nombre}", "[Nombre]", "[nombre]", "{name}", "{first_name}"):
-        body = body.replace(token, name)
+def _format_money(val: object) -> str:
+    if val is None or val == "":
+        return ""
+    try:
+        num = float(val)
+        return f"${num:,.0f}" if num.is_integer() else f"${num:,.2f}"
+    except (ValueError, TypeError):
+        return str(val).strip()
+
+
+def personalize(
+    body: str,
+    first_name: Optional[str],
+    *,
+    last_name: Optional[str] = None,
+    vehicle: Optional[str] = None,
+    down_payment: object = None,
+    agent_name: Optional[str] = None,
+    dealership_name: Optional[str] = None,
+    dealership_phone: Optional[str] = None,
+    dealership_address: Optional[str] = None,
+    inventory_url: Optional[str] = None,
+) -> str:
+    fname = (first_name or "").strip()
+    lname = (last_name or "").strip()
+    full_name = f"{fname} {lname}".strip()
+    veh = (vehicle or "").strip()
+    dp = _format_money(down_payment)
+    agent = (agent_name or "").strip()
+    store = (dealership_name or brand()).strip()
+    phone = (dealership_phone or "").strip()
+    addr = (dealership_address or "").strip()
+    inv = (inventory_url or "carvamonos.com/inventario").strip()
+
+    replacements = {
+        "{nombre}": fname,
+        "{Nombre}": fname,
+        "[Nombre]": fname,
+        "[nombre]": fname,
+        "{name}": fname,
+        "{first_name}": fname,
+        "{apellido}": lname,
+        "{last_name}": lname,
+        "{nombre_completo}": full_name,
+        "{full_name}": full_name,
+        "{vehiculo}": veh,
+        "{vehicle}": veh,
+        "{enganche}": dp,
+        "{down_payment}": dp,
+        "{agente}": agent,
+        "{agent}": agent,
+        "{tienda}": store,
+        "{dealership}": store,
+        "{telefono_tienda}": phone,
+        "{dealership_phone}": phone,
+        "{direccion}": addr,
+        "{address}": addr,
+        "{inventario}": inv,
+        "{inventory_link}": inv,
+    }
+    for token, value in replacements.items():
+        if token in body:
+            body = body.replace(token, value)
     return re.sub(r"\s{2,}", " ", body).replace(" ,", ",").strip()
 
 
