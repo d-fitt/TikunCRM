@@ -115,6 +115,16 @@ async def websocket_endpoint(
         str(dealership_id) if dealership_id else None,
         accessible_dealership_ids=accessible_dealership_ids or None,
     )
+
+    try:
+        async with async_session_maker() as db:
+            user = await db.get(User, UUID(str(user_id)))
+            if user and user.is_active:
+                from app.services.shell_badges import push_shell_badges
+
+                await push_shell_badges(db, user)
+    except Exception as e:
+        logger.warning("WebSocket sms unread snapshot failed for user %s: %s", user_id, e)
     
     try:
         while True:

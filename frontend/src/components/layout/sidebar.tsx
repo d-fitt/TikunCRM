@@ -39,15 +39,10 @@ import {
 import { cn } from "@/lib/utils"
 import { useAuthStore, UserRole } from "@/stores/auth-store"
 import { useRole, getRoleDisplayName } from "@/hooks/use-role"
-import { useNotificationEvents, useLeadUpdateEvents, useBadgesRefresh, useStatsRefresh, useWebSocketEvent, useWebSocketResync } from "@/hooks/use-websocket"
+import { subscribeShellBadges } from "@/lib/shell-badges"
 import { useSidebarOptional } from "@/contexts/sidebar-context"
 import { UserAvatar } from "@/components/ui/avatar"
 import { Badge, getRoleVariant } from "@/components/ui/badge"
-import { AppointmentService } from "@/services/appointment-service"
-import { FollowUpService } from "@/services/follow-up-service"
-import { LeadService } from "@/services/lead-service"
-import { LeadStageService } from "@/services/lead-stage-service"
-import apiClient from "@/lib/api-client"
 import { GlobalSearchModal } from "@/components/search/global-search-modal"
 
 interface SidebarLink {
@@ -258,260 +253,18 @@ export function Sidebar() {
         whatsappUnread: 0,
         smsUnread: 0,
     })
-    
-    // Fetch badge counts
-    React.useEffect(() => {
-        const fetchBadgeCounts = async () => {
-            try {
-                // Fetch appointment stats (today's count)
-                let appointmentsToday = 0
-                try {
-                    const appointmentStats = await AppointmentService.getStats()
-                    appointmentsToday = appointmentStats.today || 0
-                } catch {
-                    appointmentsToday = 0
-                }
-                
-                // Fetch overdue follow-ups count
-                let overdueFollowUps = 0
-                try {
-                    const followUpsRes = await FollowUpService.listFollowUps({ overdue: true })
-                    overdueFollowUps = followUpsRes.total || followUpsRes.items.length
-                } catch {
-                    overdueFollowUps = 0
-                }
-                
-                // Unassigned pool count - visible to all users
-                let unassignedCount = 0
-                try {
-                    const unassignedRes = await LeadService.listLeads({ 
-                        pool: "unassigned",
-                        page_size: 1 
-                    })
-                    unassignedCount = unassignedRes.total
-                } catch {
-                    unassignedCount = 0
-                }
 
-                // Manager review count - leads pending manager decision (for admin/owner roles)
-                let managerReviewCount = 0
-                try {
-                    const stages = await LeadStageService.list()
-                    const mrStage = stages.find((s) => s.name === "manager_review")
-                    if (mrStage) {
-                        const mrRes = await LeadService.listLeads({ stage_id: mrStage.id, page_size: 1 })
-                        managerReviewCount = mrRes.total
-                    }
-                } catch {
-                    managerReviewCount = 0
-                }
-                
-                // Fetch unread notifications count
-                let unreadNotifications = 0
-                try {
-                    const notifStats = await apiClient.get("/notifications/stats")
-                    unreadNotifications = notifStats.data?.unread || 0
-                } catch {
-                    unreadNotifications = 0
-                }
-
-                // Fetch WhatsApp unread count
-                let whatsappUnreadCount = 0
-                try {
-                    const waConversations = await apiClient.get("/whatsapp/conversations")
-                    whatsappUnreadCount = waConversations.data?.total_unread || 0
-                } catch {
-                    whatsappUnreadCount = 0
-                }
-
-                let smsUnreadCount = 0
-                try {
-                    const smsUnreadRes = await apiClient.get("/sms/unread-count")
-                    smsUnreadCount = smsUnreadRes.data?.count || 0
-                } catch {
-                    smsUnreadCount = 0
-                }
-                
-                setBadgeCounts({
-                    appointments: appointmentsToday,
-                    followUps: overdueFollowUps,
-                    unassigned: unassignedCount,
-                    managerReview: managerReviewCount,
-                    notifications: unreadNotifications,
-                    whatsappUnread: whatsappUnreadCount,
-                    smsUnread: smsUnreadCount,
-                })
-            } catch (error) {
-                console.error("Failed to fetch badge counts:", error)
-            }
-        }
-        
-        // Fetch once on mount when user is logged in. Pool/unassigned count updates via WebSocket (lead:updated, badges:refresh, stats:refresh).
-        if (user?.id && role) {
-            fetchBadgeCounts()
-        }
-    }, [user?.id, role])
-    
-    // Refetch specific badge counts (used by WebSocket handlers)
-    const refetchBadgeCounts = React.useCallback((which: { unassigned?: boolean; managerReview?: boolean; notifications?: boolean; appointments?: boolean; followUps?: boolean; whatsapp?: boolean; sms?: boolean }) => {
-        if (which.unassigned) {
-            LeadService.listLeads({ pool: "unassigned", page_size: 1 })
-                .then(res => setBadgeCounts(prev => ({ ...prev, unassigned: res.total })))
-                .catch(() => {})
-        }
-        if (which.managerReview) {
-            LeadStageService.list()
-                .then(stages => {
-                    const mr = stages.find((s) => s.name === "manager_review")
-                    if (!mr) return
-                    return LeadService.listLeads({ stage_id: mr.id, page_size: 1 })
-                })
-                .then(res => res != null ? setBadgeCounts(prev => ({ ...prev, managerReview: res.total })) : undefined)
-                .catch(() => {})
-        }
-        if (which.notifications) {
-            apiClient.get("/notifications/stats")
-                .then(res => setBadgeCounts(prev => ({ ...prev, notifications: res.data?.unread ?? 0 })))
-                .catch(() => {})
-        }
-        if (which.appointments) {
-            AppointmentService.getStats()
-                .then(stats => setBadgeCounts(prev => ({ ...prev, appointments: stats.today ?? 0 })))
-                .catch(() => {})
-        }
-        if (which.followUps) {
-            FollowUpService.listFollowUps({ overdue: true })
-                .then(res => setBadgeCounts(prev => ({ ...prev, followUps: res.total || res.items.length })))
-                .catch(() => {})
-        }
-        if (which.whatsapp) {
-            apiClient.get("/whatsapp/conversations")
-                .then(res => setBadgeCounts(prev => ({ ...prev, whatsappUnread: res.data?.total_unread ?? 0 })))
-                .catch(() => {})
-        }
-        if (which.sms) {
-            apiClient.get("/sms/unread-count")
-                .then(res => setBadgeCounts(prev => ({ ...prev, smsUnread: res.data?.count ?? 0 })))
-                .catch(() => {})
-        }
-    }, [])
-
-    // Refetch badge counts when user marks notifications as read (custom event from notifications page or bell)
-    React.useEffect(() => {
-        const handler = (e: CustomEvent<{ notifications?: boolean; unassigned?: boolean }>) => {
-            const detail = e.detail || {}
-            refetchBadgeCounts({
-                notifications: detail.notifications ?? false,
-                unassigned: detail.unassigned ?? false,
-            })
-        }
-        window.addEventListener("leads-crm:badges-refresh" as any, handler as any)
-        return () => window.removeEventListener("leads-crm:badges-refresh" as any, handler as any)
-    }, [refetchBadgeCounts])
-
-    // Listen for real-time notification events via WebSocket – update badge directly
-    const handleNewNotification = React.useCallback((data: { unread_count?: number; notification_type?: string }) => {
-        if (typeof data?.unread_count === "number") {
-            // Use the unread count directly from WebSocket event
-            setBadgeCounts(prev => ({ ...prev, notifications: data.unread_count! }))
-        } else {
-            // Fallback to API if unread_count not in event
-            refetchBadgeCounts({ notifications: true })
-        }
-        // Scheduler-driven reminders mean a follow-up just went overdue or an appointment is near
-        const t = String(data?.notification_type || "").toUpperCase()
-        if (t.startsWith("FOLLOW_UP")) refetchBadgeCounts({ followUps: true })
-        if (t.startsWith("APPOINTMENT")) refetchBadgeCounts({ appointments: true })
-    }, [refetchBadgeCounts])
-    
-    useNotificationEvents(handleNewNotification)
-    
-    // Listen for notification:read events to update badge when notifications are read
-    const handleNotificationRead = React.useCallback((data: { unread_count?: number }) => {
-        if (typeof data?.unread_count === "number") {
-            setBadgeCounts(prev => ({ ...prev, notifications: data.unread_count! }))
-        }
-    }, [])
-    useWebSocketEvent("notification:read", handleNotificationRead, [handleNotificationRead])
-    
-    // Listen for lead assignment events (updates unassigned pool count via WebSocket)
-    const handleLeadUpdate = React.useCallback((data: any) => {
-        if (data.update_type === "assigned" || data.update_type === "unassigned" || data.update_type === "created") {
-            refetchBadgeCounts({ unassigned: true })
-        }
-        if (data.update_type === "stage_changed" || data.update_type === "stage_updated") {
-            refetchBadgeCounts({ managerReview: true })
-        }
-    }, [refetchBadgeCounts])
-    
-    useLeadUpdateEvents(null, handleLeadUpdate)
-
-    const handleLeadCreated = React.useCallback(() => {
-        refetchBadgeCounts({ unassigned: true, notifications: true })
-    }, [refetchBadgeCounts])
-    useWebSocketEvent("lead:created", handleLeadCreated, [handleLeadCreated])
-    
-    // Listen for explicit badge refresh (e.g. stale leads returned to pool, new unassigned lead created)
-    const handleBadgesRefresh = React.useCallback((data: { unassigned?: boolean; managerReview?: boolean; notifications?: boolean }) => {
-        refetchBadgeCounts({
-            unassigned: data.unassigned ?? false,
-            managerReview: data.managerReview ?? false,
-            notifications: data.notifications ?? false,
+    React.useEffect(() => subscribeShellBadges((badges) => {
+        setBadgeCounts({
+            appointments: badges.appointments,
+            followUps: badges.followUps,
+            unassigned: badges.unassigned,
+            managerReview: badges.managerReview,
+            notifications: badges.notifications,
+            whatsappUnread: badges.whatsappUnread,
+            smsUnread: badges.smsUnread,
         })
-    }, [refetchBadgeCounts])
-    
-    useBadgesRefresh(handleBadgesRefresh)
-    
-    // When stats refresh (lead/appointment/follow-up/showroom changes), refetch sidebar counts
-    const handleStatsRefresh = React.useCallback((_data: { dealership_id?: string; timestamp?: string }) => {
-        refetchBadgeCounts({ unassigned: true, managerReview: true, appointments: true, followUps: true })
-    }, [refetchBadgeCounts])
-    useStatsRefresh(handleStatsRefresh)
-
-    // Listen for WhatsApp messages to update unread badge directly from WebSocket
-    const handleWhatsAppReceived = React.useCallback((data: { total_unread?: number }) => {
-        if (typeof data?.total_unread === "number") {
-            // Use the unread count directly from WebSocket event
-            setBadgeCounts(prev => ({ ...prev, whatsappUnread: data.total_unread! }))
-        } else {
-            // Fallback to API if total_unread not in event
-            refetchBadgeCounts({ whatsapp: true })
-        }
-    }, [refetchBadgeCounts])
-    useWebSocketEvent("whatsapp:received", handleWhatsAppReceived, [handleWhatsAppReceived])
-
-    // Listen for WhatsApp read events to update badge when messages are read
-    const handleWhatsAppRead = React.useCallback((data: { total_unread?: number }) => {
-        if (typeof data?.total_unread === "number") {
-            setBadgeCounts(prev => ({ ...prev, whatsappUnread: data.total_unread! }))
-        }
-    }, [])
-    useWebSocketEvent("whatsapp:read", handleWhatsAppRead, [handleWhatsAppRead])
-
-    const handleSmsUnreadRefresh = React.useCallback(() => {
-        refetchBadgeCounts({ sms: true })
-    }, [refetchBadgeCounts])
-    useWebSocketEvent("sms:received", handleSmsUnreadRefresh, [handleSmsUnreadRefresh])
-    useWebSocketEvent("sms:read", handleSmsUnreadRefresh, [handleSmsUnreadRefresh])
-
-    const handleResync = React.useCallback(() => {
-        refetchBadgeCounts({
-            unassigned: true,
-            managerReview: true,
-            notifications: true,
-            appointments: true,
-            followUps: true,
-            whatsapp: true,
-            sms: true,
-        })
-    }, [refetchBadgeCounts])
-    useWebSocketResync(handleResync, [handleResync])
-
-    React.useEffect(() => {
-        const onSmsChanged = () => refetchBadgeCounts({ sms: true })
-        window.addEventListener("sms:unread-changed", onSmsChanged)
-        return () => window.removeEventListener("sms:unread-changed", onSmsChanged)
-    }, [refetchBadgeCounts])
+    }), [])
     
     // Expand Conversations when on any conversation surface
     const isConversationsActive = ["/whatsapp", "/inbox", "/communications", "/sms", "/calls"].some(
@@ -620,6 +373,7 @@ export function Sidebar() {
                 {/* Logo - click navigates to dashboard */}
                 <Link
                     href="/dashboard"
+                    prefetch={false}
                     className={cn(
                         "shrink-0 flex items-center hover:opacity-90 transition-opacity",
                         collapsed ? "mb-6 justify-center px-0" : "mb-10 px-2"
@@ -672,6 +426,7 @@ export function Sidebar() {
                                     <Link
                                         key={item.name}
                                         href={first.href}
+                                        prefetch={false}
                                         title={item.name}
                                         className={cn(
                                             "relative flex items-center justify-center rounded-md py-2 text-sm font-medium transition-colors hover:bg-accent",
@@ -727,6 +482,7 @@ export function Sidebar() {
                                                     <Link
                                                         key={child.href}
                                                         href={child.href}
+                                                        prefetch={false}
                                                         className={cn(
                                                             "flex items-center justify-between rounded-md py-1.5 pl-2 pr-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground",
                                                             active ? "bg-accent text-accent-foreground font-medium" : "text-muted-foreground"
@@ -754,6 +510,7 @@ export function Sidebar() {
                             <Link
                                 key={item.href!}
                                 href={item.href!}
+                                prefetch={false}
                                 title={collapsed ? item.name : undefined}
                                 className={cn(
                                     "group relative flex items-center rounded-md py-2 text-sm font-medium transition-colors hover:bg-accent",

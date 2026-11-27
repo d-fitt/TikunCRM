@@ -3,37 +3,12 @@
 import * as React from "react"
 import Link from "next/link"
 import { MessageSquare } from "lucide-react"
-import { useWebSocketEvent, useWebSocketResync } from "@/hooks/use-websocket"
-import { smsService } from "@/services/sms-service"
+import { subscribeSmsUnread } from "@/lib/sms-unread"
 
 export function UnreadSmsBell() {
     const [count, setCount] = React.useState(0)
-    const timer = React.useRef<number | null>(null)
 
-    const refresh = React.useCallback(() => {
-        if (timer.current) window.clearTimeout(timer.current)
-        timer.current = window.setTimeout(() => {
-            void smsService
-                .getUnreadCount()
-                .then((n) => setCount(n || 0))
-                .catch(() => {})
-        }, 250)
-    }, [])
-
-    React.useEffect(() => {
-        refresh()
-        const onChanged = () => refresh()
-        window.addEventListener("sms:unread-changed", onChanged)
-        return () => {
-            if (timer.current) window.clearTimeout(timer.current)
-            window.removeEventListener("sms:unread-changed", onChanged)
-        }
-    }, [refresh])
-
-    useWebSocketEvent("sms:received", refresh, [refresh])
-    useWebSocketEvent("sms:read", refresh, [refresh])
-    useWebSocketEvent("badges:refresh", refresh, [refresh])
-    useWebSocketResync(refresh, [refresh])
+    React.useEffect(() => subscribeSmsUnread(setCount), [])
 
     return (
         <Link

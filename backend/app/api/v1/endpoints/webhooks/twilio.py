@@ -381,6 +381,12 @@ async def handle_incoming_sms(
 
         if notified_any or sms_log.is_read:
             await db.commit()
+
+        from app.services.sms_unread_realtime import push_sms_unread_for_dealership
+
+        await push_sms_unread_for_dealership(
+            db, str(sms_log.dealership_id) if sms_log.dealership_id else None
+        )
     
     # Empty TwiML: Twilio answers English keywords itself, the CRM sends everything else via the API
     return Response(content=_EMPTY_TWIML, media_type="application/xml")

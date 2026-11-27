@@ -170,6 +170,11 @@ async def _broadcast_sms_read(lead: Lead) -> None:
         str(lead.dealership_id),
         {"type": "sms:read", "payload": {"lead_id": str(lead.id)}},
     )
+    from app.db.database import async_session_maker
+    from app.services.sms_unread_realtime import push_sms_unread_for_dealership
+
+    async with async_session_maker() as db:
+        await push_sms_unread_for_dealership(db, str(lead.dealership_id))
 
 
 # ============ Endpoints ============
@@ -550,6 +555,9 @@ async def mark_message_read(
             str(sms_log.dealership_id),
             {"type": "sms:read", "payload": {"lead_id": str(sms_log.lead_id)}},
         )
+        from app.services.sms_unread_realtime import push_sms_unread_for_dealership
+
+        await push_sms_unread_for_dealership(db, str(sms_log.dealership_id))
     
     return {"status": "ok"}
 

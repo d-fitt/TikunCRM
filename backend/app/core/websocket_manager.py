@@ -173,6 +173,12 @@ class WebSocketManager:
         for user_id in list(self.active_connections.keys()):
             await self.send_to_user(user_id, message)
     
+    def user_ids_for_dealership(self, dealership_id: str) -> List[str]:
+        """User ids currently subscribed to a dealership's broadcasts."""
+        if not dealership_id:
+            return []
+        return list(self.dealership_users.get(str(dealership_id), ()))
+
     def get_connected_users(self) -> List[str]:
         """Get list of all connected user IDs"""
         return list(self.active_connections.keys())

@@ -188,9 +188,6 @@ export function BdcDashboard() {
 
     useShowroomUpdates(scheduleReload)
     useWebSocketEvent("lead:created", scheduleReload, [scheduleReload])
-    useWebSocketEvent("lead:updated", scheduleReload, [scheduleReload])
-    useWebSocketEvent("badges:refresh", scheduleReload, [scheduleReload])
-    useWebSocketEvent("stats:refresh", scheduleReload, [scheduleReload])
     useWebSocketResync(scheduleReload, [scheduleReload])
 
     React.useEffect(() => {

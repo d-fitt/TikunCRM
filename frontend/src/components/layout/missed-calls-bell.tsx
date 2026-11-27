@@ -4,7 +4,8 @@ import * as React from "react"
 import { useRouter } from "next/navigation"
 import { Phone, PhoneMissed, Loader2, ExternalLink, CheckCheck } from "lucide-react"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
-import { useWebSocketEvent, useWebSocketResync, useNotificationEvents } from "@/hooks/use-websocket"
+import { useWebSocketEvent } from "@/hooks/use-websocket"
+import { subscribeShellBadges } from "@/lib/shell-badges"
 import { formatRelativeTimeInTimezone } from "@/utils/timezone"
 import { Button } from "@/components/ui/button"
 import {
@@ -50,36 +51,20 @@ export function MissedCallsBell() {
         }
     }, [])
 
-    const countTimer = React.useRef<number | null>(null)
-    const refreshCount = React.useCallback(() => {
-        if (countTimer.current) window.clearTimeout(countTimer.current)
-        countTimer.current = window.setTimeout(() => {
-            void voiceService
-                .listMissedCalls({ page_size: 1 })
-                .then((res) => setPendingCount(res.pending_count))
-                .catch(() => {})
-        }, 400)
-    }, [])
+    const openRef = React.useRef(open)
+    openRef.current = open
 
-    React.useEffect(() => {
-        void fetchMissed()
-        return () => {
-            if (countTimer.current) window.clearTimeout(countTimer.current)
-        }
+    React.useEffect(
+        () => subscribeShellBadges((badges) => setPendingCount(badges.missedCalls)),
+        []
+    )
+
+    const refreshOpenList = React.useCallback(() => {
+        if (openRef.current) void fetchMissed()
     }, [fetchMissed])
 
-    // A call ending (or ringing out) may add a missed call; clears by other agents arrive as missed_calls:changed
-    useWebSocketEvent("call:completed", refreshCount, [refreshCount])
-    useWebSocketEvent("call:ring_ended", refreshCount, [refreshCount])
-    useWebSocketEvent("missed_calls:changed", refreshCount, [refreshCount])
-    useWebSocketResync(refreshCount, [refreshCount])
-
-    useNotificationEvents(
-        React.useCallback((notification: { notification_type?: string; type?: string }) => {
-            const t = String(notification.notification_type || notification.type || "").toLowerCase()
-            if (t === "missed_call" || t === "voicemail") refreshCount()
-        }, [refreshCount])
-    )
+    useWebSocketEvent("call:completed", refreshOpenList, [refreshOpenList])
+    useWebSocketEvent("missed_calls:changed", refreshOpenList, [refreshOpenList])
 
     React.useEffect(() => {
         if (open) void fetchMissed()
@@ -108,11 +93,6 @@ export function MissedCallsBell() {
                     prev.map((c) => (c.id === call.id ? { ...c, is_seen: true } : c))
                 )
                 setPendingCount((prev) => Math.max(0, prev - (call.called_back ? 1 : 0)))
-                // Refresh accurate count after mark
-                void voiceService
-                    .listMissedCalls({ page_size: 1 })
-                    .then((res) => setPendingCount(res.pending_count))
-                    .catch(() => {})
             } catch (error) {
                 console.error("Failed to mark missed call seen:", error)
             }

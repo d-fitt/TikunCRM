@@ -704,6 +704,9 @@ async def mark_all_missed_calls_seen(
     if marked:
         await db.commit()
         await ws_manager.broadcast_all({"type": "missed_calls:changed", "payload": {}})
+        from app.services.shell_badges import schedule_shell_badges_push
+
+        schedule_shell_badges_push()
     return {"ok": True, "marked": marked}
 
 
@@ -728,6 +731,9 @@ async def mark_missed_call_seen(
     flag_modified(call, "meta_data")
     await db.commit()
     await ws_manager.broadcast_all({"type": "missed_calls:changed", "payload": {}})
+    from app.services.shell_badges import schedule_shell_badges_push
+
+    schedule_shell_badges_push()
     return {"ok": True, "id": str(call.id)}
 
 
@@ -1492,6 +1498,9 @@ async def handle_call_status(
                         )
                     except Exception as e:
                         logger.warning("call:completed broadcast failed: %s", e)
+                    from app.services.shell_badges import schedule_shell_badges_push
+
+                    schedule_shell_badges_push()
 
             # Missed inbound — stamp outcome now; email/push AFTER TwiML (Twilio 15s limit)
             dial_status_for_notify = (form_data.get("DialCallStatus") or "").lower()

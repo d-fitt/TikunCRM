@@ -25,6 +25,7 @@ import {
 import { formatDistanceToNow } from "date-fns"
 import { useBrowserTimezone } from "@/hooks/use-browser-timezone"
 import { useNotificationEvents, useWebSocketEvent } from "@/hooks/use-websocket"
+import { subscribeShellBadges } from "@/lib/shell-badges"
 import { formatRelativeTimeInTimezone } from "@/utils/timezone"
 
 import { Button } from "@/components/ui/button"
@@ -113,18 +114,10 @@ export function NotificationBell() {
         }
     }, [])
     
-    // Fetch unread count once on mount. Updates via WebSocket (notification:new) only.
-    React.useEffect(() => {
-        const fetchUnreadCount = async () => {
-            try {
-                const stats = await NotificationService.getStats()
-                setUnreadCount(stats.unread)
-            } catch (error) {
-                console.error("Failed to fetch notification stats:", error)
-            }
-        }
-        fetchUnreadCount()
-    }, [])
+    React.useEffect(
+        () => subscribeShellBadges((badges) => setUnreadCount(badges.notifications)),
+        []
+    )
     
     // Listen for real-time notification events via WebSocket
     const handleNewNotification = React.useCallback((notification: any) => {

@@ -1319,6 +1319,9 @@ async def emit_badges_refresh(unassigned: bool = False, notifications: bool = Fa
             }
         }
         await ws_manager.broadcast_all(message)
+        from app.services.shell_badges import schedule_shell_badges_push
+
+        schedule_shell_badges_push()
     except Exception as e:
         logger.warning(f"Failed to emit badges:refresh WebSocket event: {e}")
 
@@ -1367,6 +1370,9 @@ async def emit_stats_refresh(dealership_id: Optional[str] = None, db: Optional[A
             }
         }
         await ws_manager.broadcast_all(message)
+        from app.services.shell_badges import schedule_shell_badges_push
+
+        schedule_shell_badges_push()
     except Exception as e:
         logger.warning(f"Failed to emit stats:refresh WebSocket event: {e}")
 
