@@ -75,9 +75,10 @@ class SMSService:
         message: str,
         effective: EffectiveTwilioConfig,
         from_phone: Optional[str] = None,
+        media_urls: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
-        Send an SMS message.
+        Send an SMS or MMS message.
         """
         if not effective.is_sms_ready():
             logger.warning("SMS not configured for dealership - skipping send")
@@ -94,7 +95,11 @@ class SMSService:
                 "error": f"Invalid phone number: {to_phone}",
             }
 
-        create_kwargs: Dict[str, Any] = {"body": message[:1600], "to": formatted_to}
+        create_kwargs: Dict[str, Any] = {"to": formatted_to}
+        if message:
+            create_kwargs["body"] = message[:1600]
+        if media_urls:
+            create_kwargs["media_url"] = media_urls[:10]
         if effective.messaging_service_sid and not from_phone:
             create_kwargs["messaging_service_sid"] = effective.messaging_service_sid
         else:

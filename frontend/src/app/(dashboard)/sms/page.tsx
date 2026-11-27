@@ -66,6 +66,17 @@ export default function SMSPage() {
     void loadConversations();
   }, [loadConversations]);
 
+  // Fallback poll so new incoming threads appear even if a WebSocket event is missed
+  useEffect(() => {
+    if (!config?.sms_enabled) return;
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        void loadConversations({ silent: true });
+      }
+    }, 10000);
+    return () => clearInterval(id);
+  }, [config?.sms_enabled, loadConversations]);
+
   useWebSocketEvent(
     "sms:received",
     useCallback(() => void loadConversations({ silent: true }), [loadConversations]),

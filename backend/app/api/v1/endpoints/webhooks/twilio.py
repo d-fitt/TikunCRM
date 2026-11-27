@@ -317,11 +317,10 @@ async def handle_incoming_sms(
             }
         )
 
-    # Notify the agent working the lead
-    if sms_log.lead_id and sms_log.user_id:
+    # Notify the agent working the lead (or active team members when unassigned)
+    if sms_log.lead_id:
         notification_service = NotificationService(db)
-        
-        # Get lead name (eager-load customer for first_name/last_name)
+
         result = await db.execute(
             select(Lead).options(selectinload(Lead.customer)).where(Lead.id == sms_log.lead_id)
         )
@@ -335,24 +334,40 @@ async def handle_incoming_sms(
         else:
             title = "New SMS Received"
             text = f"Message from {lead_name}: {body[:50]}..." if len(body) > 50 else f"Message from {lead_name}: {body}"
-        
-        await notification_service.create_notification(
-            user_id=sms_log.user_id,
-            title=title,
-            message=text,
-            link=f"/sms?lead={sms_log.lead_id}",
-            notification_type=NotificationType.SMS_RECEIVED,
-            meta_data={
-                "lead_id": str(sms_log.lead_id),
-                "message_id": str(sms_log.id),
-                "from_number": from_number
-            },
-            send_push=True,
-            send_email=False,  # Don't email for SMS
-            send_sms=False     # Don't SMS about SMS
-        )
-        
-        await db.commit()
+
+        if sms_log.user_id:
+            recipient_ids = [sms_log.user_id]
+        else:
+            from app.models.user import User
+            from app.core.permissions import UserRole
+            users_res = await db.execute(
+                select(User.id).where(
+                    User.dealership_id == sms_log.dealership_id,
+                    User.is_active.is_(True),
+                    User.role.in_([UserRole.BDC, UserRole.DEALERSHIP_ADMIN, UserRole.SUPER_ADMIN]),
+                )
+            )
+            recipient_ids = list(users_res.scalars().all())
+
+        for uid in recipient_ids:
+            await notification_service.create_notification(
+                user_id=uid,
+                title=title,
+                message=text,
+                link=f"/sms?lead={sms_log.lead_id}",
+                notification_type=NotificationType.SMS_RECEIVED,
+                meta_data={
+                    "lead_id": str(sms_log.lead_id),
+                    "message_id": str(sms_log.id),
+                    "from_number": from_number,
+                },
+                send_push=True,
+                send_email=False,  # Don't email for SMS
+                send_sms=False,    # Don't SMS about SMS
+            )
+
+        if recipient_ids:
+            await db.commit()
     
     # Empty TwiML: Twilio answers English keywords itself, the CRM sends everything else via the API
     return Response(content=_EMPTY_TWIML, media_type="application/xml")

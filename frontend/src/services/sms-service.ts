@@ -86,6 +86,14 @@ export interface SMSMessage {
   delivered_at: string | null;
   category?: SMSCategory | null;
   error_message?: string | null;
+  media_urls?: string[];
+  reactions?: Record<string, string[]>;
+}
+
+export interface UploadSMSMediaResponse {
+  url: string;
+  content_type: string;
+  filename: string;
 }
 
 export interface Conversation {
@@ -156,12 +164,38 @@ class SMSService {
   }
 
   /**
-   * Send SMS to a specific lead
+   * Send SMS or MMS to a specific lead
    */
-  async sendToLead(leadId: string, body: string): Promise<SendSMSResponse> {
+  async sendToLead(leadId: string, body: string, mediaUrls?: string[]): Promise<SendSMSResponse> {
     const response = await apiClient.post<SendSMSResponse>(
       `/sms/conversations/${leadId}/send`,
-      { body, to_number: "" }  // to_number not needed for lead
+      { body, to_number: "", media_urls: mediaUrls || [] }
+    );
+    return response.data;
+  }
+
+  /**
+   * Upload an image, video, or PDF for MMS (max 5MB)
+   */
+  async uploadMedia(file: File): Promise<UploadSMSMediaResponse> {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await apiClient.post<UploadSMSMediaResponse>("/sms/upload-media", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+    return response.data;
+  }
+
+  /**
+   * Toggle an emoji reaction on an SMS message
+   */
+  async toggleReaction(
+    messageId: string,
+    emoji: string
+  ): Promise<{ message_id: string; reactions: Record<string, string[]> }> {
+    const response = await apiClient.post<{ message_id: string; reactions: Record<string, string[]> }>(
+      `/sms/messages/${messageId}/react`,
+      { emoji }
     );
     return response.data;
   }

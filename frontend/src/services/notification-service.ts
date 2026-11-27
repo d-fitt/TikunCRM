@@ -10,6 +10,7 @@ export type NotificationType =
     | "follow_up_overdue"
     | "whatsapp_new_lead"
     | "whatsapp_received"
+    | "sms_received"
     | "system"
     | "mention"
     | "appointment_reminder"
@@ -72,6 +73,7 @@ export const NOTIFICATION_TYPE_INFO: Record<string, { label: string; color: stri
     lead_multi_campaign: { label: "Duplicate lead", color: "yellow", icon: "layers" },
     whatsapp_new_lead: { label: "WhatsApp Lead", color: "emerald", icon: "message-circle" },
     whatsapp_received: { label: "WhatsApp", color: "emerald", icon: "message-circle" },
+    sms_received: { label: "Text (SMS)", color: "blue", icon: "message-square" },
     missed_call: { label: "Missed Call", color: "red", icon: "phone-missed" },
     voicemail: { label: "Voicemail", color: "orange", icon: "voicemail" },
 };

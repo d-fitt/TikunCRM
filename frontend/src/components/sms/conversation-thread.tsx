@@ -80,6 +80,9 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
       setConsent(conversation.consent ?? null);
       setLoadedContact({ name: conversation.lead_name, phone: conversation.lead_phone });
       setError(null);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("sms:unread-changed"));
+      }
     } catch (err) {
       if (!opts?.silent) setError("Failed to load conversation");
       console.error(err);
@@ -90,6 +93,16 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
 
   useEffect(() => {
     loadConversation();
+  }, [loadConversation]);
+
+  // Fallback poll so incoming replies appear even if a WebSocket event is missed
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        void loadConversation({ silent: true });
+      }
+    }, 5000);
+    return () => clearInterval(id);
   }, [loadConversation]);
 
   useWebSocketEvent<{ lead_id?: string }>(
@@ -121,14 +134,43 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
     [leadId, loadConversation]
   );
 
+  useWebSocketEvent<{ lead_id?: string; message_id?: string; reactions?: Record<string, string[]> }>(
+    "sms:reaction",
+    useCallback(
+      (data) => {
+        if (data?.lead_id !== leadId || !data.message_id || !data.reactions) return;
+        setMessages((prev) =>
+          prev.map((m) => (m.id === data.message_id ? { ...m, reactions: data.reactions } : m))
+        );
+      },
+      [leadId]
+    ),
+    [leadId]
+  );
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const handleSend = async (body: string) => {
+  const handleReact = async (messageId: string, emoji: string) => {
+    try {
+      const res = await smsService.toggleReaction(messageId, emoji);
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, reactions: res.reactions } : m))
+      );
+    } catch (err) {
+      toast({
+        title: "Could not react",
+        description: errorDetail(err) || "Please try again",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSend = async (body: string, mediaUrls?: string[]) => {
     let errorMessage: string | undefined;
     try {
-      const result = await smsService.sendToLead(leadId, body);
+      const result = await smsService.sendToLead(leadId, body, mediaUrls);
       if (result.success && result.message_id) {
         const newMessage: SMSMessage = {
           id: result.message_id,
@@ -144,6 +186,8 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
           sent_at: new Date().toISOString(),
           delivered_at: null,
           category: "conversation",
+          media_urls: mediaUrls || [],
+          reactions: {},
         };
         setMessages((prev) => [...prev, newMessage]);
         onMessageSent?.();
@@ -257,9 +301,9 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
                 <span className="text-xs text-muted-foreground">{date}</span>
                 <div className="flex-1 h-px bg-border" />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {msgs.map((message) => (
-                  <MessageBubble key={message.id} message={message} />
+                  <MessageBubble key={message.id} message={message} onReact={handleReact} />
                 ))}
               </div>
             </div>
@@ -277,6 +321,8 @@ export function ConversationThread({ leadId, leadName, leadPhone, onBack, onMess
       <MessageComposer
         onSend={handleSend}
         disabled={blocked}
+        enableEmoji
+        enableMedia
         placeholder={blocked ? "Texting is blocked for this customer" : "Type a message..."}
       />
 

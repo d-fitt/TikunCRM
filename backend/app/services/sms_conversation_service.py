@@ -79,6 +79,7 @@ class SMSConversationService:
         lead_id: Optional[UUID] = None,
         dealership_id: Optional[UUID] = None,
         category: str = sms_consent.CATEGORY_CONVERSATION,
+        media_urls: Optional[List[str]] = None,
     ) -> Tuple[bool, Optional[SMSLog], Optional[str]]:
         """
         Send an SMS message and store in database.
@@ -133,8 +134,9 @@ class SMSConversationService:
             direction=MessageDirection.OUTBOUND,
             from_number=effective.sms_from_number,
             to_number=formatted_number,
-            body=body,
+            body=body or "",
             category=category,
+            media_urls=media_urls or [],
             status=SMSStatus.QUEUED,
             sent_at=utc_now()
         )
@@ -143,7 +145,9 @@ class SMSConversationService:
         await self.db.flush()
         
         # Send via Twilio
-        result = await sms_service.send_sms(formatted_number, body, effective)
+        result = await sms_service.send_sms(
+            formatted_number, body or "", effective, media_urls=media_urls
+        )
         
         if result.get("success"):
             sms_log.twilio_message_sid = result["message_sid"]
@@ -438,7 +442,7 @@ class SMSConversationService:
                 "lead_phone": phone,
                 "last_message": {
                     "id": str(sms.id),
-                    "body": sms.body,
+                    "body": sms.body or ("[Attachment]" if sms.media_urls else ""),
                     "direction": sms.direction.value,
                     "created_at": sms.created_at.isoformat(),
                     "status": sms.status.value

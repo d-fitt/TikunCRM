@@ -3,14 +3,15 @@ SMS API Endpoints - Conversation-style messaging
 """
 import logging
 from datetime import datetime
-from typing import Optional, List
+from typing import Dict, Optional, List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.api import deps
 from app.services.dealership_twilio_config_service import get_effective_twilio_config
@@ -44,10 +45,11 @@ class SMSConfigResponse(BaseModel):
 
 
 class SendSMSRequest(BaseModel):
-    """Request to send SMS"""
-    to_number: str = Field(..., description="Phone number to send to")
-    body: str = Field(..., min_length=1, max_length=1600, description="Message body")
+    """Request to send SMS or MMS"""
+    to_number: str = Field("", description="Phone number to send to")
+    body: str = Field("", max_length=1600, description="Message body")
     lead_id: Optional[UUID] = Field(None, description="Optional lead ID")
+    media_urls: List[str] = Field(default_factory=list, description="Optional MMS media URLs")
 
 
 class SendSMSResponse(BaseModel):
@@ -73,6 +75,8 @@ class SMSMessageResponse(BaseModel):
     delivered_at: Optional[datetime]
     category: Optional[str] = None
     error_message: Optional[str] = None
+    media_urls: List[str] = Field(default_factory=list)
+    reactions: Dict[str, List[str]] = Field(default_factory=dict)
     
     class Config:
         from_attributes = True
@@ -356,6 +360,8 @@ async def get_conversation(
                 delivered_at=msg.delivered_at,
                 category=msg.category,
                 error_message=msg.error_message,
+                media_urls=list(msg.media_urls or []) if isinstance(msg.media_urls, list) else [],
+                reactions=dict((msg.meta_data or {}).get("reactions") or {}),
             )
             for msg in messages
         ]
@@ -394,6 +400,12 @@ async def send_to_lead(
             detail="Access denied",
         )
 
+    if not request.body.strip() and not request.media_urls:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Enter a message or attach media",
+        )
+
     service = get_sms_conversation_service(db)
 
     success, sms_log, error = await service.send_sms(
@@ -401,7 +413,8 @@ async def send_to_lead(
         body=request.body,
         user_id=current_user.id,
         lead_id=lead.id,
-        dealership_id=lead.dealership_id
+        dealership_id=lead.dealership_id,
+        media_urls=request.media_urls or None,
     )
     
     await db.commit()
@@ -451,6 +464,129 @@ async def mark_message_read(
     await db.commit()
     
     return {"status": "ok"}
+
+
+_SMS_ALLOWED_MEDIA_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "video/mp4",
+    "video/3gpp",
+    "application/pdf",
+}
+_SMS_MAX_MEDIA_SIZE = 5 * 1024 * 1024  # 5MB Twilio MMS limit
+
+
+class UploadSMSMediaResponse(BaseModel):
+    url: str
+    content_type: str
+    filename: str
+
+
+@router.post("/upload-media", response_model=UploadSMSMediaResponse)
+async def upload_sms_media(
+    file: UploadFile = File(...),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """Upload an image, video, or PDF for sending via MMS (max 5MB)."""
+    from app.services.azure_storage_service import azure_storage_service
+
+    if not azure_storage_service.is_whatsapp_media_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Media storage not configured",
+        )
+
+    content_type = (file.content_type or "application/octet-stream").split(";")[0].strip()
+    if content_type not in _SMS_ALLOWED_MEDIA_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type ({content_type}). Allowed: JPEG, PNG, GIF, WebP, MP4, PDF.",
+        )
+
+    content = await file.read()
+    if len(content) > _SMS_MAX_MEDIA_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File is too large for MMS. Maximum size is 5MB.",
+        )
+
+    filename = file.filename or "media"
+    url = await azure_storage_service.upload_whatsapp_media(
+        data=content,
+        filename=filename,
+        content_type=content_type,
+        dealership_id=current_user.dealership_id,
+    )
+    if not url:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to upload media",
+        )
+    return UploadSMSMediaResponse(url=url, content_type=content_type, filename=filename)
+
+
+class ReactionRequest(BaseModel):
+    emoji: str = Field(..., min_length=1, max_length=16)
+
+
+class ReactionResponse(BaseModel):
+    message_id: UUID
+    reactions: Dict[str, List[str]]
+
+
+@router.post("/messages/{message_id}/react", response_model=ReactionResponse)
+async def toggle_sms_reaction(
+    message_id: UUID,
+    request: ReactionRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Toggle an emoji reaction on an SMS message."""
+    sms_log = await db.get(SMSLog, message_id)
+    if not sms_log:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    if sms_log.lead_id:
+        lead = await db.get(Lead, sms_log.lead_id)
+        if lead and not await user_can_access_lead(db, current_user, lead.dealership_id, lead.assigned_to):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    meta = dict(sms_log.meta_data or {})
+    reactions: Dict[str, List[str]] = {
+        k: list(v) for k, v in (meta.get("reactions") or {}).items() if isinstance(v, list)
+    }
+    actor = current_user.full_name or current_user.email
+    emoji = request.emoji.strip()
+    users = reactions.get(emoji, [])
+    if actor in users:
+        users = [u for u in users if u != actor]
+        if users:
+            reactions[emoji] = users
+        else:
+            reactions.pop(emoji, None)
+    else:
+        users.append(actor)
+        reactions[emoji] = users
+
+    meta["reactions"] = reactions
+    sms_log.meta_data = meta
+    flag_modified(sms_log, "meta_data")
+    await db.commit()
+
+    if sms_log.lead_id:
+        await ws_manager.broadcast_to_dealership(
+            str(sms_log.dealership_id) if sms_log.dealership_id else None,
+            {
+                "type": "sms:reaction",
+                "payload": {
+                    "message_id": str(sms_log.id),
+                    "lead_id": str(sms_log.lead_id),
+                    "reactions": reactions,
+                },
+            },
+        )
+    return ReactionResponse(message_id=sms_log.id, reactions=reactions)
 
 
 @router.get("/unread-count", response_model=UnreadCountResponse)

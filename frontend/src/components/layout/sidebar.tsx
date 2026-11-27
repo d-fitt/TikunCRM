@@ -207,6 +207,7 @@ interface BadgeCounts {
     managerReview: number
     notifications: number
     whatsappUnread: number
+    smsUnread: number
 }
 
 function isSidebarLinkActive(pathname: string, searchParams: URLSearchParams, href: string): boolean {
@@ -254,7 +255,8 @@ export function Sidebar() {
         unassigned: 0,
         managerReview: 0,
         notifications: 0,
-        whatsappUnread: 0
+        whatsappUnread: 0,
+        smsUnread: 0,
     })
     
     // Fetch badge counts
@@ -321,6 +323,14 @@ export function Sidebar() {
                 } catch {
                     whatsappUnreadCount = 0
                 }
+
+                let smsUnreadCount = 0
+                try {
+                    const smsUnreadRes = await apiClient.get("/sms/unread-count")
+                    smsUnreadCount = smsUnreadRes.data?.count || 0
+                } catch {
+                    smsUnreadCount = 0
+                }
                 
                 setBadgeCounts({
                     appointments: appointmentsToday,
@@ -328,7 +338,8 @@ export function Sidebar() {
                     unassigned: unassignedCount,
                     managerReview: managerReviewCount,
                     notifications: unreadNotifications,
-                    whatsappUnread: whatsappUnreadCount
+                    whatsappUnread: whatsappUnreadCount,
+                    smsUnread: smsUnreadCount,
                 })
             } catch (error) {
                 console.error("Failed to fetch badge counts:", error)
@@ -342,7 +353,7 @@ export function Sidebar() {
     }, [user, role])
     
     // Refetch specific badge counts (used by WebSocket handlers)
-    const refetchBadgeCounts = React.useCallback((which: { unassigned?: boolean; managerReview?: boolean; notifications?: boolean; appointments?: boolean; followUps?: boolean; whatsapp?: boolean }) => {
+    const refetchBadgeCounts = React.useCallback((which: { unassigned?: boolean; managerReview?: boolean; notifications?: boolean; appointments?: boolean; followUps?: boolean; whatsapp?: boolean; sms?: boolean }) => {
         if (which.unassigned) {
             LeadService.listLeads({ pool: "unassigned", page_size: 1 })
                 .then(res => setBadgeCounts(prev => ({ ...prev, unassigned: res.total })))
@@ -376,6 +387,11 @@ export function Sidebar() {
         if (which.whatsapp) {
             apiClient.get("/whatsapp/conversations")
                 .then(res => setBadgeCounts(prev => ({ ...prev, whatsappUnread: res.data?.total_unread ?? 0 })))
+                .catch(() => {})
+        }
+        if (which.sms) {
+            apiClient.get("/sms/unread-count")
+                .then(res => setBadgeCounts(prev => ({ ...prev, smsUnread: res.data?.count ?? 0 })))
                 .catch(() => {})
         }
     }, [])
@@ -467,6 +483,17 @@ export function Sidebar() {
         }
     }, [])
     useWebSocketEvent("whatsapp:read", handleWhatsAppRead, [handleWhatsAppRead])
+
+    const handleSmsUnreadRefresh = React.useCallback(() => {
+        refetchBadgeCounts({ sms: true })
+    }, [refetchBadgeCounts])
+    useWebSocketEvent("sms:received", handleSmsUnreadRefresh, [handleSmsUnreadRefresh])
+
+    React.useEffect(() => {
+        const onSmsChanged = () => refetchBadgeCounts({ sms: true })
+        window.addEventListener("sms:unread-changed", onSmsChanged)
+        return () => window.removeEventListener("sms:unread-changed", onSmsChanged)
+    }, [refetchBadgeCounts])
     
     // Expand Conversations when on any conversation surface
     const isConversationsActive = ["/whatsapp", "/inbox", "/communications", "/sms", "/calls"].some(
@@ -510,6 +537,9 @@ export function Sidebar() {
             }
             if (item.children) {
                 const updatedChildren = item.children.map(child => {
+                    if (child.href === "/sms" && badgeCounts.smsUnread > 0) {
+                        return { ...child, badge: badgeCounts.smsUnread }
+                    }
                     if (child.href === "/whatsapp" && badgeCounts.whatsappUnread > 0) {
                         return { ...child, badge: badgeCounts.whatsappUnread }
                     }
