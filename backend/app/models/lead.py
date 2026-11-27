@@ -8,7 +8,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, event, text
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -414,3 +414,19 @@ class Lead(Base):
     def __repr__(self) -> str:
         stage_name = self.stage.display_name if self.stage else "?"
         return f"<Lead {self.id} stage={stage_name} active={self.is_active}>"
+
+
+_org_dealership_id: Optional[uuid.UUID] = None
+
+
+@event.listens_for(Lead, "before_insert")
+def _default_org_dealership(mapper, connection, target: Lead) -> None:
+    """Carvaminos is the only company, so a lead never stays without one."""
+    global _org_dealership_id
+    if target.dealership_id is not None:
+        return
+    if _org_dealership_id is None:
+        _org_dealership_id = connection.execute(
+            text("SELECT id FROM dealerships WHERE slug = 'carvaminos' AND is_active LIMIT 1")
+        ).scalar()
+    target.dealership_id = _org_dealership_id

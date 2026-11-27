@@ -93,7 +93,7 @@ class SMSLog(Base):
     
     # Message details
     direction: Mapped[MessageDirection] = mapped_column(
-        SQLEnum(MessageDirection),
+        SQLEnum(MessageDirection, values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
         index=True
     )
@@ -115,7 +115,7 @@ class SMSLog(Base):
     
     # Delivery status
     status: Mapped[SMSStatus] = mapped_column(
-        SQLEnum(SMSStatus),
+        SQLEnum(SMSStatus, values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
         default=SMSStatus.QUEUED,
         index=True

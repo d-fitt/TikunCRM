@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, event
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -102,3 +102,14 @@ class Customer(Base):
 
     def __repr__(self) -> str:
         return f"<Customer {self.full_name} ({self.phone or self.email})>"
+
+
+@event.listens_for(Customer, "before_insert")
+@event.listens_for(Customer, "before_update")
+def _default_sms_consent(mapper, connection, target: Customer) -> None:
+    """Every lead source collects text + offers consent, so customers with a phone start opted in."""
+    if target.phone and target.sms_inquiry_consent is None and target.sms_promo_consent is None:
+        target.sms_inquiry_consent = True
+        target.sms_promo_consent = True
+        target.sms_consent_source = target.sms_consent_source or "lead_intake"
+        target.sms_consent_at = utc_now()
